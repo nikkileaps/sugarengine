@@ -77,9 +77,16 @@ export class SugarEngine {
     this.triggerSystem = new TriggerSystem();
     this.world.addSystem(this.triggerSystem);
 
-    // Default trigger handler (logs to console)
+    // Default trigger handler - handles built-in event types
     this.triggerSystem.setTriggerEnterHandler((event, triggerId) => {
       console.log(`Trigger entered: ${triggerId}`, event);
+
+      // Handle map transitions
+      if (event.type === 'transition' && event.target) {
+        const spawnPoint = event.spawnPoint as { x: number; y: number; z: number } | undefined;
+        console.log(`Transitioning to: ${event.target}`, spawnPoint ? `at ${spawnPoint.x},${spawnPoint.y},${spawnPoint.z}` : '');
+        this.loadRegion(event.target as string, spawnPoint);
+      }
     });
 
     // Clock for delta time
@@ -92,7 +99,7 @@ export class SugarEngine {
     window.addEventListener('resize', () => this.onResize(config.container));
   }
 
-  async loadRegion(regionPath: string): Promise<void> {
+  async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }): Promise<void> {
     // Unload current region if any
     if (this.currentRegion) {
       this.scene.remove(this.currentRegion.geometry);
@@ -138,8 +145,8 @@ export class SugarEngine {
     // Add geometry to scene
     this.scene.add(this.currentRegion.geometry);
 
-    // Create/move player to spawn point
-    const spawn = this.currentRegion.data.playerSpawn;
+    // Create/move player to spawn point (use override if provided)
+    const spawn = spawnOverride ?? this.currentRegion.data.playerSpawn;
     if (this.playerEntity < 0) {
       this.playerEntity = await this.createPlayer(spawn.x, spawn.y, spawn.z);
     } else {
