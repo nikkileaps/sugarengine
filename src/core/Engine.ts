@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC } from '../components';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup } from '../components';
 import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { IsometricCamera } from './IsometricCamera';
@@ -33,10 +33,12 @@ export class SugarEngine {
   private regionLights: THREE.Light[] = [];
   private triggerEntities: number[] = [];
   private npcEntities: number[] = [];
+  private pickupEntities: number[] = [];
   private triggerSystem: TriggerSystem;
   private interactionSystem: InteractionSystem;
   private raycaster: THREE.Raycaster;
   private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
+  private onItemPickupHandler: ((itemId: string, quantity: number) => void) | null = null;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -136,6 +138,12 @@ export class SugarEngine {
     }
     this.npcEntities = [];
 
+    // Remove old pickup entities
+    for (const entityId of this.pickupEntities) {
+      this.world.removeEntity(entityId);
+    }
+    this.pickupEntities = [];
+
     // Load new region
     this.currentRegion = await this.regions.load(regionPath);
 
@@ -195,6 +203,51 @@ export class SugarEngine {
     }
     if (this.currentRegion.data.npcs.length > 0) {
       console.log(`Loaded ${this.currentRegion.data.npcs.length} NPCs`);
+    }
+
+    // Create pickup entities from region data
+    const pickups = this.currentRegion.data.pickups ?? [];
+    for (const pickupDef of pickups) {
+      const entity = this.world.createEntity();
+
+      // Position
+      this.world.addComponent(entity, new Position(
+        pickupDef.position.x,
+        pickupDef.position.y,
+        pickupDef.position.z
+      ));
+
+      // ItemPickup data
+      this.world.addComponent(entity, new ItemPickup(
+        pickupDef.id,
+        pickupDef.itemId,
+        pickupDef.quantity ?? 1
+      ));
+
+      // Glowing pickup mesh (small glowing sphere)
+      const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xffdd44,
+        emissive: 0xffaa00,
+        emissiveIntensity: 0.5
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(
+        pickupDef.position.x,
+        pickupDef.position.y + 0.3, // Hover slightly above ground
+        pickupDef.position.z
+      );
+      mesh.name = `pickup-${pickupDef.id}`;
+      mesh.userData.pickupId = pickupDef.id;
+      mesh.userData.entityId = entity;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      this.pickupEntities.push(entity);
+    }
+    if (pickups.length > 0) {
+      console.log(`Loaded ${pickups.length} item pickups`);
     }
 
     // Add geometry to scene
@@ -442,5 +495,113 @@ export class SugarEngine {
    */
   isEscapePressed(): boolean {
     return this.input.isEscapePressed();
+  }
+
+  /**
+   * Check if inventory key was just pressed (I)
+   */
+  isInventoryPressed(): boolean {
+    return this.input.isInventoryPressed();
+  }
+
+  /**
+   * Check if interact key was just pressed (E)
+   */
+  isInteractPressed(): boolean {
+    return this.input.isInteractPressed();
+  }
+
+  /**
+   * Check if gift key was just pressed (G)
+   */
+  isGiftPressed(): boolean {
+    return this.input.isGiftPressed();
+  }
+
+  /**
+   * Set callback for when an item is picked up
+   */
+  onItemPickup(handler: (itemId: string, quantity: number) => void): void {
+    this.onItemPickupHandler = handler;
+  }
+
+  /**
+   * Get nearby pickup if player is close enough
+   */
+  getNearbyPickup(): { id: string; itemId: string; quantity: number } | null {
+    if (this.playerEntity < 0) return null;
+
+    const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
+    if (!playerPos) return null;
+
+    const pickupRange = 1.5;
+
+    for (const entityId of this.pickupEntities) {
+      const pickup = this.world.getComponent<ItemPickup>(entityId, ItemPickup);
+      const pos = this.world.getComponent<Position>(entityId, Position);
+
+      if (!pickup || !pos || pickup.collected) continue;
+
+      const dx = pos.x - playerPos.x;
+      const dz = pos.z - playerPos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist < pickupRange) {
+        return {
+          id: pickup.id,
+          itemId: pickup.itemId,
+          quantity: pickup.quantity
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Collect the nearest pickup if in range
+   */
+  collectNearbyPickup(): boolean {
+    if (this.playerEntity < 0) return false;
+
+    const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
+    if (!playerPos) return false;
+
+    const pickupRange = 1.5;
+
+    for (const entityId of this.pickupEntities) {
+      const pickup = this.world.getComponent<ItemPickup>(entityId, ItemPickup);
+      const pos = this.world.getComponent<Position>(entityId, Position);
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+
+      if (!pickup || !pos || pickup.collected) continue;
+
+      const dx = pos.x - playerPos.x;
+      const dz = pos.z - playerPos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist < pickupRange) {
+        // Remove mesh from scene
+        if (renderable) {
+          this.scene.remove(renderable.mesh);
+        }
+
+        // Remove entity from world and tracking array
+        this.world.removeEntity(entityId);
+        const idx = this.pickupEntities.indexOf(entityId);
+        if (idx !== -1) {
+          this.pickupEntities.splice(idx, 1);
+        }
+
+        // Fire callback
+        if (this.onItemPickupHandler) {
+          this.onItemPickupHandler(pickup.itemId, pickup.quantity);
+        }
+
+        return true;
+      }
+    }
+
+    return false;
   }
 }

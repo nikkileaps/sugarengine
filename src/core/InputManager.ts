@@ -135,6 +135,20 @@ export class InputManager {
   }
 
   /**
+   * Check if inventory key was just pressed (I key)
+   */
+  isInventoryPressed(): boolean {
+    return this.keysJustPressed.has('KeyI');
+  }
+
+  /**
+   * Check if gift key was just pressed (G key)
+   */
+  isGiftPressed(): boolean {
+    return this.keysJustPressed.has('KeyG');
+  }
+
+  /**
    * Call at end of frame to clear "just pressed" state
    */
   endFrame(): void {

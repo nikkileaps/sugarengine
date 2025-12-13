@@ -3,3 +3,6 @@ export { DialogueBox } from './DialogueBox';
 export { QuestNotification } from './QuestNotification';
 export { QuestTracker } from './QuestTracker';
 export { QuestJournal } from './QuestJournal';
+export { ItemNotification } from './ItemNotification';
+export { InventoryUI } from './InventoryUI';
+export { GiftUI } from './GiftUI';

@@ -27,6 +27,13 @@ export interface TriggerDefinition {
   };
 }
 
+export interface PickupDefinition {
+  id: string;
+  itemId: string;
+  position: Vec3;
+  quantity?: number;
+}
+
 export interface LightDefinition {
   type: 'hemisphere' | 'directional' | 'ambient' | 'point';
   color: number;
@@ -83,6 +90,7 @@ export interface RegionData {
   postProcessing?: PostProcessingDefinition;
   npcs: NPCDefinition[];
   triggers: TriggerDefinition[];
+  pickups?: PickupDefinition[];
 }
 
 export interface LoadedRegion {
