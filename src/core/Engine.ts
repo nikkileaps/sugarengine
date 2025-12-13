@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled } from '../components';
-import { MovementSystem, RenderSystem } from '../systems';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { IsometricCamera } from './IsometricCamera';
 import { InputManager } from './InputManager';
@@ -31,6 +31,8 @@ export class SugarEngine {
   private playerEntity: number = -1;
   private currentRegion: LoadedRegion | null = null;
   private regionLights: THREE.Light[] = [];
+  private triggerEntities: number[] = [];
+  private triggerSystem: TriggerSystem;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -72,6 +74,13 @@ export class SugarEngine {
     // Register systems
     this.world.addSystem(new MovementSystem(this.input));
     this.world.addSystem(new RenderSystem(this.scene));
+    this.triggerSystem = new TriggerSystem();
+    this.world.addSystem(this.triggerSystem);
+
+    // Default trigger handler (logs to console)
+    this.triggerSystem.setTriggerEnterHandler((event, triggerId) => {
+      console.log(`Trigger entered: ${triggerId}`, event);
+    });
 
     // Clock for delta time
     this.clock = new THREE.Clock();
@@ -94,6 +103,12 @@ export class SugarEngine {
       this.scene.remove(light);
     }
     this.regionLights = [];
+
+    // Remove old trigger entities
+    for (const entityId of this.triggerEntities) {
+      this.world.removeEntity(entityId);
+    }
+    this.triggerEntities = [];
 
     // Load new region
     this.currentRegion = await this.regions.load(regionPath);
@@ -130,6 +145,45 @@ export class SugarEngine {
       }
     });
     toRemove.forEach(obj => obj.removeFromParent());
+
+    // Create trigger entities from region data
+    for (const triggerDef of this.currentRegion.data.triggers) {
+      const entity = this.world.createEntity();
+      this.world.addComponent(entity, new TriggerZone(
+        triggerDef.id,
+        triggerDef.bounds.min[0],
+        triggerDef.bounds.min[1],
+        triggerDef.bounds.min[2],
+        triggerDef.bounds.max[0],
+        triggerDef.bounds.max[1],
+        triggerDef.bounds.max[2],
+        triggerDef.event
+      ));
+      this.triggerEntities.push(entity);
+
+      // DEBUG: Visualize trigger zone
+      const width = triggerDef.bounds.max[0] - triggerDef.bounds.min[0];
+      const height = triggerDef.bounds.max[1] - triggerDef.bounds.min[1];
+      const depth = triggerDef.bounds.max[2] - triggerDef.bounds.min[2];
+      const debugGeo = new THREE.BoxGeometry(width, height, depth);
+      const debugMat = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.5
+      });
+      const debugMesh = new THREE.Mesh(debugGeo, debugMat);
+      debugMesh.position.set(
+        triggerDef.bounds.min[0] + width / 2,
+        triggerDef.bounds.min[1] + height / 2,
+        triggerDef.bounds.min[2] + depth / 2
+      );
+      debugMesh.name = `trigger-debug-${triggerDef.id}`;
+      this.scene.add(debugMesh);
+    }
+    if (this.currentRegion.data.triggers.length > 0) {
+      console.log(`Loaded ${this.currentRegion.data.triggers.length} trigger zones`);
+    }
 
     // Add geometry to scene
     this.scene.add(this.currentRegion.geometry);
@@ -257,6 +311,14 @@ export class SugarEngine {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.postProcessing.setSize(container.clientWidth, container.clientHeight);
     this.camera.updateAspect(container);
+  }
+
+  onTriggerEnter(handler: TriggerHandler): void {
+    this.triggerSystem.setTriggerEnterHandler(handler);
+  }
+
+  onTriggerExit(handler: TriggerHandler): void {
+    this.triggerSystem.setTriggerExitHandler(handler);
   }
 
   run(): void {
