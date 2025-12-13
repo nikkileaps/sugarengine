@@ -116,36 +116,6 @@ export class SugarEngine {
     // Apply lighting and atmosphere
     this.applyRegionLighting();
 
-    // Remove editor-only objects (grid planes, UI elements, etc.)
-    const toRemove: THREE.Object3D[] = [];
-    this.currentRegion.geometry.traverse((child) => {
-      // Remove large flat planes (editor grids)
-      if (child instanceof THREE.Mesh) {
-        const geo = child.geometry;
-        geo.computeBoundingBox();
-        const box = geo.boundingBox;
-        if (box) {
-          const size = new THREE.Vector3();
-          box.getSize(size);
-          // A 100x100 flat plane is almost certainly an editor grid
-          if ((size.x >= 50 && size.z >= 50 && size.y === 0) ||
-              (size.x >= 50 && size.y >= 50 && size.z === 0) ||
-              (size.y >= 50 && size.z >= 50 && size.x === 0)) {
-            toRemove.push(child);
-          }
-        }
-      }
-      // Remove named editor objects
-      if (child.name.includes('Grid') || child.name.includes('Editor') ||
-          child.name.includes('Transform') || child.name.includes('Gizmo') ||
-          child.name.includes('Helper') || child.name.includes('Control') ||
-          child.name === 'player-reference' || child.name === 'BrushFeedbackOverlay' ||
-          child.name === 'HoverHighlight') {
-        toRemove.push(child);
-      }
-    });
-    toRemove.forEach(obj => obj.removeFromParent());
-
     // Create trigger entities from region data
     for (const triggerDef of this.currentRegion.data.triggers) {
       const entity = this.world.createEntity();
@@ -160,26 +130,6 @@ export class SugarEngine {
         triggerDef.event
       ));
       this.triggerEntities.push(entity);
-
-      // DEBUG: Visualize trigger zone
-      const width = triggerDef.bounds.max[0] - triggerDef.bounds.min[0];
-      const height = triggerDef.bounds.max[1] - triggerDef.bounds.min[1];
-      const depth = triggerDef.bounds.max[2] - triggerDef.bounds.min[2];
-      const debugGeo = new THREE.BoxGeometry(width, height, depth);
-      const debugMat = new THREE.MeshBasicMaterial({
-        color: 0x00ff00,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.5
-      });
-      const debugMesh = new THREE.Mesh(debugGeo, debugMat);
-      debugMesh.position.set(
-        triggerDef.bounds.min[0] + width / 2,
-        triggerDef.bounds.min[1] + height / 2,
-        triggerDef.bounds.min[2] + depth / 2
-      );
-      debugMesh.name = `trigger-debug-${triggerDef.id}`;
-      this.scene.add(debugMesh);
     }
     if (this.currentRegion.data.triggers.length > 0) {
       console.log(`Loaded ${this.currentRegion.data.triggers.length} trigger zones`);
