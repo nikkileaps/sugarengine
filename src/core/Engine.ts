@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone } from '../components';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC } from '../components';
 import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { IsometricCamera } from './IsometricCamera';
@@ -32,7 +32,10 @@ export class SugarEngine {
   private currentRegion: LoadedRegion | null = null;
   private regionLights: THREE.Light[] = [];
   private triggerEntities: number[] = [];
+  private npcEntities: number[] = [];
   private triggerSystem: TriggerSystem;
+  private raycaster: THREE.Raycaster;
+  private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -97,6 +100,12 @@ export class SugarEngine {
 
     // Handle resize
     window.addEventListener('resize', () => this.onResize(config.container));
+
+    // Raycaster for click detection
+    this.raycaster = new THREE.Raycaster();
+
+    // Click handler for NPC interaction
+    this.renderer.domElement.addEventListener('click', (event) => this.handleClick(event));
   }
 
   async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }): Promise<void> {
@@ -116,6 +125,12 @@ export class SugarEngine {
       this.world.removeEntity(entityId);
     }
     this.triggerEntities = [];
+
+    // Remove old NPC entities
+    for (const entityId of this.npcEntities) {
+      this.world.removeEntity(entityId);
+    }
+    this.npcEntities = [];
 
     // Load new region
     this.currentRegion = await this.regions.load(regionPath);
@@ -140,6 +155,42 @@ export class SugarEngine {
     }
     if (this.currentRegion.data.triggers.length > 0) {
       console.log(`Loaded ${this.currentRegion.data.triggers.length} trigger zones`);
+    }
+
+    // Create NPC entities from region data
+    for (const npcDef of this.currentRegion.data.npcs) {
+      const entity = this.world.createEntity();
+
+      // Position
+      this.world.addComponent(entity, new Position(
+        npcDef.position.x,
+        npcDef.position.y,
+        npcDef.position.z
+      ));
+
+      // NPC data
+      this.world.addComponent(entity, new NPC(
+        npcDef.id,
+        npcDef.id, // Use ID as name for now
+        npcDef.dialogue
+      ));
+
+      // Placeholder mesh (capsule like player but different color)
+      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+      const material = new THREE.MeshStandardMaterial({ color: 0x88ff88 });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(npcDef.position.x, npcDef.position.y + 0.7, npcDef.position.z);
+      mesh.name = `npc-${npcDef.id}`;
+      mesh.userData.npcId = npcDef.id;
+      mesh.userData.entityId = entity;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      this.npcEntities.push(entity);
+    }
+    if (this.currentRegion.data.npcs.length > 0) {
+      console.log(`Loaded ${this.currentRegion.data.npcs.length} NPCs`);
     }
 
     // Add geometry to scene
@@ -276,6 +327,52 @@ export class SugarEngine {
 
   onTriggerExit(handler: TriggerHandler): void {
     this.triggerSystem.setTriggerExitHandler(handler);
+  }
+
+  onNPCClick(handler: (npcId: string, dialogueId?: string) => void): void {
+    this.onNPCClickHandler = handler;
+  }
+
+  private handleClick(event: MouseEvent): void {
+    // Convert mouse position to normalized device coordinates (-1 to +1)
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+
+    // Cast ray from camera
+    this.raycaster.setFromCamera(mouse, this.camera.camera);
+
+    // Check for NPC intersections
+    const npcMeshes: THREE.Object3D[] = [];
+    this.scene.traverse((child) => {
+      if (child.name.startsWith('npc-')) {
+        npcMeshes.push(child);
+      }
+    });
+
+    const intersects = this.raycaster.intersectObjects(npcMeshes, true);
+    if (intersects.length > 0 && intersects[0]) {
+      const hit = intersects[0].object;
+      // Walk up to find the mesh with npcId
+      let current: THREE.Object3D | null = hit;
+      while (current && !current.userData.npcId) {
+        current = current.parent;
+      }
+
+      if (current && current.userData.npcId) {
+        const npcId = current.userData.npcId as string;
+        const entityId = current.userData.entityId as number;
+        const npcComponent = this.world.getComponent<NPC>(entityId, NPC);
+
+        console.log(`Clicked NPC: ${npcId}`);
+
+        if (this.onNPCClickHandler) {
+          this.onNPCClickHandler(npcId, npcComponent?.dialogueId);
+        }
+      }
+    }
   }
 
   run(): void {
