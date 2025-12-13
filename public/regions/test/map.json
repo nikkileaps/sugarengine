@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "name": "region-export-test-2",
+  "playerSpawn": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "lighting": {
+    "preset": "night",
+    "backgroundColor": 1709096,
+    "lights": [
+      {
+        "type": "hemisphere",
+        "color": 3811914,
+        "groundColor": 4467234,
+        "intensity": 0.4
+      },
+      {
+        "type": "directional",
+        "color": 7833770,
+        "intensity": 0.3,
+        "position": {
+          "x": -4,
+          "y": 12,
+          "z": -8
+        },
+        "castShadow": true,
+        "shadowMapSize": 2048,
+        "shadowCameraNear": 0.5,
+        "shadowCameraFar": 50,
+        "shadowCameraSize": 20
+      },
+      {
+        "type": "ambient",
+        "color": 3680312,
+        "intensity": 0.25
+      }
+    ],
+    "fog": {
+      "enabled": true,
+      "color": 2759230,
+      "density": 0.02
+    },
+    "adjustments": {
+      "ambientIntensity": 1.5,
+      "keyIntensity": 1.5,
+      "shadowDarkness": 0.6,
+      "warmth": -0.4
+    }
+  },
+  "postProcessing": {
+    "bloom": {
+      "enabled": true,
+      "threshold": 0.9,
+      "strength": 0.6,
+      "radius": 0.4
+    }
+  },
+  "npcs": [],
+  "triggers": []
+}

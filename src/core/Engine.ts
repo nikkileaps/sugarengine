@@ -1,0 +1,285 @@
+import * as THREE from 'three';
+import { World } from '../ecs';
+import { Position, Velocity, Renderable, PlayerControlled } from '../components';
+import { MovementSystem, RenderSystem } from '../systems';
+import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
+import { IsometricCamera } from './IsometricCamera';
+import { InputManager } from './InputManager';
+import { PostProcessing } from './PostProcessing';
+
+export interface CameraConfig {
+  style: 'isometric';
+  zoom: {
+    min: number;
+    max: number;
+    default: number;
+  };
+}
+
+export interface EngineConfig {
+  container: HTMLElement;
+  camera: CameraConfig;
+}
+
+export class SugarEngine {
+  private renderer: THREE.WebGLRenderer;
+  private scene: THREE.Scene;
+  private camera: IsometricCamera;
+  private input: InputManager;
+  private clock: THREE.Clock;
+  private postProcessing: PostProcessing;
+  private playerEntity: number = -1;
+  private currentRegion: LoadedRegion | null = null;
+  private regionLights: THREE.Light[] = [];
+
+  readonly world: World;
+  readonly models: ModelLoader;
+  readonly regions: RegionLoader;
+
+  constructor(config: EngineConfig) {
+    // Renderer
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer.setSize(config.container.clientWidth, config.container.clientHeight);
+    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    config.container.appendChild(this.renderer.domElement);
+
+    // Scene
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x1a1a2e); // Default background
+
+    // Camera
+    this.camera = new IsometricCamera(config.camera.zoom, config.container);
+
+    // Post-processing (handles rendering with proper color space)
+    this.postProcessing = new PostProcessing(
+      this.renderer,
+      this.scene,
+      this.camera.camera
+    );
+
+    // Input
+    this.input = new InputManager();
+
+    // Loaders
+    this.models = new ModelLoader();
+    this.regions = new RegionLoader(this.models);
+
+    // ECS World
+    this.world = new World();
+
+    // Register systems
+    this.world.addSystem(new MovementSystem(this.input));
+    this.world.addSystem(new RenderSystem(this.scene));
+
+    // Clock for delta time
+    this.clock = new THREE.Clock();
+
+    // Default lighting (will be replaced by region lighting)
+    this.setupDefaultLighting();
+
+    // Handle resize
+    window.addEventListener('resize', () => this.onResize(config.container));
+  }
+
+  async loadRegion(regionPath: string): Promise<void> {
+    // Unload current region if any
+    if (this.currentRegion) {
+      this.scene.remove(this.currentRegion.geometry);
+    }
+
+    // Remove old region lights
+    for (const light of this.regionLights) {
+      this.scene.remove(light);
+    }
+    this.regionLights = [];
+
+    // Load new region
+    this.currentRegion = await this.regions.load(regionPath);
+
+    // Apply lighting and atmosphere
+    this.applyRegionLighting();
+
+    // Remove editor-only objects (grid planes, UI elements, etc.)
+    const toRemove: THREE.Object3D[] = [];
+    this.currentRegion.geometry.traverse((child) => {
+      // Remove large flat planes (editor grids)
+      if (child instanceof THREE.Mesh) {
+        const geo = child.geometry;
+        geo.computeBoundingBox();
+        const box = geo.boundingBox;
+        if (box) {
+          const size = new THREE.Vector3();
+          box.getSize(size);
+          // A 100x100 flat plane is almost certainly an editor grid
+          if ((size.x >= 50 && size.z >= 50 && size.y === 0) ||
+              (size.x >= 50 && size.y >= 50 && size.z === 0) ||
+              (size.y >= 50 && size.z >= 50 && size.x === 0)) {
+            toRemove.push(child);
+          }
+        }
+      }
+      // Remove named editor objects
+      if (child.name.includes('Grid') || child.name.includes('Editor') ||
+          child.name.includes('Transform') || child.name.includes('Gizmo') ||
+          child.name.includes('Helper') || child.name.includes('Control') ||
+          child.name === 'player-reference' || child.name === 'BrushFeedbackOverlay' ||
+          child.name === 'HoverHighlight') {
+        toRemove.push(child);
+      }
+    });
+    toRemove.forEach(obj => obj.removeFromParent());
+
+    // Add geometry to scene
+    this.scene.add(this.currentRegion.geometry);
+
+    // Create/move player to spawn point
+    const spawn = this.currentRegion.data.playerSpawn;
+    if (this.playerEntity < 0) {
+      this.playerEntity = await this.createPlayer(spawn.x, spawn.y, spawn.z);
+    } else {
+      // Move existing player to spawn
+      const pos = this.world.getComponent<Position>(this.playerEntity, Position);
+      if (pos) {
+        pos.x = spawn.x;
+        pos.y = spawn.y + 0.75; // Offset for player height
+        pos.z = spawn.z;
+      }
+    }
+
+    console.log(`Loaded region: ${this.currentRegion.data.name}`);
+  }
+
+  private applyRegionLighting(): void {
+    if (!this.currentRegion?.data.lighting) {
+      return;
+    }
+
+    const lighting = this.currentRegion.data.lighting;
+
+    // Apply background color
+    this.scene.background = new THREE.Color(lighting.backgroundColor);
+
+    // Apply fog
+    if (lighting.fog?.enabled) {
+      this.scene.fog = new THREE.FogExp2(lighting.fog.color, lighting.fog.density);
+    } else {
+      this.scene.fog = null;
+    }
+
+    // Add lights from region
+    for (const light of this.currentRegion.lights) {
+      this.scene.add(light);
+      this.regionLights.push(light);
+    }
+
+    // Apply bloom settings if available
+    const postProcessingConfig = this.currentRegion.data.postProcessing;
+    if (postProcessingConfig?.bloom) {
+      this.postProcessing.setBloomConfig(postProcessingConfig.bloom);
+    }
+  }
+
+  private async createPlayer(x: number = 0, y: number = 0, z: number = 0): Promise<number> {
+    const entity = this.world.createEntity();
+
+    // Position component (slightly above ground)
+    this.world.addComponent(entity, new Position(x, y + 0.75, z));
+
+    // Velocity component
+    this.world.addComponent(entity, new Velocity());
+
+    // Player controlled component
+    this.world.addComponent(entity, new PlayerControlled(5));
+
+    // Try to load a model, fall back to cube
+    let mesh: THREE.Object3D;
+    try {
+      mesh = await this.models.load('/models/player.glb');
+      mesh.castShadow = true;
+      mesh.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = true;
+        }
+      });
+    } catch {
+      // Fallback to cube if no model exists
+      const geometry = new THREE.BoxGeometry(1, 1.5, 1);
+      const material = new THREE.MeshStandardMaterial({ color: 0xe07a5f });
+      mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+    }
+
+    this.world.addComponent(entity, new Renderable(mesh));
+
+    return entity;
+  }
+
+  // Helper to spawn an entity with a loaded model
+  async spawnModel(
+    url: string,
+    x: number = 0,
+    y: number = 0,
+    z: number = 0
+  ): Promise<number> {
+    const entity = this.world.createEntity();
+
+    this.world.addComponent(entity, new Position(x, y, z));
+
+    const mesh = await this.models.load(url);
+    mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
+    this.world.addComponent(entity, new Renderable(mesh));
+
+    return entity;
+  }
+
+  private setupDefaultLighting(): void {
+    // Default lighting for when no region is loaded
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    this.scene.add(ambientLight);
+    this.regionLights.push(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(10, 20, 10);
+    directionalLight.castShadow = true;
+    this.scene.add(directionalLight);
+    this.regionLights.push(directionalLight);
+  }
+
+  private onResize(container: HTMLElement): void {
+    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.postProcessing.setSize(container.clientWidth, container.clientHeight);
+    this.camera.updateAspect(container);
+  }
+
+  run(): void {
+    const animate = () => {
+      requestAnimationFrame(animate);
+
+      const delta = this.clock.getDelta();
+
+      // Update ECS world
+      this.world.update(delta);
+
+      // Update camera to follow player
+      if (this.playerEntity >= 0) {
+        const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
+        if (playerPos) {
+          this.camera.follow(new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z));
+        }
+      }
+
+      // Render with post-processing
+      this.postProcessing.render();
+    };
+
+    animate();
+  }
+}
