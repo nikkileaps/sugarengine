@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler } from '../systems';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { IsometricCamera } from './IsometricCamera';
 import { InputManager } from './InputManager';
@@ -34,6 +34,7 @@ export class SugarEngine {
   private triggerEntities: number[] = [];
   private npcEntities: number[] = [];
   private triggerSystem: TriggerSystem;
+  private interactionSystem: InteractionSystem;
   private raycaster: THREE.Raycaster;
   private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
 
@@ -79,6 +80,9 @@ export class SugarEngine {
     this.world.addSystem(new RenderSystem(this.scene));
     this.triggerSystem = new TriggerSystem();
     this.world.addSystem(this.triggerSystem);
+
+    this.interactionSystem = new InteractionSystem(this.input);
+    this.world.addSystem(this.interactionSystem);
 
     // Default trigger handler - handles built-in event types
     this.triggerSystem.setTriggerEnterHandler((event, triggerId) => {
@@ -394,8 +398,35 @@ export class SugarEngine {
 
       // Render with post-processing
       this.postProcessing.render();
+
+      // Clear "just pressed" input state
+      this.input.endFrame();
     };
 
     animate();
+  }
+
+  onInteract(handler: InteractionHandler): void {
+    this.interactionSystem.setInteractHandler(handler);
+  }
+
+  onNearbyNPCChange(handler: (nearby: { id: string; dialogueId?: string } | null) => void): void {
+    this.interactionSystem.setNearbyChangeHandler(handler);
+  }
+
+  getNearbyNPC(): { id: string; dialogueId?: string } | null {
+    return this.interactionSystem.getNearestNPC();
+  }
+
+  setMovementEnabled(enabled: boolean): void {
+    this.input.movementEnabled = enabled;
+  }
+
+  /**
+   * Consume the interact key press to prevent double-triggers.
+   * Call this after dialogue ends to prevent immediately starting a new one.
+   */
+  consumeInteract(): void {
+    this.input.consumeInteract();
   }
 }

@@ -5,7 +5,10 @@ export interface InputState {
 
 export class InputManager {
   private keys: Set<string> = new Set();
+  private keysJustPressed: Set<string> = new Set();
   private gamepadIndex: number | null = null;
+  private prevGamepadButtons: boolean[] = [];
+  private _movementEnabled = true;
 
   constructor() {
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
@@ -15,6 +18,9 @@ export class InputManager {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    if (!this.keys.has(e.code)) {
+      this.keysJustPressed.add(e.code);
+    }
     this.keys.add(e.code);
   }
 
@@ -35,6 +41,11 @@ export class InputManager {
   }
 
   getInput(): InputState {
+    // Return no movement if disabled
+    if (!this._movementEnabled) {
+      return { moveX: 0, moveY: 0 };
+    }
+
     let moveX = 0;
     let moveY = 0;
 
@@ -71,5 +82,69 @@ export class InputManager {
     }
 
     return { moveX, moveY };
+  }
+
+  /**
+   * Check if interact button was just pressed (E key or gamepad A button)
+   */
+  isInteractPressed(): boolean {
+    // Keyboard: E key
+    if (this.keysJustPressed.has('KeyE')) {
+      return true;
+    }
+
+    // Gamepad: A button (index 0 on most controllers)
+    if (this.gamepadIndex !== null) {
+      const gamepads = navigator.getGamepads();
+      const gamepad = gamepads[this.gamepadIndex];
+
+      if (gamepad) {
+        const aButton = gamepad.buttons[0];
+        const wasPressed = this.prevGamepadButtons[0] ?? false;
+        const isPressed = aButton?.pressed ?? false;
+
+        if (isPressed && !wasPressed) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Consume the interact key press so it won't be detected again this frame.
+   * Call this after handling an interaction to prevent double-triggers.
+   */
+  consumeInteract(): void {
+    this.keysJustPressed.delete('KeyE');
+  }
+
+  /**
+   * Call at end of frame to clear "just pressed" state
+   */
+  endFrame(): void {
+    this.keysJustPressed.clear();
+
+    // Update previous gamepad button state
+    if (this.gamepadIndex !== null) {
+      const gamepads = navigator.getGamepads();
+      const gamepad = gamepads[this.gamepadIndex];
+
+      if (gamepad) {
+        this.prevGamepadButtons = gamepad.buttons.map(b => b.pressed);
+      }
+    }
+  }
+
+  /**
+   * Enable or disable movement input
+   */
+  set movementEnabled(enabled: boolean) {
+    this._movementEnabled = enabled;
+  }
+
+  get movementEnabled(): boolean {
+    return this._movementEnabled;
   }
 }
