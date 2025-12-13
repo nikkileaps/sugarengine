@@ -75,7 +75,7 @@ export class SugarEngine {
     this.world = new World();
 
     // Register systems
-    this.world.addSystem(new MovementSystem(this.input));
+    this.world.addSystem(new MovementSystem(this.input, this.scene));
     this.world.addSystem(new RenderSystem(this.scene));
     this.triggerSystem = new TriggerSystem();
     this.world.addSystem(this.triggerSystem);
