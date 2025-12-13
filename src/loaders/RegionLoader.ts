@@ -7,10 +7,25 @@ export interface Vec3 {
   z: number;
 }
 
+export interface WaypointDefinition {
+  x: number;
+  y: number;
+  z: number;
+  pause?: number; // seconds to pause at this waypoint
+}
+
+export interface NPCMovementDefinition {
+  waypoints: WaypointDefinition[];
+  behavior: 'patrol' | 'ping-pong' | 'one-way';
+  speed?: number; // Default: 2
+  startPaused?: boolean; // Default: false
+}
+
 export interface NPCDefinition {
   id: string;
   position: Vec3;
   dialogue?: string;
+  movement?: NPCMovementDefinition;
 }
 
 export interface TriggerDefinition {

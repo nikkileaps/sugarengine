@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler } from '../systems';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, NPCMovementSystem } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { IsometricCamera } from './IsometricCamera';
 import { InputManager } from './InputManager';
@@ -78,6 +78,8 @@ export class SugarEngine {
     this.world = new World();
 
     // Register systems
+    // NPCMovementSystem must run before MovementSystem to set velocities first
+    this.world.addSystem(new NPCMovementSystem());
     this.world.addSystem(new MovementSystem(this.input, this.scene));
     this.world.addSystem(new RenderSystem(this.scene));
     this.triggerSystem = new TriggerSystem();
@@ -186,6 +188,30 @@ export class SugarEngine {
         npcDef.id, // Use ID as name for now
         npcDef.dialogue
       ));
+
+      // Add movement components if movement is defined
+      if (npcDef.movement) {
+        // Velocity is required for movement
+        this.world.addComponent(entity, new Velocity());
+
+        // Convert waypoint definitions to Waypoint objects
+        const waypoints: Waypoint[] = npcDef.movement.waypoints.map(wp => ({
+          x: wp.x,
+          y: wp.y,
+          z: wp.z,
+          pauseDuration: wp.pause ?? 0.5
+        }));
+
+        // Create movement component
+        const npcMovement = new NPCMovement(
+          waypoints,
+          npcDef.movement.behavior,
+          npcDef.movement.speed ?? 2
+        );
+        npcMovement.isMoving = !npcDef.movement.startPaused;
+
+        this.world.addComponent(entity, npcMovement);
+      }
 
       // Placeholder mesh (capsule like player but different color)
       const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
@@ -603,5 +629,72 @@ export class SugarEngine {
     }
 
     return false;
+  }
+
+  /**
+   * Command an NPC to walk to a specific point.
+   * Returns a Promise that resolves when the NPC arrives.
+   */
+  moveNPCTo(npcId: string, target: { x: number; y: number; z: number }): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const npcEntity = this.findNPCEntity(npcId);
+      if (npcEntity === null) {
+        reject(new Error(`NPC not found: ${npcId}`));
+        return;
+      }
+
+      // Get or create movement component
+      let movement = this.world.getComponent<NPCMovement>(npcEntity, NPCMovement);
+      if (!movement) {
+        // Add movement capability to stationary NPC
+        this.world.addComponent(npcEntity, new Velocity());
+        movement = new NPCMovement([], 'one-way', 2);
+        this.world.addComponent(npcEntity, movement);
+      }
+
+      // Set scripted target
+      movement.scriptedTarget = { x: target.x, y: target.y, z: target.z };
+      movement.onScriptedComplete = resolve;
+      movement.isMoving = true;
+    });
+  }
+
+  /**
+   * Stop NPC movement (pause patrol).
+   */
+  stopNPC(npcId: string): void {
+    const entity = this.findNPCEntity(npcId);
+    if (entity === null) return;
+
+    const movement = this.world.getComponent<NPCMovement>(entity, NPCMovement);
+    if (movement) {
+      movement.isMoving = false;
+    }
+  }
+
+  /**
+   * Resume NPC movement (resume patrol).
+   */
+  resumeNPC(npcId: string): void {
+    const entity = this.findNPCEntity(npcId);
+    if (entity === null) return;
+
+    const movement = this.world.getComponent<NPCMovement>(entity, NPCMovement);
+    if (movement) {
+      movement.isMoving = true;
+    }
+  }
+
+  /**
+   * Find NPC entity by ID.
+   */
+  private findNPCEntity(npcId: string): number | null {
+    for (const entityId of this.npcEntities) {
+      const npc = this.world.getComponent<NPC>(entityId, NPC);
+      if (npc && npc.id === npcId) {
+        return entityId;
+      }
+    }
+    return null;
   }
 }

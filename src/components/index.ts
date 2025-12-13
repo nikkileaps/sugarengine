@@ -6,3 +6,5 @@ export { TriggerZone } from './TriggerZone';
 export type { TriggerEvent } from './TriggerZone';
 export { NPC } from './NPC';
 export { ItemPickup } from './ItemPickup';
+export { NPCMovement } from './NPCMovement';
+export type { Waypoint, MovementBehavior } from './NPCMovement';
