@@ -121,6 +121,20 @@ export class InputManager {
   }
 
   /**
+   * Check if journal toggle was just pressed (J key)
+   */
+  isJournalPressed(): boolean {
+    return this.keysJustPressed.has('KeyJ');
+  }
+
+  /**
+   * Check if escape was just pressed
+   */
+  isEscapePressed(): boolean {
+    return this.keysJustPressed.has('Escape');
+  }
+
+  /**
    * Call at end of frame to clear "just pressed" state
    */
   endFrame(): void {

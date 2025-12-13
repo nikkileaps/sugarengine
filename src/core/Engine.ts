@@ -429,4 +429,18 @@ export class SugarEngine {
   consumeInteract(): void {
     this.input.consumeInteract();
   }
+
+  /**
+   * Check if journal key was just pressed (J)
+   */
+  isJournalPressed(): boolean {
+    return this.input.isJournalPressed();
+  }
+
+  /**
+   * Check if escape key was just pressed
+   */
+  isEscapePressed(): boolean {
+    return this.input.isEscapePressed();
+  }
 }
