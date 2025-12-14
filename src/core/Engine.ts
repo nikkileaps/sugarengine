@@ -39,6 +39,9 @@ export class SugarEngine {
   private raycaster: THREE.Raycaster;
   private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
   private onItemPickupHandler: ((itemId: string, quantity: number) => void) | null = null;
+  private currentRegionPath: string = '';
+  private isPaused: boolean = false;
+  private isRunning: boolean = false;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -117,6 +120,9 @@ export class SugarEngine {
   }
 
   async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }): Promise<void> {
+    // Track current region path for saving
+    this.currentRegionPath = regionPath;
+
     // Unload current region if any
     if (this.currentRegion) {
       this.scene.remove(this.currentRegion.geometry);
@@ -134,14 +140,22 @@ export class SugarEngine {
     }
     this.triggerEntities = [];
 
-    // Remove old NPC entities
+    // Remove old NPC entities (and their meshes)
     for (const entityId of this.npcEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
       this.world.removeEntity(entityId);
     }
     this.npcEntities = [];
 
-    // Remove old pickup entities
+    // Remove old pickup entities (and their meshes)
     for (const entityId of this.pickupEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
       this.world.removeEntity(entityId);
     }
     this.pickupEntities = [];
@@ -459,30 +473,63 @@ export class SugarEngine {
   }
 
   run(): void {
+    if (this.isRunning) return;
+    this.isRunning = true;
+
     const animate = () => {
       requestAnimationFrame(animate);
 
-      const delta = this.clock.getDelta();
+      // Always render, but only update logic when not paused
+      if (!this.isPaused) {
+        const delta = this.clock.getDelta();
 
-      // Update ECS world
-      this.world.update(delta);
+        // Update ECS world
+        this.world.update(delta);
 
-      // Update camera to follow player
-      if (this.playerEntity >= 0) {
-        const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
-        if (playerPos) {
-          this.camera.follow(new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z));
+        // Update camera to follow player
+        if (this.playerEntity >= 0) {
+          const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
+          if (playerPos) {
+            this.camera.follow(new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z));
+          }
         }
+      } else {
+        // Still consume delta time when paused to prevent time accumulation
+        this.clock.getDelta();
       }
 
-      // Render with post-processing
+      // Render with post-processing (always render so pause screen shows game behind)
       this.postProcessing.render();
 
-      // Clear "just pressed" input state
+      // Clear "just pressed" input state AFTER rendering (at end of frame)
+      // This ensures input checks in external loops can read the state first
       this.input.endFrame();
     };
 
     animate();
+  }
+
+  /**
+   * Pause the game (stops updates but continues rendering)
+   */
+  pause(): void {
+    this.isPaused = true;
+    this.setMovementEnabled(false);
+  }
+
+  /**
+   * Resume the game
+   */
+  resume(): void {
+    this.isPaused = false;
+    this.setMovementEnabled(true);
+  }
+
+  /**
+   * Check if game is paused
+   */
+  isPausedState(): boolean {
+    return this.isPaused;
   }
 
   onInteract(handler: InteractionHandler): void {
@@ -607,16 +654,29 @@ export class SugarEngine {
       const dist = Math.sqrt(dx * dx + dz * dz);
 
       if (dist < pickupRange) {
-        // Remove mesh from scene
-        if (renderable) {
-          this.scene.remove(renderable.mesh);
-        }
-
-        // Remove entity from world and tracking array
+        // Remove entity from world FIRST (prevents RenderSystem from re-adding)
         this.world.removeEntity(entityId);
         const idx = this.pickupEntities.indexOf(entityId);
         if (idx !== -1) {
           this.pickupEntities.splice(idx, 1);
+        }
+
+        // Remove and dispose mesh
+        if (renderable) {
+          const mesh = renderable.mesh;
+          mesh.visible = false;
+          this.scene.remove(mesh);
+
+          // Dispose geometry and material to free memory
+          if (mesh instanceof THREE.Mesh) {
+            mesh.geometry?.dispose();
+            const material = mesh.material;
+            if (Array.isArray(material)) {
+              material.forEach(m => m.dispose());
+            } else if (material) {
+              material.dispose();
+            }
+          }
         }
 
         // Fire callback
@@ -696,5 +756,32 @@ export class SugarEngine {
       }
     }
     return null;
+  }
+
+  // ============================================
+  // Save/Load Support
+  // ============================================
+
+  /**
+   * Get current player position (for saving)
+   */
+  getPlayerPosition(): { x: number; y: number; z: number } {
+    if (this.playerEntity < 0) {
+      return { x: 0, y: 0, z: 0 };
+    }
+
+    const pos = this.world.getComponent<Position>(this.playerEntity, Position);
+    if (!pos) {
+      return { x: 0, y: 0, z: 0 };
+    }
+
+    return { x: pos.x, y: pos.y, z: pos.z };
+  }
+
+  /**
+   * Get current region path (for saving)
+   */
+  getCurrentRegion(): string {
+    return this.currentRegionPath;
   }
 }

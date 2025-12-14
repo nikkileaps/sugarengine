@@ -11,9 +11,14 @@ import {
 import { DialogueManager } from './dialogue';
 import { QuestManager } from './quests';
 import { InventoryManager } from './inventory';
+import { SaveManager } from './save';
+import { SceneManager } from './scenes';
 
 async function main() {
   const container = document.getElementById('app')!;
+
+  // Scene manager (controls title, pause, save/load screens)
+  const sceneManager = new SceneManager(container);
 
   const engine = new SugarEngine({
     container,
@@ -38,6 +43,17 @@ async function main() {
   const itemNotification = new ItemNotification(container);
   const inventoryUI = new InventoryUI(container, inventory);
   const giftUI = new GiftUI(container, inventory);
+
+  // Save system
+  const saveManager = new SaveManager({
+    autoSaveEnabled: true,
+    autoSaveDebounceMs: 10000 // 10 seconds between auto-saves
+  });
+  await saveManager.init();
+  saveManager.setGameSystems(engine, quests, inventory);
+
+  // Connect scene manager to game systems
+  sceneManager.setGameSystems(engine, saveManager);
 
   // Inventory event handlers
   inventory.setOnItemAdded((event) => {
@@ -64,6 +80,7 @@ async function main() {
     questNotification.showQuestComplete(event.questName);
     questTracker.update();
     questJournal.refresh();
+    saveManager.autoSave('quest-complete');
   });
 
   quests.setOnObjectiveComplete((event) => {
@@ -83,6 +100,7 @@ async function main() {
   let journalWasPressed = false;
   let inventoryWasPressed = false;
   let giftWasPressed = false;
+  let escapeWasPressed = false;
 
   // Disable player movement during dialogue
   dialogue.setOnStart(() => {
@@ -114,6 +132,7 @@ async function main() {
 
   // Helper to check if any UI is blocking
   const isUIBlocking = () =>
+    sceneManager.isBlocking() ||
     dialogue.isDialogueActive() ||
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
@@ -155,10 +174,13 @@ async function main() {
   // Track nearby pickup for interaction prompt
   let nearbyPickupId: string | null = null;
 
-  // Handle trigger zones for quest objectives
+  // Handle trigger zones for quest objectives and auto-save on region transitions
   engine.onTriggerEnter((event, triggerId) => {
     if (event.type === 'quest') {
       quests.triggerObjective('trigger', triggerId);
+    }
+    if (event.type === 'transition') {
+      saveManager.autoSave('region-transition');
     }
   });
 
@@ -167,33 +189,100 @@ async function main() {
     inventory.addItem(itemId, quantity);
   });
 
-  // Load region
-  await engine.loadRegion('/regions/test/');
-
-  // Start the intro quest for testing
-  await quests.startQuest('intro-quest');
-
-  // Give player some test items
-  inventory.addItem('fresh-bread', 2);
-  inventory.addItem('wildflower-bouquet');
-  inventory.addItem('ancient-coin', 5);
-
   // Get nearby NPC for gift UI
   let nearbyNpcId: string | null = null;
   engine.onNearbyNPCChange((nearby) => {
     nearbyNpcId = nearby?.id ?? null;
   });
 
+  // =====================================================
+  // Scene Manager Event Handlers
+  // =====================================================
+
+  // New Game - start fresh
+  sceneManager.onNewGame(async () => {
+    // Reset game state
+    inventory.clear();
+    quests.clearAllQuests();
+    saveManager.clearCollectedPickups();
+
+    // Load starting region
+    await engine.loadRegion('/regions/test/');
+
+    // Start the intro quest
+    await quests.startQuest('intro-quest');
+
+    // Give player some starter items
+    inventory.addItem('fresh-bread', 2);
+    inventory.addItem('wildflower-bouquet');
+
+    // Switch to gameplay
+    sceneManager.showGameplay();
+    engine.run();
+  });
+
+  // Save game
+  sceneManager.onSave(async (slotId) => {
+    const result = await saveManager.save(slotId);
+    if (result.success) {
+      console.log(`Game saved to ${slotId}`);
+    } else {
+      console.error('Save failed:', result.error);
+    }
+  });
+
+  // Load game
+  sceneManager.onLoad(async (slotId) => {
+    const result = await saveManager.load(slotId);
+    if (result.success) {
+      console.log(`Game loaded from ${slotId}`);
+      engine.run();
+    } else {
+      console.error('Load failed:', result.error);
+    }
+  });
+
+  // Quit
+  sceneManager.onQuit(() => {
+    // In browser, just reload the page
+    window.location.reload();
+  });
+
+  // =====================================================
+  // Game Loop Input Handling
+  // =====================================================
+
   // Game loop hook for UI toggles
   const originalRun = engine.run.bind(engine);
   engine.run = () => {
     const checkInputs = () => {
+      // Only process gameplay inputs when in gameplay scene
+      if (sceneManager.getCurrentScene() !== 'gameplay') {
+        requestAnimationFrame(checkInputs);
+        return;
+      }
+
+      // Escape - toggle pause
+      const escapePressed = engine.isEscapePressed();
+      if (escapePressed && !escapeWasPressed) {
+        if (!isUIBlocking() || sceneManager.getCurrentScene() === 'pause') {
+          sceneManager.togglePause();
+        }
+      }
+      escapeWasPressed = escapePressed;
+
+      // Don't process other inputs if UI is blocking
+      if (isUIBlocking()) {
+        requestAnimationFrame(checkInputs);
+        return;
+      }
+
       // Journal toggle (J)
       const journalPressed = engine.isJournalPressed();
       if (journalPressed && !journalWasPressed) {
         if (questJournal.isVisible()) {
           questJournal.hide();
-        } else if (!isUIBlocking()) {
+        } else {
           questJournal.show();
           engine.setMovementEnabled(false);
         }
@@ -205,7 +294,7 @@ async function main() {
       if (inventoryPressed && !inventoryWasPressed) {
         if (inventoryUI.isVisible()) {
           inventoryUI.hide();
-        } else if (!isUIBlocking()) {
+        } else {
           inventoryUI.show();
           engine.setMovementEnabled(false);
         }
@@ -217,7 +306,7 @@ async function main() {
       if (giftPressed && !giftWasPressed) {
         if (giftUI.isVisible()) {
           giftUI.hide();
-        } else if (!isUIBlocking() && nearbyNpcId) {
+        } else if (nearbyNpcId) {
           giftUI.show(nearbyNpcId);
           engine.setMovementEnabled(false);
         }
@@ -225,7 +314,7 @@ async function main() {
       giftWasPressed = giftPressed;
 
       // Pickup collection (E key when no NPC nearby)
-      if (!isUIBlocking() && !nearbyNpcId) {
+      if (!nearbyNpcId) {
         const pickup = engine.getNearbyPickup();
         if (pickup) {
           // Update prompt for pickup
@@ -254,7 +343,19 @@ async function main() {
     originalRun();
   };
 
+  // =====================================================
+  // Start: Load world, start engine paused, show title
+  // =====================================================
+
+  // Load the starting region so it's visible behind the title screen
+  await engine.loadRegion('/regions/test/');
+
+  // Start the engine but immediately pause it
   engine.run();
+  engine.pause();
+
+  // Show title screen (overlays the frozen game world)
+  await sceneManager.showTitle();
 }
 
 main();

@@ -441,4 +441,74 @@ export class QuestManager {
   async preload(questIds: string[]): Promise<void> {
     await this.loader.preloadAll(questIds);
   }
+
+  // ============================================
+  // Save/Load Support
+  // ============================================
+
+  /**
+   * Get all completed quest IDs (for saving)
+   */
+  getCompletedQuestIds(): string[] {
+    return Array.from(this.completedQuests);
+  }
+
+  /**
+   * Clear all quest state (for loading)
+   */
+  clearAllQuests(): void {
+    this.activeQuests.clear();
+    this.completedQuests.clear();
+    this.trackedQuestId = null;
+  }
+
+  /**
+   * Mark a quest as completed without triggering events (for loading)
+   */
+  markQuestCompleted(questId: string): void {
+    this.completedQuests.add(questId);
+  }
+
+  /**
+   * Restore a quest state from save data (for loading)
+   */
+  async restoreQuestState(savedState: {
+    questId: string;
+    status: string;
+    currentStageId: string;
+    objectiveProgress: { id: string; type: string; description: string; target?: string; count?: number; current?: number; completed: boolean; optional?: boolean }[];
+    startedAt?: number;
+    completedAt?: number;
+  }): Promise<void> {
+    // Load quest definition first
+    const loaded = await this.loader.load(savedState.questId);
+    this.loadedQuests.set(savedState.questId, loaded);
+
+    // Convert serialized objectives back to Map
+    const objectiveProgress = new Map<string, QuestObjective>();
+    for (const obj of savedState.objectiveProgress) {
+      objectiveProgress.set(obj.id, {
+        id: obj.id,
+        type: obj.type as ObjectiveType,
+        description: obj.description,
+        target: obj.target,
+        count: obj.count,
+        current: obj.current,
+        completed: obj.completed,
+        optional: obj.optional
+      });
+    }
+
+    // Create QuestState
+    const state: QuestState = {
+      questId: savedState.questId,
+      status: savedState.status as QuestState['status'],
+      currentStageId: savedState.currentStageId,
+      objectiveProgress,
+      startedAt: savedState.startedAt,
+      completedAt: savedState.completedAt
+    };
+
+    this.activeQuests.set(savedState.questId, state);
+  }
 }
