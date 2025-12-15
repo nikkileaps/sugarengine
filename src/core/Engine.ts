@@ -38,7 +38,7 @@ export class SugarEngine {
   private interactionSystem: InteractionSystem;
   private raycaster: THREE.Raycaster;
   private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
-  private onItemPickupHandler: ((itemId: string, quantity: number) => void) | null = null;
+  private onItemPickupHandler: ((pickupId: string, itemId: string, quantity: number) => void) | null = null;
   private currentRegionPath: string = '';
   private isPaused: boolean = false;
   private isRunning: boolean = false;
@@ -119,7 +119,7 @@ export class SugarEngine {
     this.renderer.domElement.addEventListener('click', (event) => this.handleClick(event));
   }
 
-  async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }): Promise<void> {
+  async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void> {
     // Track current region path for saving
     this.currentRegionPath = regionPath;
 
@@ -245,9 +245,15 @@ export class SugarEngine {
       console.log(`Loaded ${this.currentRegion.data.npcs.length} NPCs`);
     }
 
-    // Create pickup entities from region data
+    // Create pickup entities from region data (skip already collected ones)
     const pickups = this.currentRegion.data.pickups ?? [];
+    const collectedSet = new Set(collectedPickups ?? []);
     for (const pickupDef of pickups) {
+      // Skip pickups that were already collected
+      if (collectedSet.has(pickupDef.id)) {
+        continue;
+      }
+
       const entity = this.world.createEntity();
 
       // Position
@@ -594,7 +600,7 @@ export class SugarEngine {
   /**
    * Set callback for when an item is picked up
    */
-  onItemPickup(handler: (itemId: string, quantity: number) => void): void {
+  onItemPickup(handler: (pickupId: string, itemId: string, quantity: number) => void): void {
     this.onItemPickupHandler = handler;
   }
 
@@ -679,9 +685,9 @@ export class SugarEngine {
           }
         }
 
-        // Fire callback
+        // Fire callback with pickup ID for tracking
         if (this.onItemPickupHandler) {
-          this.onItemPickupHandler(pickup.itemId, pickup.quantity);
+          this.onItemPickupHandler(pickup.id, pickup.itemId, pickup.quantity);
         }
 
         return true;

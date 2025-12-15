@@ -8,7 +8,8 @@ export class TitleScreen extends Screen {
   private onContinueHandler: (() => void) | null = null;
   private onQuitHandler: (() => void) | null = null;
   private hasSaves = false;
-  private menuContainer: HTMLDivElement | null = null;
+  // Set in buildUI() - use 'declare' to prevent JS from resetting it
+  declare private menuContainer: HTMLDivElement;
 
   protected getClassName(): string {
     return 'screen title-screen';

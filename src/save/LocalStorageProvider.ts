@@ -2,7 +2,6 @@ import { BaseStorageProvider } from './StorageProvider';
 import { GameSaveData, SaveSlotMetadata, SaveResult, StorageCapabilities } from './types';
 
 const STORAGE_PREFIX = 'sugarengine_save_';
-const MAX_SLOTS = 10;
 
 /**
  * Browser localStorage implementation.
@@ -12,7 +11,7 @@ export class LocalStorageProvider extends BaseStorageProvider {
   getCapabilities(): StorageCapabilities {
     return {
       supportsMultipleSlots: true,
-      maxSlots: MAX_SLOTS,
+      maxSlots: 4, // autosave + 3 manual slots
       supportsAutoSave: true,
       requiresAuth: false
     };
@@ -75,28 +74,13 @@ export class LocalStorageProvider extends BaseStorageProvider {
   async listSlots(): Promise<SaveSlotMetadata[]> {
     const slots: SaveSlotMetadata[] = [];
 
-    // Check autosave slot first
-    const autoSaveMetadata = await this.getSlotMetadata('autosave');
-    if (autoSaveMetadata) {
-      slots.push(autoSaveMetadata);
-    }
+    // Check all known slot IDs (must match SaveLoadScreen's slotIds)
+    const slotIds = ['autosave', 'slot1', 'slot2', 'slot3'];
 
-    // Check numbered slots
-    for (let i = 0; i < MAX_SLOTS; i++) {
-      const slotId = `slot_${i}`;
+    for (const slotId of slotIds) {
       const metadata = await this.getSlotMetadata(slotId);
       if (metadata) {
         slots.push(metadata);
-      } else {
-        // Add empty slot placeholder
-        slots.push({
-          slotId,
-          savedAt: 0,
-          playTime: 0,
-          playerRegion: '',
-          questCount: 0,
-          exists: false
-        });
       }
     }
 

@@ -6,9 +6,9 @@ import { Screen, COMMON_SCREEN_STYLES } from './Screen';
 export class PauseScreen extends Screen {
   private onResumeHandler: (() => void) | null = null;
   private onSaveHandler: (() => void) | null = null;
-  private onLoadHandler: (() => void) | null = null;
   private onQuitToTitleHandler: (() => void) | null = null;
-  private menuContainer: HTMLDivElement | null = null;
+  // Set in buildUI() - use 'declare' to prevent JS from resetting it
+  declare private menuContainer: HTMLDivElement;
 
   protected getClassName(): string {
     return 'screen pause-screen';
@@ -109,11 +109,6 @@ export class PauseScreen extends Screen {
         action: () => this.onSaveHandler?.()
       },
       {
-        id: 'load',
-        label: 'Load Game',
-        action: () => this.onLoadHandler?.()
-      },
-      {
         id: 'quit',
         label: 'Quit to Title',
         action: () => this.onQuitToTitleHandler?.()
@@ -134,10 +129,6 @@ export class PauseScreen extends Screen {
 
   setOnSave(handler: () => void): void {
     this.onSaveHandler = handler;
-  }
-
-  setOnLoad(handler: () => void): void {
-    this.onLoadHandler = handler;
   }
 
   setOnQuitToTitle(handler: () => void): void {

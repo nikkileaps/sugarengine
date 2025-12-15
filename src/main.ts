@@ -185,8 +185,10 @@ async function main() {
   });
 
   // Handle item pickups from the world
-  engine.onItemPickup((itemId, quantity) => {
+  engine.onItemPickup((pickupId, itemId, quantity) => {
     inventory.addItem(itemId, quantity);
+    // Track collected pickup so it doesn't respawn on load
+    saveManager.markPickupCollected(engine.getCurrentRegion(), pickupId);
   });
 
   // Get nearby NPC for gift UI

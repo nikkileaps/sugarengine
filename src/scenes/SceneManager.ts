@@ -54,8 +54,15 @@ export class SceneManager {
         }
       });
 
-      this.titleScreen.setOnContinue(() => {
-        this.showSaveLoad('load', 'title');
+      this.titleScreen.setOnContinue(async () => {
+        // Load the most recent save directly
+        if (this.saveManager && this.loadHandler) {
+          const slotId = await this.saveManager.getMostRecentSlot();
+          if (slotId) {
+            this.loadHandler(slotId);
+            this.showGameplay();
+          }
+        }
       });
 
       this.titleScreen.setOnQuit(() => {
@@ -121,16 +128,16 @@ export class SceneManager {
           this.showGameplay();
         }
       });
-
-      this.saveLoadScreen.setOnBack(() => {
-        this.saveLoadScreen?.hide();
-        if (returnTo === 'title') {
-          this.showTitle();
-        } else if (returnTo === 'pause') {
-          // Pause screen should still be visible
-        }
-      });
     }
+
+    // Update back handler each time (returnTo may change between calls)
+    this.saveLoadScreen.setOnBack(() => {
+      this.saveLoadScreen?.hide();
+      if (returnTo === 'title') {
+        this.showTitle();
+      }
+      // If returnTo === 'pause', pause screen is already visible
+    });
 
     // Load slot metadata
     if (this.saveManager) {
@@ -163,11 +170,10 @@ export class SceneManager {
       });
 
       this.pauseScreen.setOnSave(() => {
-        this.showSaveLoad('save', 'pause');
-      });
-
-      this.pauseScreen.setOnLoad(() => {
-        this.showSaveLoad('load', 'pause');
+        // Save directly to a single slot
+        if (this.saveHandler) {
+          this.saveHandler('quicksave');
+        }
       });
 
       this.pauseScreen.setOnQuitToTitle(() => {

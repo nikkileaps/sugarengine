@@ -32,7 +32,7 @@ interface InventoryManagerLike {
 interface EngineLike {
   getPlayerPosition?(): { x: number; y: number; z: number };
   getCurrentRegion?(): string;
-  loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }): Promise<void>;
+  loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void>;
 }
 
 export type SaveEventHandler = (trigger: AutoSaveTrigger, slotId: string) => void;
@@ -335,17 +335,18 @@ export class SaveManager {
    * Restore game state from save data
    */
   private async restoreGameState(data: GameSaveData): Promise<void> {
-    // 1. Load the region first
-    await this.engine!.loadRegion(data.player.currentRegion, data.player.position);
+    // 1. Restore world state FIRST (so we know which pickups are collected)
+    this.restoreWorldState(data.world);
 
-    // 2. Restore quest state
+    // 2. Load the region with collected pickups filtered out
+    const collectedInRegion = this.getCollectedPickups(data.player.currentRegion);
+    await this.engine!.loadRegion(data.player.currentRegion, data.player.position, collectedInRegion);
+
+    // 3. Restore quest state
     await this.restoreQuestState(data.quests);
 
-    // 3. Restore inventory state
+    // 4. Restore inventory state
     this.restoreInventoryState(data.inventory);
-
-    // 4. Restore world state
-    this.restoreWorldState(data.world);
   }
 
   private async restoreQuestState(quests: GameSaveData['quests']): Promise<void> {
@@ -449,6 +450,23 @@ export class SaveManager {
   async hasSaves(): Promise<boolean> {
     const slots = await this.provider.listSlots();
     return slots.length > 0;
+  }
+
+  /**
+   * Get the most recently saved slot ID
+   */
+  async getMostRecentSlot(): Promise<string | null> {
+    const slots = await this.provider.listSlots();
+    if (slots.length === 0) return null;
+
+    // Find slot with highest savedAt timestamp
+    let mostRecent = slots[0]!;
+    for (const slot of slots) {
+      if (slot.savedAt > mostRecent.savedAt) {
+        mostRecent = slot;
+      }
+    }
+    return mostRecent.slotId;
   }
 
   async getSlotMetadata(slotId: string): Promise<SaveSlotMetadata | null> {

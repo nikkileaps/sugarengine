@@ -8,8 +8,9 @@ import type { SaveSlotMetadata } from '../save';
 export class SaveLoadScreen extends Screen {
   private mode: SaveLoadMode = 'load';
   private slots: SaveSlotDisplay[] = [];
-  private slotContainer: HTMLDivElement | null = null;
-  private headerTitle: HTMLHeadingElement | null = null;
+  // These are set in buildUI() - use 'declare' to prevent JS from resetting them
+  declare private slotContainer: HTMLDivElement;
+  declare private headerTitle: HTMLHeadingElement;
   private onSelectHandler: ((slotId: string) => void) | null = null;
 
   protected getClassName(): string {
@@ -155,13 +156,13 @@ export class SaveLoadScreen extends Screen {
   }
 
   show(options?: ScreenShowOptions): void {
-    if (options?.mode) {
+    // Always set mode from options if provided
+    if (options?.mode !== undefined) {
       this.mode = options.mode;
     }
-    // Update header
-    if (this.headerTitle) {
-      this.headerTitle.textContent = this.mode === 'save' ? 'Save Game' : 'Load Game';
-    }
+
+    // Update header to reflect current mode
+    this.headerTitle.textContent = this.mode === 'save' ? 'Save Game' : 'Load Game';
 
     this.buildSlotList();
     super.show(options);
