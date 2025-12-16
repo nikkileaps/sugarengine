@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, NPCMovementSystem } from '../systems';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { IsometricCamera } from './IsometricCamera';
 import { InputManager } from './InputManager';
@@ -34,6 +34,7 @@ export class SugarEngine {
   private triggerEntities: number[] = [];
   private npcEntities: number[] = [];
   private pickupEntities: number[] = [];
+  private inspectableEntities: number[] = [];
   private triggerSystem: TriggerSystem;
   private interactionSystem: InteractionSystem;
   private raycaster: THREE.Raycaster;
@@ -159,6 +160,16 @@ export class SugarEngine {
       this.world.removeEntity(entityId);
     }
     this.pickupEntities = [];
+
+    // Remove old inspectable entities (and their meshes)
+    for (const entityId of this.inspectableEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
+      this.world.removeEntity(entityId);
+    }
+    this.inspectableEntities = [];
 
     // Load new region
     this.currentRegion = await this.regions.load(regionPath);
@@ -294,6 +305,51 @@ export class SugarEngine {
     }
     if (pickups.length > 0) {
       console.log(`Loaded ${pickups.length} item pickups`);
+    }
+
+    // Create inspectable entities from region data
+    const inspectables = this.currentRegion.data.inspectables ?? [];
+    for (const inspectableDef of inspectables) {
+      const entity = this.world.createEntity();
+
+      // Position
+      this.world.addComponent(entity, new Position(
+        inspectableDef.position.x,
+        inspectableDef.position.y,
+        inspectableDef.position.z
+      ));
+
+      // Inspectable data
+      this.world.addComponent(entity, new Inspectable(
+        inspectableDef.id,
+        inspectableDef.inspectionId,
+        inspectableDef.promptText
+      ));
+
+      // Placeholder mesh (small box to indicate inspectable object)
+      const geometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x8888ff,
+        emissive: 0x4444aa,
+        emissiveIntensity: 0.3
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(
+        inspectableDef.position.x,
+        inspectableDef.position.y + 0.2,
+        inspectableDef.position.z
+      );
+      mesh.name = `inspectable-${inspectableDef.id}`;
+      mesh.userData.inspectableId = inspectableDef.id;
+      mesh.userData.entityId = entity;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      this.inspectableEntities.push(entity);
+    }
+    if (inspectables.length > 0) {
+      console.log(`Loaded ${inspectables.length} inspectable objects`);
     }
 
     // Add geometry to scene
@@ -542,12 +598,24 @@ export class SugarEngine {
     this.interactionSystem.setInteractHandler(handler);
   }
 
+  onInspect(handler: InspectionHandler): void {
+    this.interactionSystem.setInspectHandler(handler);
+  }
+
   onNearbyNPCChange(handler: (nearby: { id: string; dialogueId?: string } | null) => void): void {
     this.interactionSystem.setNearbyChangeHandler(handler);
   }
 
+  onNearbyInteractableChange(handler: (nearby: NearbyInteractable | null) => void): void {
+    this.interactionSystem.setNearbyInteractableChangeHandler(handler);
+  }
+
   getNearbyNPC(): { id: string; dialogueId?: string } | null {
     return this.interactionSystem.getNearestNPC();
+  }
+
+  getNearbyInteractable(): NearbyInteractable | null {
+    return this.interactionSystem.getNearestInteractable();
   }
 
   setMovementEnabled(enabled: boolean): void {

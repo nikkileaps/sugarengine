@@ -9,6 +9,7 @@ import {
   GiftUI
 } from './ui';
 import { DialogueManager } from './dialogue';
+import { InspectionManager } from './inspection';
 import { QuestManager } from './quests';
 import { InventoryManager } from './inventory';
 import { SaveManager } from './save';
@@ -30,6 +31,9 @@ async function main() {
 
   // Dialogue system
   const dialogue = new DialogueManager(container);
+
+  // Inspection system
+  const inspection = new InspectionManager(container);
 
   // Quest system
   const quests = new QuestManager();
@@ -127,6 +131,16 @@ async function main() {
     engine.setMovementEnabled(true);
   });
 
+  // Disable movement when inspection is open
+  inspection.setOnStart(() => {
+    engine.setMovementEnabled(false);
+  });
+
+  inspection.setOnEnd(() => {
+    engine.setMovementEnabled(true);
+    engine.consumeInteract(); // Prevent E press from immediately re-opening
+  });
+
   // Interaction prompt UI
   const interactionPrompt = new InteractionPrompt(container);
 
@@ -134,21 +148,22 @@ async function main() {
   const isUIBlocking = () =>
     sceneManager.isBlocking() ||
     dialogue.isDialogueActive() ||
+    inspection.isInspectionActive() ||
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
     giftUI.isVisible();
 
-  // Show/hide prompt when near NPC (but not during dialogue or other UI)
+  // Show/hide prompt when near interactable (NPC or inspectable)
   // Pickup prompts are handled in the game loop
-  engine.onNearbyNPCChange((nearby) => {
+  engine.onNearbyInteractableChange((nearby) => {
     if (isUIBlocking()) {
       interactionPrompt.hide();
       return;
     }
 
     if (nearby) {
-      interactionPrompt.show(nearby.id);
-      nearbyPickupId = null; // Clear pickup state when near NPC
+      interactionPrompt.show(nearby.promptText || 'Interact');
+      nearbyPickupId = null; // Clear pickup state when near interactable
     } else if (!nearbyPickupId) {
       // Only hide if not showing a pickup prompt
       interactionPrompt.hide();
@@ -169,6 +184,14 @@ async function main() {
     } else {
       console.log(`NPC ${npcId} has no dialogue`);
     }
+  });
+
+  // Handle inspection - examine world objects
+  engine.onInspect((_inspectableId, inspectionId, _promptText) => {
+    if (isUIBlocking()) return;
+
+    interactionPrompt.hide();
+    inspection.start(inspectionId);
   });
 
   // Track nearby pickup for interaction prompt
@@ -193,8 +216,9 @@ async function main() {
 
   // Get nearby NPC for gift UI
   let nearbyNpcId: string | null = null;
-  engine.onNearbyNPCChange((nearby) => {
-    nearbyNpcId = nearby?.id ?? null;
+  engine.onNearbyInteractableChange((nearby) => {
+    // Only set nearbyNpcId if this is an NPC (not inspectable)
+    nearbyNpcId = (nearby?.type === 'npc') ? nearby.id : null;
   });
 
   // =====================================================

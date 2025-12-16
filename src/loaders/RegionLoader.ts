@@ -49,6 +49,13 @@ export interface PickupDefinition {
   quantity?: number;
 }
 
+export interface InspectableDefinition {
+  id: string;
+  position: Vec3;
+  inspectionId: string;
+  promptText?: string;
+}
+
 export interface LightDefinition {
   type: 'hemisphere' | 'directional' | 'ambient' | 'point';
   color: number;
@@ -106,6 +113,7 @@ export interface RegionData {
   npcs: NPCDefinition[];
   triggers: TriggerDefinition[];
   pickups?: PickupDefinition[];
+  inspectables?: InspectableDefinition[];
 }
 
 export interface LoadedRegion {

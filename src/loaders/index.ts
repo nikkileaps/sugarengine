@@ -5,6 +5,8 @@ export type {
   LoadedRegion,
   NPCDefinition,
   TriggerDefinition,
+  PickupDefinition,
+  InspectableDefinition,
   Vec3,
   LightingDefinition,
   LightDefinition,

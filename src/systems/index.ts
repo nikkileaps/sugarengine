@@ -3,5 +3,5 @@ export { RenderSystem } from './RenderSystem';
 export { TriggerSystem } from './TriggerSystem';
 export type { TriggerHandler } from './TriggerSystem';
 export { InteractionSystem } from './InteractionSystem';
-export type { InteractionHandler } from './InteractionSystem';
+export type { InteractionHandler, InspectionHandler, InteractableType, NearbyInteractable } from './InteractionSystem';
 export { NPCMovementSystem } from './NPCMovementSystem';
