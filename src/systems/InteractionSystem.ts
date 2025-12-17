@@ -1,14 +1,30 @@
 import { System, World } from '../ecs';
-import { Position, PlayerControlled, NPC } from '../components';
+import { Position, PlayerControlled, NPC, Inspectable } from '../components';
 import { InputManager } from '../core/InputManager';
 
 export type InteractionHandler = (npcId: string, dialogueId?: string) => void;
+export type InspectionHandler = (inspectableId: string, inspectionId: string, promptText: string) => void;
+
+/** Type of interactable entity */
+export type InteractableType = 'npc' | 'inspectable';
+
+/** Nearby interactable info */
+export interface NearbyInteractable {
+  type: InteractableType;
+  id: string;
+  dialogueId?: string;      // For NPCs
+  inspectionId?: string;    // For Inspectables
+  promptText?: string;      // Custom prompt text
+}
 
 export class InteractionSystem extends System {
   private interactionRadius = 2.0; // How close to interact
   private nearestNPC: { id: string; dialogueId?: string } | null = null;
+  private nearestInteractable: NearbyInteractable | null = null;
   private onInteract: InteractionHandler | null = null;
+  private onInspect: InspectionHandler | null = null;
   private onNearbyChange: ((nearby: { id: string; dialogueId?: string } | null) => void) | null = null;
+  private onNearbyInteractableChange: ((nearby: NearbyInteractable | null) => void) | null = null;
 
   constructor(private input: InputManager) {
     super();
@@ -18,12 +34,24 @@ export class InteractionSystem extends System {
     this.onInteract = handler;
   }
 
+  setInspectHandler(handler: InspectionHandler): void {
+    this.onInspect = handler;
+  }
+
   setNearbyChangeHandler(handler: (nearby: { id: string; dialogueId?: string } | null) => void): void {
     this.onNearbyChange = handler;
   }
 
+  setNearbyInteractableChangeHandler(handler: (nearby: NearbyInteractable | null) => void): void {
+    this.onNearbyInteractableChange = handler;
+  }
+
   getNearestNPC(): { id: string; dialogueId?: string } | null {
     return this.nearestNPC;
+  }
+
+  getNearestInteractable(): NearbyInteractable | null {
+    return this.nearestInteractable;
   }
 
   update(world: World, _delta: number): void {
@@ -34,8 +62,11 @@ export class InteractionSystem extends System {
 
     const playerPos = playerList[0]!.components[1];
 
+    // Track the overall nearest interactable (NPC or Inspectable)
+    let nearestInteractable: (NearbyInteractable & { distance: number }) | null = null;
+
     // Find nearest NPC within interaction radius
-    let nearest: { id: string; dialogueId?: string; distance: number } | null = null;
+    let nearestNPCData: { id: string; dialogueId?: string; distance: number } | null = null;
 
     const npcs = world.query<[NPC, Position]>(NPC, Position);
     for (const { components: [npc, npcPos] } of npcs) {
@@ -44,31 +75,80 @@ export class InteractionSystem extends System {
       const distance = Math.sqrt(dx * dx + dz * dz);
 
       if (distance <= this.interactionRadius) {
-        if (!nearest || distance < nearest.distance) {
-          nearest = {
+        if (!nearestNPCData || distance < nearestNPCData.distance) {
+          nearestNPCData = {
             id: npc.id,
             dialogueId: npc.dialogueId,
+            distance
+          };
+        }
+        if (!nearestInteractable || distance < nearestInteractable.distance) {
+          nearestInteractable = {
+            type: 'npc',
+            id: npc.id,
+            dialogueId: npc.dialogueId,
+            promptText: `Talk to ${npc.name || npc.id}`,
             distance
           };
         }
       }
     }
 
-    // Update nearest NPC and notify if changed
-    const newNearest = nearest ? { id: nearest.id, dialogueId: nearest.dialogueId } : null;
-    const changed = (this.nearestNPC?.id !== newNearest?.id);
+    // Find nearest Inspectable within interaction radius
+    const inspectables = world.query<[Inspectable, Position]>(Inspectable, Position);
+    for (const { components: [inspectable, inspectablePos] } of inspectables) {
+      const dx = playerPos.x - inspectablePos.x;
+      const dz = playerPos.z - inspectablePos.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
 
-    if (changed) {
-      this.nearestNPC = newNearest;
+      if (distance <= this.interactionRadius) {
+        if (!nearestInteractable || distance < nearestInteractable.distance) {
+          nearestInteractable = {
+            type: 'inspectable',
+            id: inspectable.id,
+            inspectionId: inspectable.inspectionId,
+            promptText: inspectable.promptText,
+            distance
+          };
+        }
+      }
+    }
+
+    // Update nearest NPC (for backward compatibility)
+    const newNearestNPC = nearestNPCData ? { id: nearestNPCData.id, dialogueId: nearestNPCData.dialogueId } : null;
+    const npcChanged = (this.nearestNPC?.id !== newNearestNPC?.id);
+
+    if (npcChanged) {
+      this.nearestNPC = newNearestNPC;
       if (this.onNearbyChange) {
-        this.onNearbyChange(newNearest);
+        this.onNearbyChange(newNearestNPC);
+      }
+    }
+
+    // Update nearest interactable (unified)
+    const newNearestInteractable: NearbyInteractable | null = nearestInteractable
+      ? { type: nearestInteractable.type, id: nearestInteractable.id, dialogueId: nearestInteractable.dialogueId, inspectionId: nearestInteractable.inspectionId, promptText: nearestInteractable.promptText }
+      : null;
+    const interactableChanged = (this.nearestInteractable?.id !== newNearestInteractable?.id) ||
+                                 (this.nearestInteractable?.type !== newNearestInteractable?.type);
+
+    if (interactableChanged) {
+      this.nearestInteractable = newNearestInteractable;
+      if (this.onNearbyInteractableChange) {
+        this.onNearbyInteractableChange(newNearestInteractable);
       }
     }
 
     // Check for interact button press
-    if (this.nearestNPC && this.input.isInteractPressed()) {
-      if (this.onInteract) {
-        this.onInteract(this.nearestNPC.id, this.nearestNPC.dialogueId);
+    if (this.nearestInteractable && this.input.isInteractPressed()) {
+      if (this.nearestInteractable.type === 'npc' && this.onInteract) {
+        this.onInteract(this.nearestInteractable.id, this.nearestInteractable.dialogueId);
+      } else if (this.nearestInteractable.type === 'inspectable' && this.onInspect) {
+        this.onInspect(
+          this.nearestInteractable.id,
+          this.nearestInteractable.inspectionId!,
+          this.nearestInteractable.promptText || 'Inspect'
+        );
       }
     }
   }
