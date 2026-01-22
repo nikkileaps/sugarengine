@@ -232,18 +232,6 @@ export class GameCamera {
     // Get all intersections
     const intersects = this.occlusionRaycaster.intersectObjects(this.scene.children, true);
 
-    // Debug: log ray info and what we're hitting (throttled)
-    if (Math.random() < 0.01) {
-      console.log('Ray:', {
-        from: `${cameraWorldPos.x.toFixed(1)}, ${cameraWorldPos.y.toFixed(1)}, ${cameraWorldPos.z.toFixed(1)}`,
-        to: `${targetPos.x.toFixed(1)}, ${targetPos.y.toFixed(1)}, ${targetPos.z.toFixed(1)}`,
-        dir: `${direction.x.toFixed(2)}, ${direction.y.toFixed(2)}, ${direction.z.toFixed(2)}`,
-        dist: distance.toFixed(1),
-        hits: intersects.length,
-        hitNames: intersects.slice(0, 5).map(i => i.object.name)
-      });
-    }
-
     // Track which meshes are currently occluding
     const currentlyOccluding = new Set<THREE.Mesh>();
 
