@@ -3,17 +3,18 @@ import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable } from '../components';
 import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
-import { IsometricCamera } from './IsometricCamera';
+import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
 
 export interface CameraConfig {
-  style: 'isometric';
-  zoom: {
+  style: 'isometric' | 'perspective';
+  zoom?: {
     min: number;
     max: number;
     default: number;
   };
+  perspective?: Partial<GameCameraConfig>;
 }
 
 export interface EngineConfig {
@@ -24,7 +25,7 @@ export interface EngineConfig {
 export class SugarEngine {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
-  private camera: IsometricCamera;
+  private camera: GameCamera;
   private input: InputManager;
   private clock: THREE.Clock;
   private postProcessing: PostProcessing;
@@ -37,6 +38,7 @@ export class SugarEngine {
   private inspectableEntities: number[] = [];
   private triggerSystem: TriggerSystem;
   private interactionSystem: InteractionSystem;
+  private movementSystem: MovementSystem;
   private raycaster: THREE.Raycaster;
   private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
   private onItemPickupHandler: ((pickupId: string, itemId: string, quantity: number) => void) | null = null;
@@ -62,13 +64,14 @@ export class SugarEngine {
     this.scene.background = new THREE.Color(0x1a1a2e); // Default background
 
     // Camera
-    this.camera = new IsometricCamera(config.camera.zoom, config.container);
+    this.camera = new GameCamera(config.camera.perspective ?? {}, config.container);
+    this.scene.add(this.camera.getSceneObject());
 
     // Post-processing (handles rendering with proper color space)
     this.postProcessing = new PostProcessing(
       this.renderer,
       this.scene,
-      this.camera.camera
+      this.camera.getThreeCamera()
     );
 
     // Input
@@ -84,7 +87,9 @@ export class SugarEngine {
     // Register systems
     // NPCMovementSystem must run before MovementSystem to set velocities first
     this.world.addSystem(new NPCMovementSystem());
-    this.world.addSystem(new MovementSystem(this.input, this.scene));
+    this.movementSystem = new MovementSystem(this.input, this.scene);
+    this.movementSystem.setCameraYawProvider(() => this.camera.getYaw());
+    this.world.addSystem(this.movementSystem);
     this.world.addSystem(new RenderSystem(this.scene));
     this.triggerSystem = new TriggerSystem();
     this.world.addSystem(this.triggerSystem);
@@ -501,7 +506,7 @@ export class SugarEngine {
     );
 
     // Cast ray from camera
-    this.raycaster.setFromCamera(mouse, this.camera.camera);
+    this.raycaster.setFromCamera(mouse, this.camera.getThreeCamera());
 
     // Check for NPC intersections
     const npcMeshes: THREE.Object3D[] = [];
@@ -541,24 +546,25 @@ export class SugarEngine {
     const animate = () => {
       requestAnimationFrame(animate);
 
-      // Always render, but only update logic when not paused
-      if (!this.isPaused) {
-        const delta = this.clock.getDelta();
+      // Get delta time (always needed for camera smoothing)
+      const delta = this.clock.getDelta();
 
+      // Update logic when not paused
+      if (!this.isPaused) {
         // Update ECS world
         this.world.update(delta);
 
-        // Update camera to follow player
+        // Update camera target to follow player
         if (this.playerEntity >= 0) {
           const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
           if (playerPos) {
             this.camera.follow(new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z));
           }
         }
-      } else {
-        // Still consume delta time when paused to prevent time accumulation
-        this.clock.getDelta();
       }
+
+      // Always update camera (for smooth interpolation even when paused)
+      this.camera.update(delta);
 
       // Render with post-processing (always render so pause screen shows game behind)
       this.postProcessing.render();

@@ -7,6 +7,7 @@ export class MovementSystem extends System {
   private raycaster: THREE.Raycaster;
   private collisionDistance = 0.5; // How close to walls before stopping
   private playerHeight = 1.0; // Ray origin height (above ground cubes)
+  private getCameraYaw: (() => number) | null = null;
 
   constructor(
     private input: InputManager,
@@ -16,16 +17,24 @@ export class MovementSystem extends System {
     this.raycaster = new THREE.Raycaster();
   }
 
+  setCameraYawProvider(provider: () => number): void {
+    this.getCameraYaw = provider;
+  }
+
   update(world: World, delta: number): void {
     // Handle player input -> velocity
     const playerEntities = world.query<[PlayerControlled, Velocity]>(PlayerControlled, Velocity);
     for (const { components: [playerControlled, velocity] } of playerEntities) {
       const { moveX, moveY } = this.input.getInput();
 
-      // Convert screen-space input to isometric world movement
-      const angle = Math.PI / 4; // 45 degrees
-      velocity.x = (moveX * Math.cos(angle) - moveY * Math.sin(angle)) * playerControlled.speed;
-      velocity.z = (moveX * Math.sin(angle) + moveY * Math.cos(angle)) * playerControlled.speed;
+      // Convert screen-space input to camera-relative world movement
+      // Use camera yaw if available, otherwise fall back to classic isometric angle
+      const cameraYaw = this.getCameraYaw ? this.getCameraYaw() : Math.PI / 4;
+
+      // Transform input based on camera orientation
+      // W (moveY=-1) should move away from camera, A (moveX=-1) should move left relative to camera
+      velocity.x = (moveX * Math.cos(cameraYaw) + moveY * Math.sin(cameraYaw)) * playerControlled.speed;
+      velocity.z = (-moveX * Math.sin(cameraYaw) + moveY * Math.cos(cameraYaw)) * playerControlled.speed;
     }
 
     // Apply velocity to position with collision detection
