@@ -146,6 +146,10 @@ export class RegionLoader {
     // Create lights from definition
     const lights = data.lighting ? this.createLights(data.lighting) : [];
 
+    // Auto-create point lights from emissive materials in the geometry
+    const emissiveLights = this.createLightsFromEmissiveMaterials(geometry);
+    lights.push(...emissiveLights);
+
     return { data, geometry, lights };
   }
 
@@ -226,6 +230,46 @@ export class RegionLoader {
         console.warn(`Unknown light type: ${def.type}`);
         return null;
     }
+  }
+
+  private createLightsFromEmissiveMaterials(geometry: THREE.Group): THREE.Light[] {
+    const lights: THREE.Light[] = [];
+
+    geometry.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+
+        // Check if material has emissive color (non-black)
+        const emissive = material.emissive;
+        if (!emissive || (emissive.r === 0 && emissive.g === 0 && emissive.b === 0)) continue;
+
+        // Get world position of the mesh
+        const worldPos = new THREE.Vector3();
+        child.getWorldPosition(worldPos);
+
+        // Calculate intensity from emissive intensity and color brightness
+        const brightness = (emissive.r + emissive.g + emissive.b) / 3;
+        const intensity = (material.emissiveIntensity ?? 1) * brightness * 2;
+
+        // Create point light at mesh position
+        const light = new THREE.PointLight(emissive.getHex(), intensity, 8, 1);
+        light.position.copy(worldPos);
+
+        lights.push(light);
+
+        console.log(`Created point light from emissive mesh "${child.name}" at (${worldPos.x.toFixed(1)}, ${worldPos.y.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+      }
+    });
+
+    if (lights.length > 0) {
+      console.log(`Created ${lights.length} lights from emissive materials`);
+    }
+
+    return lights;
   }
 
   private async loadMapData(url: string): Promise<RegionData> {
