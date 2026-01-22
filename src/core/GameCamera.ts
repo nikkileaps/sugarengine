@@ -14,6 +14,9 @@ export interface GameCameraConfig {
   snapThreshold: number;
   autoFollow: boolean;          // Camera rotates to stay behind player movement
   autoFollowStrength: number;   // How fast camera swings behind (lower = smoother)
+  occlusionEnabled: boolean;    // Fade objects blocking camera view of player
+  occlusionFadeSpeed: number;   // Higher = faster fade (default: 8)
+  occlusionMinOpacity: number;  // Minimum opacity when faded (default: 0.3)
 }
 
 const DEFAULT_CONFIG: GameCameraConfig = {
@@ -30,6 +33,9 @@ const DEFAULT_CONFIG: GameCameraConfig = {
   snapThreshold: 10,
   autoFollow: true,
   autoFollowStrength: 2,  // Gentle swing-behind effect
+  occlusionEnabled: true,
+  occlusionFadeSpeed: 8,
+  occlusionMinOpacity: 0.3,
 };
 
 export class GameCamera {
@@ -62,6 +68,11 @@ export class GameCamera {
   // Auto-follow state
   private prevTargetPosition = new THREE.Vector3();
   private movementDirection = new THREE.Vector2();  // XZ plane
+
+  // Occlusion state
+  private occlusionRaycaster: THREE.Raycaster;
+  private occludedMeshes: Map<THREE.Mesh, { originalOpacity: number; currentOpacity: number }> = new Map();
+  private scene: THREE.Scene | null = null;
 
   // Bound event handlers (for cleanup)
   private boundOnMouseDown: (e: MouseEvent) => void;
@@ -106,6 +117,9 @@ export class GameCamera {
 
     // Apply initial rotation and position
     this.updateRig();
+
+    // Initialize occlusion raycaster
+    this.occlusionRaycaster = new THREE.Raycaster();
 
     // Bind event handlers
     this.boundOnMouseDown = this.onMouseDown.bind(this);
@@ -185,6 +199,126 @@ export class GameCamera {
 
     // Update the rig with interpolated values
     this.updateRig();
+
+    // Update occlusion fading
+    if (this.config.occlusionEnabled) {
+      this.updateOcclusion(deltaTime);
+    }
+  }
+
+  private updateOcclusion(deltaTime: number): void {
+    if (!this.scene) return;
+
+    // Ensure world matrices are up to date for raycasting
+    this.scene.updateMatrixWorld(true);
+
+    // Get camera world position
+    const cameraWorldPos = new THREE.Vector3();
+    this.camera.getWorldPosition(cameraWorldPos);
+
+    // Target position is where the camera is looking (player position)
+    const targetPos = this.cameraTarget.position.clone();
+
+    // Calculate direction and distance
+    const direction = new THREE.Vector3()
+      .subVectors(targetPos, cameraWorldPos)
+      .normalize();
+    const distance = cameraWorldPos.distanceTo(targetPos);
+
+    // Set up raycaster
+    this.occlusionRaycaster.set(cameraWorldPos, direction);
+    this.occlusionRaycaster.far = distance;
+
+    // Get all intersections
+    const intersects = this.occlusionRaycaster.intersectObjects(this.scene.children, true);
+
+    // Debug: log ray info and what we're hitting (throttled)
+    if (Math.random() < 0.01) {
+      console.log('Ray:', {
+        from: `${cameraWorldPos.x.toFixed(1)}, ${cameraWorldPos.y.toFixed(1)}, ${cameraWorldPos.z.toFixed(1)}`,
+        to: `${targetPos.x.toFixed(1)}, ${targetPos.y.toFixed(1)}, ${targetPos.z.toFixed(1)}`,
+        dir: `${direction.x.toFixed(2)}, ${direction.y.toFixed(2)}, ${direction.z.toFixed(2)}`,
+        dist: distance.toFixed(1),
+        hits: intersects.length,
+        hitNames: intersects.slice(0, 5).map(i => i.object.name)
+      });
+    }
+
+    // Track which meshes are currently occluding
+    const currentlyOccluding = new Set<THREE.Mesh>();
+
+    for (const hit of intersects) {
+      const obj = hit.object;
+      if (!(obj instanceof THREE.Mesh)) continue;
+
+      // Skip meshes that shouldn't fade
+      const name = obj.name;
+      if (
+        name.startsWith('player') ||
+        name.startsWith('npc-') ||
+        name.startsWith('pickup-') ||
+        name.startsWith('inspectable-')
+      ) {
+        continue;
+      }
+
+      // Skip ground/floor meshes (check face normal)
+      if (hit.face && hit.face.normal.y > 0.9) {
+        continue;
+      }
+
+      // This mesh is occluding
+      currentlyOccluding.add(obj);
+
+      // If not already tracked, store original opacity
+      if (!this.occludedMeshes.has(obj)) {
+        const material = obj.material as THREE.MeshStandardMaterial;
+        const originalOpacity = material.opacity ?? 1;
+        this.occludedMeshes.set(obj, {
+          originalOpacity,
+          currentOpacity: originalOpacity,
+        });
+      }
+    }
+
+    // Update all tracked meshes
+    const toRemove: THREE.Mesh[] = [];
+
+    for (const [mesh, state] of this.occludedMeshes) {
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      const isOccluding = currentlyOccluding.has(mesh);
+
+      // Determine target opacity
+      const targetOpacity = isOccluding
+        ? this.config.occlusionMinOpacity
+        : state.originalOpacity;
+
+      // Interpolate toward target
+      const fadeSpeed = this.config.occlusionFadeSpeed;
+      const smoothFactor = 1 - Math.exp(-fadeSpeed * deltaTime);
+      state.currentOpacity += (targetOpacity - state.currentOpacity) * smoothFactor;
+
+      // Apply opacity
+      material.transparent = true;
+      material.opacity = state.currentOpacity;
+      material.needsUpdate = true;
+
+      // If fully restored, remove from tracking
+      if (!isOccluding && Math.abs(state.currentOpacity - state.originalOpacity) < 0.01) {
+        material.opacity = state.originalOpacity;
+        // Only disable transparent if original was fully opaque
+        if (state.originalOpacity >= 1) {
+          material.transparent = false;
+        }
+        material.needsUpdate = true;
+        toRemove.push(mesh);
+      }
+    }
+
+    // Clean up fully restored meshes
+    for (const mesh of toRemove) {
+      this.occludedMeshes.delete(mesh);
+    }
   }
 
   follow(target: THREE.Vector3): void {
@@ -309,6 +443,10 @@ export class GameCamera {
 
   getThreeCamera(): THREE.PerspectiveCamera {
     return this.camera;
+  }
+
+  setScene(scene: THREE.Scene): void {
+    this.scene = scene;
   }
 
   getYaw(): number {

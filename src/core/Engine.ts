@@ -66,6 +66,7 @@ export class SugarEngine {
     // Camera
     this.camera = new GameCamera(config.camera.perspective ?? {}, config.container);
     this.scene.add(this.camera.getSceneObject());
+    this.camera.setScene(this.scene);
 
     // Post-processing (handles rendering with proper color space)
     this.postProcessing = new PostProcessing(
@@ -423,10 +424,12 @@ export class SugarEngine {
     let mesh: THREE.Object3D;
     try {
       mesh = await this.models.load('/models/player.glb');
+      mesh.name = 'player';
       mesh.castShadow = true;
       mesh.traverse((child) => {
         if (child instanceof THREE.Mesh) {
           child.castShadow = true;
+          child.name = 'player-mesh';
         }
       });
     } catch {
@@ -434,6 +437,7 @@ export class SugarEngine {
       const geometry = new THREE.BoxGeometry(1, 1.5, 1);
       const material = new THREE.MeshStandardMaterial({ color: 0xe07a5f });
       mesh = new THREE.Mesh(geometry, material);
+      mesh.name = 'player';
       mesh.castShadow = true;
     }
 
