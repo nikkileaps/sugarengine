@@ -17,6 +17,9 @@ import {
   InspectionPanel,
   setAvailableNPCs,
   setAvailableItems,
+  setAvailableDialogues,
+  setAvailableQuests,
+  setAvailableQuestsForItems,
 } from './panels';
 
 export class EditorApp {
@@ -146,11 +149,37 @@ export class EditorApp {
       // Load inspections
       await this.loadInspections();
 
+      // Wire up cross-references between panels
+      this.setupCrossReferences();
+
       this.statusBar.setStatus('Ready');
     } catch (error) {
       console.error('Failed to load data:', error);
       this.statusBar.setStatus('Failed to load some data');
     }
+  }
+
+  private setupCrossReferences(): void {
+    // Get all loaded data
+    const dialogues = this.dialoguePanel.getDialogues();
+    const quests = this.questPanel.getQuests();
+
+    // Set dialogues for NPC panel reference tracking
+    // Extract speaker info from nodes
+    setAvailableDialogues(dialogues.map(d => ({
+      id: d.id,
+      nodes: d.nodes?.map(n => ({ speaker: n.speaker })),
+    })));
+
+    // Set quests for NPC panel and Item panel reference tracking
+    const questData = quests.map(q => ({
+      id: q.id,
+      name: q.name,
+      stages: q.stages,
+      rewards: q.rewards,
+    }));
+    setAvailableQuests(questData);
+    setAvailableQuestsForItems(questData);
   }
 
   private async loadDialogues(): Promise<void> {

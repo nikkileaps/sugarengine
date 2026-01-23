@@ -1,5 +1,12 @@
 /**
  * NPCPanel - Editor for NPC database
+ *
+ * Features:
+ * - NPC list with search/filter
+ * - Portrait preview
+ * - Reference tracking (shows dialogues/quests using this NPC)
+ * - Quick-create dialogue for NPC
+ * - Validation warnings
  */
 
 import { BasePanel } from './BasePanel';
@@ -13,6 +20,31 @@ interface NPCEntry {
   description?: string;
   defaultDialogue?: string;
   faction?: string;
+}
+
+interface DialogueReference {
+  id: string;
+  name: string;
+  type: 'speaker' | 'target';
+}
+
+interface QuestReference {
+  id: string;
+  name: string;
+  stageName: string;
+  objectiveDesc: string;
+}
+
+// Available data for reference tracking
+let availableDialogues: { id: string; speakerId?: string; nodes?: { speaker?: string }[] }[] = [];
+let availableQuests: { id: string; name: string; stages: { id: string; description: string; objectives: { type: string; target: string; description: string }[] }[] }[] = [];
+
+export function setAvailableDialogues(dialogues: typeof availableDialogues): void {
+  availableDialogues = dialogues;
+}
+
+export function setAvailableQuests(quests: typeof availableQuests): void {
+  availableQuests = quests;
 }
 
 const NPC_FIELDS: FieldDefinition[] = [
@@ -42,7 +74,6 @@ export class NPCPanel extends BasePanel {
   addNPC(npc: NPCEntry): void {
     this.npcs.set(npc.id, npc);
     this.updateEntryList();
-    editorStore.setDirty(true);
   }
 
   getNPCs(): NPCEntry[] {
@@ -50,13 +81,86 @@ export class NPCPanel extends BasePanel {
   }
 
   private updateEntryList(): void {
-    const items = Array.from(this.npcs.values()).map(n => ({
-      id: n.id,
-      name: n.name,
-      subtitle: n.faction ?? 'No faction',
-      icon: '👤',
-    }));
+    const items = Array.from(this.npcs.values()).map(n => {
+      const warnings = this.validateNPC(n);
+      return {
+        id: n.id,
+        name: n.name,
+        subtitle: n.faction ?? 'No faction',
+        icon: '👤',
+        badge: warnings.length > 0 ? `${warnings.length}` : undefined,
+        badgeColor: '#f38ba8',
+      };
+    });
     this.setEntries(items);
+  }
+
+  private validateNPC(npc: NPCEntry): string[] {
+    const warnings: string[] = [];
+
+    // Check if NPC has a dialogue
+    if (!npc.defaultDialogue) {
+      warnings.push('No default dialogue assigned');
+    } else {
+      // Check if dialogue exists
+      const dialogueExists = availableDialogues.some(d => d.id === npc.defaultDialogue);
+      if (!dialogueExists && availableDialogues.length > 0) {
+        warnings.push(`Default dialogue "${npc.defaultDialogue}" not found`);
+      }
+    }
+
+    return warnings;
+  }
+
+  private findDialogueReferences(npcId: string): DialogueReference[] {
+    const refs: DialogueReference[] = [];
+
+    for (const dialogue of availableDialogues) {
+      // Check if NPC is the main speaker
+      if (dialogue.speakerId === npcId) {
+        refs.push({
+          id: dialogue.id,
+          name: dialogue.id,
+          type: 'speaker',
+        });
+      }
+
+      // Check if NPC appears in any nodes
+      if (dialogue.nodes) {
+        for (const node of dialogue.nodes) {
+          if (node.speaker === npcId && !refs.some(r => r.id === dialogue.id)) {
+            refs.push({
+              id: dialogue.id,
+              name: dialogue.id,
+              type: 'speaker',
+            });
+          }
+        }
+      }
+    }
+
+    return refs;
+  }
+
+  private findQuestReferences(npcId: string): QuestReference[] {
+    const refs: QuestReference[] = [];
+
+    for (const quest of availableQuests) {
+      for (const stage of quest.stages) {
+        for (const obj of stage.objectives) {
+          if (obj.type === 'talk' && obj.target === npcId) {
+            refs.push({
+              id: quest.id,
+              name: quest.name,
+              stageName: stage.id,
+              objectiveDesc: obj.description,
+            });
+          }
+        }
+      }
+    }
+
+    return refs;
   }
 
   private renderCenterPlaceholder(): void {
@@ -99,7 +203,7 @@ export class NPCPanel extends BasePanel {
       align-items: flex-start;
     `;
 
-    // Portrait placeholder
+    // Portrait
     const portrait = document.createElement('div');
     portrait.style.cssText = `
       width: 120px;
@@ -111,8 +215,51 @@ export class NPCPanel extends BasePanel {
       align-items: center;
       justify-content: center;
       font-size: 48px;
+      overflow: hidden;
+      position: relative;
     `;
-    portrait.textContent = '👤';
+
+    if (npc.portrait) {
+      const img = document.createElement('img');
+      img.src = npc.portrait;
+      img.style.cssText = `
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      `;
+      img.onerror = () => {
+        img.style.display = 'none';
+        portrait.textContent = '👤';
+      };
+      portrait.appendChild(img);
+    } else {
+      portrait.textContent = '👤';
+    }
+
+    // Upload overlay
+    const uploadOverlay = document.createElement('div');
+    uploadOverlay.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 4px;
+      background: rgba(0,0,0,0.7);
+      text-align: center;
+      font-size: 10px;
+      color: #a6adc8;
+      cursor: pointer;
+    `;
+    uploadOverlay.textContent = 'Click to change';
+    uploadOverlay.onclick = () => {
+      const path = prompt('Enter portrait path:', npc.portrait || '/portraits/');
+      if (path !== null) {
+        npc.portrait = path;
+        editorStore.setDirty(true);
+        this.renderNPCDetail(npc);
+      }
+    };
+    portrait.appendChild(uploadOverlay);
     header.appendChild(portrait);
 
     // Info
@@ -139,24 +286,67 @@ export class NPCPanel extends BasePanel {
     info.appendChild(id);
 
     if (npc.faction) {
-      const faction = document.createElement('div');
-      faction.innerHTML = `<strong>Faction:</strong> ${npc.faction}`;
-      faction.style.cssText = `
-        font-size: 13px;
-        color: #a6adc8;
-        margin-bottom: 8px;
+      const factionBadge = document.createElement('span');
+      factionBadge.textContent = npc.faction;
+      factionBadge.style.cssText = `
+        display: inline-block;
+        padding: 4px 8px;
+        background: #89b4fa22;
+        color: #89b4fa;
+        border-radius: 4px;
+        font-size: 12px;
+        margin-bottom: 12px;
       `;
-      info.appendChild(faction);
+      info.appendChild(factionBadge);
     }
 
+    // Default dialogue link
     if (npc.defaultDialogue) {
-      const dialogue = document.createElement('div');
-      dialogue.innerHTML = `<strong>Default Dialogue:</strong> ${npc.defaultDialogue}`;
-      dialogue.style.cssText = `
-        font-size: 13px;
-        color: #a6adc8;
+      const dialogueLink = document.createElement('div');
+      dialogueLink.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
       `;
-      info.appendChild(dialogue);
+
+      const icon = document.createElement('span');
+      icon.textContent = '💬';
+      dialogueLink.appendChild(icon);
+
+      const link = document.createElement('a');
+      link.textContent = npc.defaultDialogue;
+      link.href = '#';
+      link.style.cssText = `
+        color: #89b4fa;
+        font-size: 13px;
+        text-decoration: none;
+      `;
+      link.onclick = (e) => {
+        e.preventDefault();
+        // Switch to dialogues tab and select
+        editorStore.setActiveTab('dialogues');
+        editorStore.selectEntry(npc.defaultDialogue!);
+      };
+      dialogueLink.appendChild(link);
+
+      info.appendChild(dialogueLink);
+    } else {
+      // Quick-create dialogue button
+      const createBtn = document.createElement('button');
+      createBtn.textContent = '+ Create Dialogue';
+      createBtn.style.cssText = `
+        margin-top: 8px;
+        padding: 6px 12px;
+        border: 1px dashed #a6e3a1;
+        border-radius: 4px;
+        background: transparent;
+        color: #a6e3a1;
+        font-size: 12px;
+        cursor: pointer;
+      `;
+      createBtn.onclick = () => this.createDialogueForNPC(npc);
+      info.appendChild(createBtn);
     }
 
     header.appendChild(info);
@@ -187,13 +377,17 @@ export class NPCPanel extends BasePanel {
         font-size: 13px;
         color: #a6adc8;
         line-height: 1.5;
+        white-space: pre-wrap;
       `;
       descSection.appendChild(descText);
 
       detail.appendChild(descSection);
     }
 
-    // References section (placeholder)
+    // References section
+    const dialogueRefs = this.findDialogueReferences(npc.id);
+    const questRefs = this.findQuestReferences(npc.id);
+
     const refSection = document.createElement('div');
     refSection.style.cssText = `
       padding: 16px;
@@ -210,18 +404,181 @@ export class NPCPanel extends BasePanel {
     `;
     refSection.appendChild(refTitle);
 
-    const refPlaceholder = document.createElement('div');
-    refPlaceholder.textContent = 'Dialogues and quests referencing this NPC will appear here.';
-    refPlaceholder.style.cssText = `
-      font-size: 12px;
-      color: #6c7086;
-      font-style: italic;
-    `;
-    refSection.appendChild(refPlaceholder);
+    if (dialogueRefs.length === 0 && questRefs.length === 0) {
+      const noRefs = document.createElement('div');
+      noRefs.textContent = 'This NPC is not referenced by any dialogues or quests.';
+      noRefs.style.cssText = `
+        font-size: 12px;
+        color: #6c7086;
+        font-style: italic;
+      `;
+      refSection.appendChild(noRefs);
+    } else {
+      // Dialogue references
+      if (dialogueRefs.length > 0) {
+        const dialogueHeader = document.createElement('div');
+        dialogueHeader.textContent = `Dialogues (${dialogueRefs.length})`;
+        dialogueHeader.style.cssText = `
+          font-size: 11px;
+          color: #6c7086;
+          margin-bottom: 8px;
+          text-transform: uppercase;
+        `;
+        refSection.appendChild(dialogueHeader);
+
+        for (const ref of dialogueRefs) {
+          const refEl = document.createElement('div');
+          refEl.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            margin-bottom: 4px;
+            background: #1e1e2e;
+            border-radius: 4px;
+            cursor: pointer;
+          `;
+          refEl.onclick = () => {
+            editorStore.setActiveTab('dialogues');
+            editorStore.selectEntry(ref.id);
+          };
+
+          const icon = document.createElement('span');
+          icon.textContent = '💬';
+          icon.style.fontSize = '14px';
+          refEl.appendChild(icon);
+
+          const name = document.createElement('span');
+          name.textContent = ref.name;
+          name.style.cssText = 'font-size: 13px; color: #cdd6f4;';
+          refEl.appendChild(name);
+
+          const badge = document.createElement('span');
+          badge.textContent = ref.type;
+          badge.style.cssText = `
+            margin-left: auto;
+            padding: 2px 6px;
+            background: #89b4fa22;
+            color: #89b4fa;
+            border-radius: 3px;
+            font-size: 10px;
+          `;
+          refEl.appendChild(badge);
+
+          refSection.appendChild(refEl);
+        }
+      }
+
+      // Quest references
+      if (questRefs.length > 0) {
+        const questHeader = document.createElement('div');
+        questHeader.textContent = `Quests (${questRefs.length})`;
+        questHeader.style.cssText = `
+          font-size: 11px;
+          color: #6c7086;
+          margin: 12px 0 8px 0;
+          text-transform: uppercase;
+        `;
+        refSection.appendChild(questHeader);
+
+        for (const ref of questRefs) {
+          const refEl = document.createElement('div');
+          refEl.style.cssText = `
+            padding: 8px;
+            margin-bottom: 4px;
+            background: #1e1e2e;
+            border-radius: 4px;
+            cursor: pointer;
+          `;
+          refEl.onclick = () => {
+            editorStore.setActiveTab('quests');
+            editorStore.selectEntry(ref.id);
+          };
+
+          const header = document.createElement('div');
+          header.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+          const icon = document.createElement('span');
+          icon.textContent = '📜';
+          icon.style.fontSize = '14px';
+          header.appendChild(icon);
+
+          const name = document.createElement('span');
+          name.textContent = ref.name;
+          name.style.cssText = 'font-size: 13px; color: #cdd6f4;';
+          header.appendChild(name);
+
+          refEl.appendChild(header);
+
+          const subtext = document.createElement('div');
+          subtext.textContent = `Stage: ${ref.stageName} - ${ref.objectiveDesc}`;
+          subtext.style.cssText = `
+            font-size: 11px;
+            color: #6c7086;
+            margin-top: 4px;
+            margin-left: 22px;
+          `;
+          refEl.appendChild(subtext);
+
+          refSection.appendChild(refEl);
+        }
+      }
+    }
 
     detail.appendChild(refSection);
 
+    // Validation warnings
+    const warnings = this.validateNPC(npc);
+    if (warnings.length > 0) {
+      const warningSection = document.createElement('div');
+      warningSection.style.cssText = `
+        padding: 16px;
+        background: #f38ba822;
+        border: 1px solid #f38ba8;
+        border-radius: 8px;
+      `;
+
+      const warningTitle = document.createElement('h3');
+      warningTitle.textContent = 'Warnings';
+      warningTitle.style.cssText = `
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        color: #f38ba8;
+      `;
+      warningSection.appendChild(warningTitle);
+
+      for (const warning of warnings) {
+        const warningEl = document.createElement('div');
+        warningEl.textContent = `• ${warning}`;
+        warningEl.style.cssText = `
+          font-size: 12px;
+          color: #f38ba8;
+          margin-bottom: 4px;
+        `;
+        warningSection.appendChild(warningEl);
+      }
+
+      detail.appendChild(warningSection);
+    }
+
     this.setCenterContent(detail);
+  }
+
+  private createDialogueForNPC(npc: NPCEntry): void {
+    const dialogueId = `${npc.id}-dialogue`;
+
+    // Set the NPC's default dialogue
+    npc.defaultDialogue = dialogueId;
+    editorStore.setDirty(true);
+
+    // Switch to dialogues tab
+    editorStore.setActiveTab('dialogues');
+
+    // Note: The actual dialogue creation would be handled by DialoguePanel
+    // For now, just alert the user
+    alert(`Dialogue ID "${dialogueId}" has been set.\n\nSwitch to the Dialogues tab and create a new dialogue with this ID.`);
+
+    this.renderNPCDetail(npc);
   }
 
   private createNewNPC(): void {
