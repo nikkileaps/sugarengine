@@ -153,7 +153,7 @@ export class Inspector {
         textarea.value = (value as string) ?? '';
         textarea.placeholder = field.placeholder ?? '';
         textarea.style.cssText = baseStyle + `
-          min-height: 80px;
+          min-height: 160px;
           resize: vertical;
         `;
         textarea.onfocus = () => textarea.style.borderColor = '#89b4fa';

@@ -1,46 +1,104 @@
 /**
- * DialoguePanel - Editor for dialogue trees
+ * DialoguePanel - Editor for dialogue trees with node canvas
  *
  * Displays dialogue entries in the left panel and a node graph in the center.
  */
 
-import { BasePanel } from './BasePanel';
-import { editorStore } from '../store';
+import { EntryList, EntryListItem, Inspector, NodeCanvas, CanvasNode, CanvasConnection } from '../components';
 import type { FieldDefinition } from '../components';
+import { editorStore } from '../store';
 import type { DialogueTree, DialogueNode } from '../../engine/dialogue/types';
 
-const DIALOGUE_FIELDS: FieldDefinition[] = [
-  { key: 'id', label: 'ID', type: 'text', required: true },
+const NODE_FIELDS: FieldDefinition[] = [
+  { key: 'id', label: 'Node ID', type: 'text', required: true },
   { key: 'speaker', label: 'Speaker', type: 'text', placeholder: 'NPC name or "Player"' },
-  { key: 'text', label: 'Text', type: 'textarea', required: true },
+  { key: 'text', label: 'Dialogue Text', type: 'textarea', required: true },
   { key: 'next', label: 'Next Node', type: 'text', placeholder: 'Node ID (if no choices)' },
   { key: 'onEnter', label: 'On Enter Event', type: 'text', placeholder: 'Event to fire' },
 ];
 
-export class DialoguePanel extends BasePanel {
+// Auto-layout constants
+const NODE_SPACING_X = 280;
+const NODE_SPACING_Y = 150;
+
+export class DialoguePanel {
+  private element: HTMLElement;
+  private entryList: EntryList;
+  private inspector: Inspector;
+  private centerPanel: HTMLElement;
+  private nodeCanvas: NodeCanvas | null = null;
+  private playtestPanel: HTMLElement | null = null;
+
   private dialogues: Map<string, DialogueTree> = new Map();
+  private nodePositions: Map<string, Map<string, { x: number; y: number }>> = new Map();
   private currentDialogueId: string | null = null;
   private currentNodeId: string | null = null;
 
+  // Playtest state
+  private isPlaytesting = false;
+  private playtestNodeId: string | null = null;
+
   constructor() {
-    super({
+    this.element = document.createElement('div');
+    this.element.className = 'panel dialogue-panel';
+    this.element.style.cssText = `
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    `;
+
+    // Entry list (left)
+    this.entryList = new EntryList({
       title: 'Dialogues',
-      inspectorTitle: 'Node Properties',
-      inspectorFields: DIALOGUE_FIELDS,
+      onSelect: (id) => this.onDialogueSelect(id),
       onCreate: () => this.createNewDialogue(),
     });
+    this.element.appendChild(this.entryList.getElement());
+
+    // Center panel
+    this.centerPanel = document.createElement('div');
+    this.centerPanel.style.cssText = `
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: #1e1e2e;
+    `;
+    this.element.appendChild(this.centerPanel);
+
+    // Inspector (right)
+    this.inspector = new Inspector({
+      title: 'Node Properties',
+      fields: NODE_FIELDS,
+      onChange: (key, value) => this.onFieldChange(key, value),
+    });
+    this.element.appendChild(this.inspector.getElement());
 
     this.renderCenterPlaceholder();
   }
 
+  getElement(): HTMLElement {
+    return this.element;
+  }
+
+  show(): void {
+    this.element.style.display = 'flex';
+  }
+
+  hide(): void {
+    this.element.style.display = 'none';
+  }
+
   async loadDialogues(_basePath = '/dialogue/'): Promise<void> {
-    // In a real implementation, this would load from a file list
-    // For now, we'll provide a method to add dialogues
     this.updateEntryList();
   }
 
   addDialogue(dialogue: DialogueTree): void {
     this.dialogues.set(dialogue.id, dialogue);
+    // Auto-layout nodes if no positions saved
+    if (!this.nodePositions.has(dialogue.id)) {
+      this.autoLayoutNodes(dialogue);
+    }
     this.updateEntryList();
     editorStore.setDirty(true);
   }
@@ -50,16 +108,73 @@ export class DialoguePanel extends BasePanel {
   }
 
   private updateEntryList(): void {
-    const items = Array.from(this.dialogues.values()).map(d => ({
+    const items: EntryListItem[] = Array.from(this.dialogues.values()).map(d => ({
       id: d.id,
       name: d.id,
       subtitle: `${d.nodes.length} nodes`,
       icon: '💬',
     }));
-    this.setEntries(items);
+    this.entryList.setItems(items);
+  }
+
+  private autoLayoutNodes(dialogue: DialogueTree): void {
+    const positions = new Map<string, { x: number; y: number }>();
+
+    // Build adjacency for BFS layout
+    const nodeMap = new Map<string, DialogueNode>();
+    for (const node of dialogue.nodes) {
+      nodeMap.set(node.id, node);
+    }
+
+    // BFS from start node
+    const visited = new Set<string>();
+    const queue: { id: string; depth: number; lane: number }[] = [];
+    const depthCounts = new Map<number, number>();
+
+    queue.push({ id: dialogue.startNode, depth: 0, lane: 0 });
+
+    while (queue.length > 0) {
+      const { id, depth } = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+
+      const lane = depthCounts.get(depth) ?? 0;
+      depthCounts.set(depth, lane + 1);
+
+      positions.set(id, {
+        x: 50 + depth * NODE_SPACING_X,
+        y: 50 + lane * NODE_SPACING_Y,
+      });
+
+      const node = nodeMap.get(id);
+      if (!node) continue;
+
+      // Add children to queue
+      if (node.choices) {
+        for (const choice of node.choices) {
+          if (!visited.has(choice.next)) {
+            queue.push({ id: choice.next, depth: depth + 1, lane: 0 });
+          }
+        }
+      } else if (node.next && !visited.has(node.next)) {
+        queue.push({ id: node.next, depth: depth + 1, lane: 0 });
+      }
+    }
+
+    // Add any unvisited nodes at the bottom
+    let extraY = (Math.max(...Array.from(depthCounts.values()), 0) + 1) * NODE_SPACING_Y;
+    for (const node of dialogue.nodes) {
+      if (!positions.has(node.id)) {
+        positions.set(node.id, { x: 50, y: extraY });
+        extraY += NODE_SPACING_Y;
+      }
+    }
+
+    this.nodePositions.set(dialogue.id, positions);
   }
 
   private renderCenterPlaceholder(): void {
+    this.centerPanel.innerHTML = '';
     const placeholder = document.createElement('div');
     placeholder.style.cssText = `
       flex: 1;
@@ -77,196 +192,334 @@ export class DialoguePanel extends BasePanel {
         Choose a dialogue from the list on the left, or create a new one with the + button.
       </div>
     `;
-    this.setCenterContent(placeholder);
+    this.centerPanel.appendChild(placeholder);
   }
 
   private renderDialogueCanvas(dialogue: DialogueTree): void {
-    const canvas = document.createElement('div');
-    canvas.style.cssText = `
-      flex: 1;
-      overflow: auto;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    `;
+    this.centerPanel.innerHTML = '';
 
-    // Header with dialogue info
-    const header = document.createElement('div');
-    header.style.cssText = `
+    // Toolbar
+    const toolbar = document.createElement('div');
+    toolbar.style.cssText = `
+      padding: 8px 12px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
       display: flex;
       align-items: center;
       gap: 12px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid #313244;
     `;
 
-    const title = document.createElement('h2');
+    // Title
+    const title = document.createElement('span');
     title.textContent = dialogue.id;
     title.style.cssText = `
-      margin: 0;
-      font-size: 18px;
+      font-weight: 600;
       color: #cdd6f4;
     `;
-    header.appendChild(title);
+    toolbar.appendChild(title);
 
+    // Start node badge
     const startBadge = document.createElement('span');
     startBadge.textContent = `Start: ${dialogue.startNode}`;
     startBadge.style.cssText = `
-      padding: 4px 8px;
+      padding: 2px 8px;
       background: #313244;
       border-radius: 4px;
-      font-size: 12px;
+      font-size: 11px;
       color: #a6adc8;
     `;
-    header.appendChild(startBadge);
+    toolbar.appendChild(startBadge);
 
-    canvas.appendChild(header);
-
-    // Node list (placeholder for real node graph)
-    const nodeList = document.createElement('div');
-    nodeList.style.cssText = `
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    `;
-
-    for (const node of dialogue.nodes) {
-      const nodeEl = this.createNodeElement(node);
-      nodeEl.onclick = () => this.selectNode(node);
-      nodeList.appendChild(nodeEl);
-    }
-
-    canvas.appendChild(nodeList);
+    // Spacer
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    toolbar.appendChild(spacer);
 
     // Add node button
-    const addBtn = document.createElement('button');
-    addBtn.textContent = '+ Add Node';
-    addBtn.style.cssText = `
-      padding: 12px;
-      border: 2px dashed #313244;
-      border-radius: 8px;
-      background: transparent;
-      color: #6c7086;
-      font-size: 13px;
+    const addNodeBtn = document.createElement('button');
+    addNodeBtn.textContent = '+ Add Node';
+    addNodeBtn.style.cssText = `
+      padding: 6px 12px;
+      border: 1px solid #313244;
+      border-radius: 4px;
+      background: #313244;
+      color: #cdd6f4;
+      font-size: 12px;
       cursor: pointer;
-      transition: border-color 0.15s, color 0.15s;
     `;
-    addBtn.onmouseenter = () => {
-      addBtn.style.borderColor = '#45475a';
-      addBtn.style.color = '#cdd6f4';
-    };
-    addBtn.onmouseleave = () => {
-      addBtn.style.borderColor = '#313244';
-      addBtn.style.color = '#6c7086';
-    };
-    addBtn.onclick = () => this.addNodeToDialogue();
-    canvas.appendChild(addBtn);
+    addNodeBtn.onclick = () => this.addNodeToDialogue();
+    toolbar.appendChild(addNodeBtn);
 
-    this.setCenterContent(canvas);
+    // Fit view button
+    const fitBtn = document.createElement('button');
+    fitBtn.textContent = 'Fit View';
+    fitBtn.style.cssText = `
+      padding: 6px 12px;
+      border: 1px solid #313244;
+      border-radius: 4px;
+      background: transparent;
+      color: #a6adc8;
+      font-size: 12px;
+      cursor: pointer;
+    `;
+    fitBtn.onclick = () => this.nodeCanvas?.fitToContent();
+    toolbar.appendChild(fitBtn);
+
+    // Playtest button
+    const playtestBtn = document.createElement('button');
+    playtestBtn.textContent = '▶ Playtest';
+    playtestBtn.style.cssText = `
+      padding: 6px 12px;
+      border: 1px solid #a6e3a1;
+      border-radius: 4px;
+      background: #a6e3a122;
+      color: #a6e3a1;
+      font-size: 12px;
+      cursor: pointer;
+    `;
+    playtestBtn.onclick = () => this.startPlaytest();
+    toolbar.appendChild(playtestBtn);
+
+    this.centerPanel.appendChild(toolbar);
+
+    // Canvas container
+    const canvasContainer = document.createElement('div');
+    canvasContainer.style.cssText = `
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    `;
+
+    // Node canvas
+    this.nodeCanvas = new NodeCanvas({
+      onNodeSelect: (nodeId) => this.selectNode(nodeId),
+      onNodeMove: (nodeId, pos) => this.onNodeMove(nodeId, pos),
+      onCanvasClick: () => this.deselectNode(),
+      renderNode: (node, el) => this.renderNodeContent(dialogue, node, el),
+    });
+    canvasContainer.appendChild(this.nodeCanvas.getElement());
+
+    this.centerPanel.appendChild(canvasContainer);
+
+    // Convert dialogue nodes to canvas nodes
+    this.updateCanvas(dialogue);
+
+    // Fit to content after a short delay to let nodes render
+    setTimeout(() => this.nodeCanvas?.fitToContent(), 100);
   }
 
-  private createNodeElement(node: DialogueNode): HTMLElement {
-    const el = document.createElement('div');
-    const isSelected = node.id === this.currentNodeId;
-    el.style.cssText = `
-      padding: 12px 16px;
-      background: ${isSelected ? '#313244' : '#181825'};
-      border: 1px solid ${isSelected ? '#89b4fa' : '#313244'};
-      border-radius: 8px;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
-    `;
+  private updateCanvas(dialogue: DialogueTree): void {
+    if (!this.nodeCanvas) return;
 
-    el.onmouseenter = () => {
-      if (!isSelected) el.style.background = '#1e1e2e';
-    };
-    el.onmouseleave = () => {
-      if (!isSelected) el.style.background = '#181825';
-    };
+    const positions = this.nodePositions.get(dialogue.id) ?? new Map();
 
-    // Node header
+    // Create canvas nodes
+    const canvasNodes: CanvasNode[] = dialogue.nodes.map(node => ({
+      id: node.id,
+      position: positions.get(node.id) ?? { x: 50, y: 50 },
+    }));
+
+    // Create connections
+    const connections: CanvasConnection[] = [];
+    for (const node of dialogue.nodes) {
+      if (node.choices) {
+        for (let i = 0; i < node.choices.length; i++) {
+          const choice = node.choices[i]!;
+          connections.push({
+            fromId: node.id,
+            toId: choice.next,
+            fromPort: `choice-${i}`,
+            color: this.getChoiceColor(i),
+          });
+        }
+      } else if (node.next) {
+        connections.push({
+          fromId: node.id,
+          toId: node.next,
+          color: '#45475a',
+        });
+      }
+    }
+
+    this.nodeCanvas.setNodes(canvasNodes);
+    this.nodeCanvas.setConnections(connections);
+  }
+
+  private getChoiceColor(index: number): string {
+    const colors = ['#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7'];
+    return colors[index % colors.length] ?? '#89b4fa';
+  }
+
+  private renderNodeContent(dialogue: DialogueTree, canvasNode: CanvasNode, element: HTMLElement): void {
+    const node = dialogue.nodes.find(n => n.id === canvasNode.id);
+    if (!node) {
+      element.innerHTML = '<div style="padding: 12px; color: #f38ba8;">Node not found</div>';
+      return;
+    }
+
+    const isStart = node.id === dialogue.startNode;
+    const isPlaytestActive = this.isPlaytesting && node.id === this.playtestNodeId;
+
+    // Header
     const header = document.createElement('div');
     header.style.cssText = `
+      padding: 8px 12px;
+      background: ${isStart ? '#a6e3a122' : isPlaytestActive ? '#89b4fa22' : '#313244'};
+      border-bottom: 1px solid #313244;
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 8px;
+      border-radius: 6px 6px 0 0;
     `;
 
-    const idBadge = document.createElement('span');
-    idBadge.textContent = node.id;
-    idBadge.style.cssText = `
-      padding: 2px 6px;
-      background: #45475a;
-      border-radius: 4px;
-      font-size: 11px;
+    if (isStart) {
+      const startIcon = document.createElement('span');
+      startIcon.textContent = '▶';
+      startIcon.style.cssText = 'color: #a6e3a1; font-size: 10px;';
+      header.appendChild(startIcon);
+    }
+
+    const idLabel = document.createElement('span');
+    idLabel.textContent = node.id;
+    idLabel.style.cssText = `
       font-family: monospace;
-      color: #cdd6f4;
+      font-size: 11px;
+      color: ${isStart ? '#a6e3a1' : '#a6adc8'};
     `;
-    header.appendChild(idBadge);
+    header.appendChild(idLabel);
 
     if (node.speaker) {
       const speaker = document.createElement('span');
       speaker.textContent = node.speaker;
       speaker.style.cssText = `
-        font-size: 12px;
+        margin-left: auto;
+        font-size: 11px;
         font-weight: 600;
         color: #89b4fa;
       `;
       header.appendChild(speaker);
     }
 
-    el.appendChild(header);
+    element.appendChild(header);
 
-    // Node text
-    const text = document.createElement('div');
-    text.textContent = node.text.length > 100 ? node.text.slice(0, 100) + '...' : node.text;
-    text.style.cssText = `
-      font-size: 13px;
-      color: #a6adc8;
+    // Text content
+    const textDiv = document.createElement('div');
+    textDiv.style.cssText = `
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #cdd6f4;
       line-height: 1.4;
+      max-height: 60px;
+      overflow: hidden;
     `;
-    el.appendChild(text);
+    textDiv.textContent = node.text.length > 80 ? node.text.slice(0, 80) + '...' : node.text;
+    element.appendChild(textDiv);
 
-    // Choices or next
+    // Choices or next indicator
     if (node.choices && node.choices.length > 0) {
-      const choicesInfo = document.createElement('div');
-      choicesInfo.textContent = `${node.choices.length} choice${node.choices.length !== 1 ? 's' : ''}`;
-      choicesInfo.style.cssText = `
-        margin-top: 8px;
-        font-size: 11px;
-        color: #f9e2af;
+      const choicesDiv = document.createElement('div');
+      choicesDiv.style.cssText = `
+        padding: 8px 12px;
+        border-top: 1px solid #313244;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
       `;
-      el.appendChild(choicesInfo);
-    } else if (node.next) {
-      const nextInfo = document.createElement('div');
-      nextInfo.textContent = `→ ${node.next}`;
-      nextInfo.style.cssText = `
-        margin-top: 8px;
-        font-size: 11px;
-        color: #a6e3a1;
-      `;
-      el.appendChild(nextInfo);
-    }
 
-    return el;
+      for (let i = 0; i < node.choices.length; i++) {
+        const choice = node.choices[i]!;
+        const choiceEl = document.createElement('div');
+        choiceEl.style.cssText = `
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+        `;
+
+        const dot = document.createElement('span');
+        dot.style.cssText = `
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: ${this.getChoiceColor(i)};
+        `;
+        choiceEl.appendChild(dot);
+
+        const text = document.createElement('span');
+        text.textContent = choice.text.length > 25 ? choice.text.slice(0, 25) + '...' : choice.text;
+        text.style.color = '#a6adc8';
+        choiceEl.appendChild(text);
+
+        const arrow = document.createElement('span');
+        arrow.textContent = `→ ${choice.next}`;
+        arrow.style.cssText = 'margin-left: auto; color: #6c7086; font-family: monospace;';
+        choiceEl.appendChild(arrow);
+
+        choicesDiv.appendChild(choiceEl);
+      }
+
+      element.appendChild(choicesDiv);
+    } else if (node.next) {
+      const nextDiv = document.createElement('div');
+      nextDiv.style.cssText = `
+        padding: 6px 12px;
+        border-top: 1px solid #313244;
+        font-size: 11px;
+        color: #6c7086;
+      `;
+      nextDiv.textContent = `→ ${node.next}`;
+      element.appendChild(nextDiv);
+    } else {
+      const endDiv = document.createElement('div');
+      endDiv.style.cssText = `
+        padding: 6px 12px;
+        border-top: 1px solid #313244;
+        font-size: 11px;
+        color: #f38ba8;
+        font-style: italic;
+      `;
+      endDiv.textContent = '(end of dialogue)';
+      element.appendChild(endDiv);
+    }
   }
 
-  private selectNode(node: DialogueNode): void {
-    this.currentNodeId = node.id;
-    this.setInspectorData({
+  private selectNode(nodeId: string): void {
+    this.currentNodeId = nodeId;
+
+    const dialogue = this.dialogues.get(this.currentDialogueId!);
+    if (!dialogue) return;
+
+    const node = dialogue.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    this.inspector.setData({
       id: node.id,
       speaker: node.speaker ?? '',
       text: node.text,
       next: node.next ?? '',
       onEnter: node.onEnter ?? '',
     });
-    // Re-render to show selection
-    const dialogue = this.dialogues.get(this.currentDialogueId!);
-    if (dialogue) {
-      this.renderDialogueCanvas(dialogue);
+
+    this.nodeCanvas?.setSelectedNode(nodeId);
+  }
+
+  private deselectNode(): void {
+    this.currentNodeId = null;
+    this.inspector.clear();
+    this.nodeCanvas?.setSelectedNode(null);
+  }
+
+  private onNodeMove(nodeId: string, position: { x: number; y: number }): void {
+    if (!this.currentDialogueId) return;
+
+    let positions = this.nodePositions.get(this.currentDialogueId);
+    if (!positions) {
+      positions = new Map();
+      this.nodePositions.set(this.currentDialogueId, positions);
     }
+
+    positions.set(nodeId, position);
+    editorStore.setDirty(true);
   }
 
   private createNewDialogue(): void {
@@ -284,7 +537,7 @@ export class DialoguePanel extends BasePanel {
     };
     this.addDialogue(dialogue);
     editorStore.selectEntry(id);
-    this.onEntrySelect(id);
+    this.onDialogueSelect(id);
   }
 
   private addNodeToDialogue(): void {
@@ -301,16 +554,28 @@ export class DialoguePanel extends BasePanel {
     };
 
     dialogue.nodes.push(newNode);
+
+    // Position new node to the right of existing nodes
+    const positions = this.nodePositions.get(this.currentDialogueId);
+    if (positions) {
+      let maxX = 0;
+      for (const pos of positions.values()) {
+        maxX = Math.max(maxX, pos.x);
+      }
+      positions.set(nodeId, { x: maxX + NODE_SPACING_X, y: 50 });
+    }
+
     editorStore.setDirty(true);
     this.updateEntryList();
-    this.renderDialogueCanvas(dialogue);
-    this.selectNode(newNode);
+    this.updateCanvas(dialogue);
+    this.selectNode(nodeId);
   }
 
-  protected onEntrySelect(id: string): void {
+  private onDialogueSelect(id: string): void {
     this.currentDialogueId = id;
     this.currentNodeId = null;
-    this.clearInspector();
+    this.isPlaytesting = false;
+    this.inspector.clear();
 
     const dialogue = this.dialogues.get(id);
     if (dialogue) {
@@ -321,7 +586,7 @@ export class DialoguePanel extends BasePanel {
     }
   }
 
-  protected onFieldChange(key: string, value: unknown): void {
+  private onFieldChange(key: string, value: unknown): void {
     if (!this.currentDialogueId || !this.currentNodeId) return;
 
     const dialogue = this.dialogues.get(this.currentDialogueId);
@@ -334,8 +599,196 @@ export class DialoguePanel extends BasePanel {
     (node as unknown as Record<string, unknown>)[key] = value;
     editorStore.setDirty(true);
 
-    // Re-render
-    this.updateEntryList();
-    this.renderDialogueCanvas(dialogue);
+    // Re-render canvas to reflect changes
+    this.updateCanvas(dialogue);
+  }
+
+  // === Playtest Mode ===
+
+  private startPlaytest(): void {
+    const dialogue = this.dialogues.get(this.currentDialogueId!);
+    if (!dialogue) return;
+
+    this.isPlaytesting = true;
+    this.playtestNodeId = dialogue.startNode;
+    this.renderPlaytestPanel(dialogue);
+    this.nodeCanvas?.centerOnNode(dialogue.startNode);
+  }
+
+  private stopPlaytest(): void {
+    this.isPlaytesting = false;
+    this.playtestNodeId = null;
+    if (this.playtestPanel) {
+      this.playtestPanel.remove();
+      this.playtestPanel = null;
+    }
+    // Re-render to clear playtest highlighting
+    const dialogue = this.dialogues.get(this.currentDialogueId!);
+    if (dialogue) {
+      this.updateCanvas(dialogue);
+    }
+  }
+
+  private renderPlaytestPanel(dialogue: DialogueTree): void {
+    if (this.playtestPanel) {
+      this.playtestPanel.remove();
+    }
+
+    const node = dialogue.nodes.find(n => n.id === this.playtestNodeId);
+    if (!node) {
+      this.stopPlaytest();
+      return;
+    }
+
+    this.playtestPanel = document.createElement('div');
+    this.playtestPanel.style.cssText = `
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 400px;
+      max-width: calc(100% - 40px);
+      background: #181825;
+      border: 2px solid #89b4fa;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      overflow: hidden;
+    `;
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = `
+      padding: 12px 16px;
+      background: #89b4fa22;
+      border-bottom: 1px solid #313244;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    `;
+
+    const title = document.createElement('span');
+    title.textContent = '▶ Playtest Mode';
+    title.style.cssText = 'font-weight: 600; color: #89b4fa;';
+    header.appendChild(title);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #a6adc8;
+      font-size: 14px;
+      cursor: pointer;
+    `;
+    closeBtn.onclick = () => this.stopPlaytest();
+    header.appendChild(closeBtn);
+
+    this.playtestPanel.appendChild(header);
+
+    // Speaker
+    if (node.speaker) {
+      const speaker = document.createElement('div');
+      speaker.textContent = node.speaker;
+      speaker.style.cssText = `
+        padding: 12px 16px 0;
+        font-weight: 600;
+        color: #89b4fa;
+      `;
+      this.playtestPanel.appendChild(speaker);
+    }
+
+    // Text
+    const text = document.createElement('div');
+    text.textContent = node.text;
+    text.style.cssText = `
+      padding: 12px 16px;
+      color: #cdd6f4;
+      line-height: 1.5;
+    `;
+    this.playtestPanel.appendChild(text);
+
+    // Choices or continue
+    const actions = document.createElement('div');
+    actions.style.cssText = `
+      padding: 12px 16px;
+      border-top: 1px solid #313244;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    `;
+
+    if (node.choices && node.choices.length > 0) {
+      for (const choice of node.choices) {
+        const btn = document.createElement('button');
+        btn.textContent = choice.text;
+        btn.style.cssText = `
+          padding: 10px 16px;
+          border: 1px solid #313244;
+          border-radius: 6px;
+          background: #313244;
+          color: #cdd6f4;
+          font-size: 13px;
+          text-align: left;
+          cursor: pointer;
+          transition: background 0.15s;
+        `;
+        btn.onmouseenter = () => btn.style.background = '#45475a';
+        btn.onmouseleave = () => btn.style.background = '#313244';
+        btn.onclick = () => this.playtestAdvance(dialogue, choice.next);
+        actions.appendChild(btn);
+      }
+    } else if (node.next) {
+      const btn = document.createElement('button');
+      btn.textContent = 'Continue →';
+      btn.style.cssText = `
+        padding: 10px 16px;
+        border: 1px solid #89b4fa;
+        border-radius: 6px;
+        background: #89b4fa22;
+        color: #89b4fa;
+        font-size: 13px;
+        cursor: pointer;
+      `;
+      btn.onclick = () => this.playtestAdvance(dialogue, node.next!);
+      actions.appendChild(btn);
+    } else {
+      const endMsg = document.createElement('div');
+      endMsg.textContent = '(End of dialogue)';
+      endMsg.style.cssText = 'color: #6c7086; font-style: italic; text-align: center;';
+      actions.appendChild(endMsg);
+
+      const restartBtn = document.createElement('button');
+      restartBtn.textContent = 'Restart';
+      restartBtn.style.cssText = `
+        padding: 8px 16px;
+        border: 1px solid #a6e3a1;
+        border-radius: 6px;
+        background: #a6e3a122;
+        color: #a6e3a1;
+        font-size: 13px;
+        cursor: pointer;
+      `;
+      restartBtn.onclick = () => this.playtestAdvance(dialogue, dialogue.startNode);
+      actions.appendChild(restartBtn);
+    }
+
+    this.playtestPanel.appendChild(actions);
+
+    // Add to center panel
+    this.centerPanel.style.position = 'relative';
+    this.centerPanel.appendChild(this.playtestPanel);
+
+    // Highlight current node
+    this.nodeCanvas?.setSelectedNode(this.playtestNodeId);
+  }
+
+  private playtestAdvance(dialogue: DialogueTree, nextNodeId: string): void {
+    this.playtestNodeId = nextNodeId;
+    this.nodeCanvas?.centerOnNode(nextNodeId);
+    this.renderPlaytestPanel(dialogue);
   }
 }
