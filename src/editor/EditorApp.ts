@@ -15,6 +15,8 @@ import {
   NPCPanel,
   ItemPanel,
   InspectionPanel,
+  setAvailableNPCs,
+  setAvailableItems,
 } from './panels';
 
 export class EditorApp {
@@ -192,10 +194,12 @@ export class EditorApp {
     try {
       const response = await fetch('/npcs/npcs.json');
       if (response.ok) {
-        const data = await response.json() as { npcs: unknown[] };
+        const data = await response.json() as { npcs: { id: string; name: string }[] };
         for (const npc of data.npcs) {
           this.npcPanel.addNPC(npc as Parameters<NPCPanel['addNPC']>[0]);
         }
+        // Update available NPCs for quest editor reference picker
+        setAvailableNPCs(data.npcs.map(n => ({ id: n.id, name: n.name })));
       }
     } catch {
       // No NPCs to load
@@ -206,10 +210,12 @@ export class EditorApp {
     try {
       const response = await fetch('/items/items.json');
       if (response.ok) {
-        const data = await response.json() as { items: unknown[] };
+        const data = await response.json() as { items: { id: string; name: string }[] };
         for (const item of data.items) {
           this.itemPanel.addItem(item as Parameters<ItemPanel['addItem']>[0]);
         }
+        // Update available items for quest editor reference picker
+        setAvailableItems(data.items.map(i => ({ id: i.id, name: i.name })));
       }
     } catch {
       // No items to load
