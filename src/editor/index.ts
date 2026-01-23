@@ -1,14 +1,23 @@
 /**
  * Sugar Engine Editor
  *
- * Development tooling for composing game content:
- * - NPC placement and configuration
- * - Trigger zone editing
+ * Narrative design tooling for composing game content:
  * - Dialogue tree authoring
  * - Quest design
- * - Live preview and testing
+ * - NPC database
+ * - Item database
+ * - Inspection content
  */
 
 export { EditorApp } from './EditorApp';
 export { Toolbar } from './Toolbar';
 export { PreviewManager } from './PreviewManager';
+
+// Components
+export * from './components';
+
+// Store
+export * from './store';
+
+// Panels
+export * from './panels';

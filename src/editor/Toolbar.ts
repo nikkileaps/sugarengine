@@ -1,8 +1,10 @@
 /**
  * Editor Toolbar
  *
- * Contains main actions: Preview, Publish, etc.
+ * Contains tabs and main actions: Preview, Publish, etc.
  */
+
+import { TabBar } from './components';
 
 export interface ToolbarOptions {
   onPreview: () => void;
@@ -11,6 +13,7 @@ export interface ToolbarOptions {
 
 export class Toolbar {
   private element: HTMLElement;
+  private tabBar: TabBar;
 
   constructor(options: ToolbarOptions) {
     this.element = document.createElement('div');
@@ -30,10 +33,20 @@ export class Toolbar {
       font-weight: 600;
       font-size: 14px;
       color: #cdd6f4;
-      margin-right: auto;
+      padding-right: 16px;
+      border-right: 1px solid #313244;
     `;
     title.textContent = '🍬 Sugar Engine';
     this.element.appendChild(title);
+
+    // Tab bar
+    this.tabBar = new TabBar();
+    this.element.appendChild(this.tabBar.getElement());
+
+    // Spacer
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    this.element.appendChild(spacer);
 
     // Preview button
     const previewBtn = this.createButton('▶ Preview', '#a6e3a1', options.onPreview);

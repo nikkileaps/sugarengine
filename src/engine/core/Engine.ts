@@ -246,7 +246,7 @@ export class SugarEngine {
 
       // Placeholder mesh (capsule like player but different color)
       const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
-      const material = new THREE.MeshStandardMaterial({ color: 0x88ff88 });
+      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.position.set(npcDef.position.x, npcDef.position.y + 0.7, npcDef.position.z);
