@@ -14,11 +14,11 @@ import {
   SceneManager,
   InteractionPrompt,
   QuestNotification,
-  QuestTracker,
   QuestJournal,
   ItemNotification,
   InventoryUI,
   GiftUI,
+  DebugHUD,
 } from './engine';
 
 async function runGame() {
@@ -44,8 +44,11 @@ async function runGame() {
   // Quest system
   const quests = new QuestManager();
   const questNotification = new QuestNotification(container);
-  const questTracker = new QuestTracker(container, quests);
   const questJournal = new QuestJournal(container, quests);
+
+  // Debug HUD (dev-only, shows quest state, position, FPS)
+  const debugHUD = new DebugHUD(container, quests);
+  debugHUD.setPlayerPositionProvider(() => engine.getPlayerPosition());
 
   // Inventory system
   const inventory = new InventoryManager();
@@ -82,12 +85,10 @@ async function runGame() {
   // Quest event handlers
   quests.setOnQuestStart((event) => {
     questNotification.showQuestStart(event.questName);
-    questTracker.update();
   });
 
   quests.setOnQuestComplete((event) => {
     questNotification.showQuestComplete(event.questName);
-    questTracker.update();
     questJournal.refresh();
     saveManager.autoSave('quest-complete');
   });
@@ -96,12 +97,10 @@ async function runGame() {
     if (event.objective) {
       questNotification.showObjectiveComplete(event.objective.description);
     }
-    questTracker.update();
     questJournal.refresh();
   });
 
   quests.setOnObjectiveProgress(() => {
-    questTracker.update();
     questJournal.refresh();
   });
 

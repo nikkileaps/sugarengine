@@ -10,6 +10,7 @@ export type DialogueCancelCallback = () => void;
 export class DialogueBox {
   private container: HTMLDivElement;
   private innerBox: HTMLDivElement;
+  private closeBtn: HTMLButtonElement;
   private speakerEl: HTMLDivElement;
   private textEl: HTMLSpanElement;
   private cursorEl: HTMLSpanElement;
@@ -46,6 +47,7 @@ export class DialogueBox {
     // Inner box with styling
     this.innerBox = document.createElement('div');
     this.innerBox.style.cssText = `
+      position: relative;
       background: linear-gradient(180deg, rgba(35, 30, 45, 0.97) 0%, rgba(25, 22, 35, 0.98) 100%);
       border: 3px solid rgba(180, 160, 140, 0.4);
       border-radius: 16px;
@@ -61,6 +63,39 @@ export class DialogueBox {
       animation: dialogueSlideIn 0.25s ease-out forwards;
     `;
     this.container.appendChild(this.innerBox);
+
+    // Close button (X)
+    this.closeBtn = document.createElement('button');
+    this.closeBtn.innerHTML = '&times;';
+    this.closeBtn.style.cssText = `
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      color: rgba(240, 230, 216, 0.5);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    `;
+    this.closeBtn.onmouseenter = () => {
+      this.closeBtn.style.background = 'rgba(255, 255, 255, 0.15)';
+      this.closeBtn.style.color = 'rgba(240, 230, 216, 0.9)';
+    };
+    this.closeBtn.onmouseleave = () => {
+      this.closeBtn.style.background = 'rgba(255, 255, 255, 0.08)';
+      this.closeBtn.style.color = 'rgba(240, 230, 216, 0.5)';
+    };
+    this.closeBtn.onclick = () => {
+      if (this.onCancel) {
+        this.onCancel();
+      }
+    };
+    this.innerBox.appendChild(this.closeBtn);
 
     // Speaker name label
     this.speakerEl = document.createElement('div');

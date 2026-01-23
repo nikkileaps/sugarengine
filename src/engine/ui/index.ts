@@ -7,3 +7,4 @@ export { ItemNotification } from './ItemNotification';
 export { InventoryUI } from './InventoryUI';
 export { GiftUI } from './GiftUI';
 export { InspectionUI } from './InspectionUI';
+export { DebugHUD } from './DebugHUD';

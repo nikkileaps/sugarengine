@@ -96,4 +96,5 @@ export {
   ItemNotification,
   InspectionUI,
   GiftUI,
+  DebugHUD,
 } from './ui';
