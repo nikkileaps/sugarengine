@@ -1,0 +1,53 @@
+{
+  "id": "greeting-01",
+  "startNode": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "speaker": "Friendly NPC",
+      "text": "Oh hello there, little mouse! Welcome to our cozy village. I don't think I've seen you around before.",
+      "choices": [
+        {
+          "text": "Hi! I'm new here. What is this place?",
+          "next": "explain-village"
+        },
+        {
+          "text": "Just passing through...",
+          "next": "passing-through"
+        }
+      ]
+    },
+    {
+      "id": "explain-village",
+      "speaker": "Friendly NPC",
+      "text": "This is Rackwick Village! It's a quiet little place, but we like it that way. Lots of friendly folks around if you take the time to meet them.",
+      "choices": [
+        {
+          "text": "Sounds lovely. Thanks for the info!",
+          "next": "goodbye"
+        },
+        {
+          "text": "Is there anything I should check out?",
+          "next": "recommendations"
+        }
+      ]
+    },
+    {
+      "id": "passing-through",
+      "speaker": "Friendly NPC",
+      "text": "Oh that's a shame. Well, if you change your mind and decide to stay a while, don't hesitate to say hello!",
+      "next": "goodbye"
+    },
+    {
+      "id": "recommendations",
+      "speaker": "Friendly NPC",
+      "text": "The bakery has the best pastries in the region. And if you're looking for adventure, there are some interesting caves to the north... though I wouldn't go there alone.",
+      "next": "goodbye"
+    },
+    {
+      "id": "goodbye",
+      "speaker": "Friendly NPC",
+      "text": "Take care now, little one! Come back anytime you want to chat."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "test-newspaper",
+  "title": "The Rackwick Gazette",
+  "subtitle": "Evening Edition",
+  "sections": [
+    {
+      "headline": "Strange Lights Spotted Over Harbor",
+      "content": "Residents reported seeing unusual glowing orbs floating above the harbor last night. Local authorities say there is no cause for concern, attributing the phenomenon to 'unusual weather patterns.' However, longtime fisherman Old Pete claims the lights moved 'with purpose, like they were looking for something.'"
+    },
+    {
+      "headline": "Bakery Wins Third Consecutive Award",
+      "content": "Thompson's Bakery on Main Street has once again taken home the coveted Golden Loaf award at this year's regional baking competition. Owner Martha Thompson credits her grandmother's secret sourdough starter, which has been kept alive for over 80 years."
+    },
+    {
+      "headline": "Town Square Renovations Complete",
+      "content": "After months of construction, the town square has finally reopened to the public. New benches, a restored fountain, and improved lighting make the space more welcoming than ever. Mayor Collins will hold a ribbon-cutting ceremony this Saturday."
+    }
+  ]
+}

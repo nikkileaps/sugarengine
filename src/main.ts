@@ -1,22 +1,29 @@
-import { SugarEngine } from './core/Engine';
 import {
+  SugarEngine,
+  DialogueManager,
+  InspectionManager,
+  QuestManager,
+  InventoryManager,
+  SaveManager,
+  SceneManager,
   InteractionPrompt,
   QuestNotification,
   QuestTracker,
   QuestJournal,
   ItemNotification,
   InventoryUI,
-  GiftUI
-} from './ui';
-import { DialogueManager } from './dialogue';
-import { InspectionManager } from './inspection';
-import { QuestManager } from './quests';
-import { InventoryManager } from './inventory';
-import { SaveManager } from './save';
-import { SceneManager } from './scenes';
+  GiftUI,
+} from './engine';
+import { Editor } from './editor';
 
 async function main() {
   const container = document.getElementById('app')!;
+
+  // Initialize editor (dev mode only)
+  const editor = new Editor();
+  if (import.meta.env.DEV) {
+    editor.init(container);
+  }
 
   // Scene manager (controls title, pause, save/load screens)
   const sceneManager = new SceneManager(container);

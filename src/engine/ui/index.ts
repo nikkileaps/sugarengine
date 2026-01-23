@@ -6,3 +6,4 @@ export { QuestJournal } from './QuestJournal';
 export { ItemNotification } from './ItemNotification';
 export { InventoryUI } from './InventoryUI';
 export { GiftUI } from './GiftUI';
+export { InspectionUI } from './InspectionUI';
