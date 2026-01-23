@@ -339,11 +339,21 @@ async function runGame() {
     originalRun();
   };
 
-  // Start: Load world, start engine paused, show title
-  await engine.loadRegion('/regions/test/');
-  engine.run();
-  engine.pause();
-  await sceneManager.showTitle();
+  // Start: Load databases and world, start engine paused, show title
+  console.log('[Preview] Starting game initialization...');
+  try {
+    await engine.loadNPCDatabase();
+    console.log('[Preview] NPC database loaded');
+    await engine.loadRegion('/regions/test/');
+    console.log('[Preview] Region loaded');
+    engine.run();
+    console.log('[Preview] Engine running');
+    engine.pause();
+    await sceneManager.showTitle();
+    console.log('[Preview] Title screen shown');
+  } catch (err) {
+    console.error('[Preview] Error during initialization:', err);
+  }
 }
 
-runGame();
+runGame().catch(err => console.error('[Preview] runGame error:', err));

@@ -11,6 +11,7 @@
 
 import { BasePanel } from './BasePanel';
 import { editorStore } from '../store';
+import { generateUUID, shortId } from '../utils';
 import type { FieldDefinition } from '../components';
 
 interface NPCEntry {
@@ -83,10 +84,12 @@ export class NPCPanel extends BasePanel {
   private updateEntryList(): void {
     const items = Array.from(this.npcs.values()).map(n => {
       const warnings = this.validateNPC(n);
+      // Show faction + short UUID for easy identification
+      const factionInfo = n.faction ? `${n.faction} · ` : '';
       return {
         id: n.id,
         name: n.name,
-        subtitle: n.faction ?? 'No faction',
+        subtitle: `${factionInfo}${shortId(n.id)}`,
         icon: '👤',
         badge: warnings.length > 0 ? `${warnings.length}` : undefined,
         badgeColor: '#f38ba8',
@@ -275,15 +278,58 @@ export class NPCPanel extends BasePanel {
     `;
     info.appendChild(name);
 
-    const id = document.createElement('div');
-    id.textContent = npc.id;
-    id.style.cssText = `
-      font-family: monospace;
-      font-size: 12px;
-      color: #6c7086;
+    // UUID display with copy button
+    const idRow = document.createElement('div');
+    idRow.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 8px;
       margin-bottom: 12px;
     `;
-    info.appendChild(id);
+
+    const idLabel = document.createElement('span');
+    idLabel.textContent = 'UUID:';
+    idLabel.style.cssText = `
+      font-size: 11px;
+      color: #6c7086;
+      text-transform: uppercase;
+    `;
+    idRow.appendChild(idLabel);
+
+    const idValue = document.createElement('code');
+    idValue.textContent = npc.id;
+    idValue.style.cssText = `
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 12px;
+      color: #89dceb;
+      background: #181825;
+      padding: 4px 8px;
+      border-radius: 4px;
+      user-select: all;
+    `;
+    idRow.appendChild(idValue);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '📋';
+    copyBtn.title = 'Copy UUID';
+    copyBtn.style.cssText = `
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      opacity: 0.6;
+      padding: 4px;
+    `;
+    copyBtn.onmouseenter = () => copyBtn.style.opacity = '1';
+    copyBtn.onmouseleave = () => copyBtn.style.opacity = '0.6';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(npc.id);
+      copyBtn.textContent = '✓';
+      setTimeout(() => copyBtn.textContent = '📋', 1500);
+    };
+    idRow.appendChild(copyBtn);
+
+    info.appendChild(idRow);
 
     if (npc.faction) {
       const factionBadge = document.createElement('span');
@@ -582,7 +628,7 @@ export class NPCPanel extends BasePanel {
   }
 
   private createNewNPC(): void {
-    const id = `npc-${Date.now()}`;
+    const id = generateUUID();
     const npc: NPCEntry = {
       id,
       name: 'New NPC',

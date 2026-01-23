@@ -7,6 +7,7 @@
 import { EntryList, EntryListItem, Inspector, NodeCanvas, CanvasNode, CanvasConnection } from '../components';
 import type { FieldDefinition } from '../components';
 import { editorStore } from '../store';
+import { generateUUID, shortId } from '../utils';
 import type { DialogueTree, DialogueNode } from '../../engine/dialogue/types';
 
 const NODE_FIELDS: FieldDefinition[] = [
@@ -111,7 +112,7 @@ export class DialoguePanel {
     const items: EntryListItem[] = Array.from(this.dialogues.values()).map(d => ({
       id: d.id,
       name: d.id,
-      subtitle: `${d.nodes.length} nodes`,
+      subtitle: `${d.nodes.length} nodes · ${shortId(d.id)}`,
       icon: '💬',
     }));
     this.entryList.setItems(items);
@@ -523,7 +524,7 @@ export class DialoguePanel {
   }
 
   private createNewDialogue(): void {
-    const id = `dialogue-${Date.now()}`;
+    const id = generateUUID();
     const dialogue: DialogueTree = {
       id,
       startNode: 'start',
@@ -546,7 +547,7 @@ export class DialoguePanel {
     const dialogue = this.dialogues.get(this.currentDialogueId);
     if (!dialogue) return;
 
-    const nodeId = `node-${Date.now()}`;
+    const nodeId = generateUUID();
     const newNode: DialogueNode = {
       id: nodeId,
       speaker: 'NPC',

@@ -5,6 +5,7 @@
 import { EntryList, EntryListItem, Inspector } from '../components';
 import type { FieldDefinition } from '../components';
 import { editorStore } from '../store';
+import { generateUUID, shortId } from '../utils';
 
 // Quest types (matching engine)
 interface QuestObjective {
@@ -141,7 +142,7 @@ export class QuestPanel {
     const items: EntryListItem[] = Array.from(this.quests.values()).map(q => ({
       id: q.id,
       name: q.name,
-      subtitle: `${q.stages.length} stage${q.stages.length !== 1 ? 's' : ''}`,
+      subtitle: `${q.stages.length} stage${q.stages.length !== 1 ? 's' : ''} · ${shortId(q.id)}`,
       icon: '📜',
     }));
     this.entryList.setItems(items);
@@ -911,7 +912,7 @@ export class QuestPanel {
   }
 
   private addStage(quest: QuestDefinition): void {
-    const stageId = `stage-${Date.now()}`;
+    const stageId = generateUUID();
     const newStage: QuestStage = {
       id: stageId,
       description: 'New stage',
@@ -933,7 +934,7 @@ export class QuestPanel {
   }
 
   private addObjective(quest: QuestDefinition, stage: QuestStage): void {
-    const objId = `obj-${Date.now()}`;
+    const objId = generateUUID();
     const newObj: QuestObjective = {
       id: objId,
       type: 'talk',
@@ -948,7 +949,7 @@ export class QuestPanel {
   }
 
   private createNewQuest(): void {
-    const id = `quest-${Date.now()}`;
+    const id = generateUUID();
     const quest: QuestDefinition = {
       id,
       name: 'New Quest',

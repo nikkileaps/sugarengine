@@ -10,6 +10,7 @@
 
 import { BasePanel } from './BasePanel';
 import { editorStore } from '../store';
+import { generateUUID, shortId } from '../utils';
 import type { FieldDefinition } from '../components';
 
 interface InspectionSection {
@@ -61,7 +62,7 @@ export class InspectionPanel extends BasePanel {
     const items = Array.from(this.inspections.values()).map(i => ({
       id: i.id,
       name: i.title,
-      subtitle: i.subtitle ?? 'Document',
+      subtitle: `${i.subtitle ?? 'Document'} · ${shortId(i.id)}`,
       icon: '🔍',
     }));
     this.setEntries(items);
@@ -678,7 +679,7 @@ export class InspectionPanel extends BasePanel {
   }
 
   private createNewInspection(): void {
-    const id = `inspection-${Date.now()}`;
+    const id = generateUUID();
     const inspection: InspectionData = {
       id,
       title: 'New Document',

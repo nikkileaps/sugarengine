@@ -11,6 +11,7 @@
 
 import { BasePanel } from './BasePanel';
 import { editorStore } from '../store';
+import { generateUUID, shortId } from '../utils';
 import type { FieldDefinition } from '../components';
 
 interface ItemDefinition {
@@ -108,7 +109,7 @@ export class ItemPanel extends BasePanel {
     const items = Array.from(this.items.values()).map(i => ({
       id: i.id,
       name: i.name,
-      subtitle: i.category,
+      subtitle: `${i.category} · ${shortId(i.id)}`,
       icon: CATEGORY_ICONS[i.category] || '📦',
     }));
     this.setEntries(items);
@@ -512,7 +513,7 @@ export class ItemPanel extends BasePanel {
   }
 
   private duplicateItem(item: ItemDefinition): void {
-    const newId = `${item.id}-copy-${Date.now()}`;
+    const newId = generateUUID();
     const newItem: ItemDefinition = {
       ...item,
       id: newId,
@@ -544,7 +545,7 @@ export class ItemPanel extends BasePanel {
   }
 
   private createNewItem(): void {
-    const id = `item-${Date.now()}`;
+    const id = generateUUID();
     const item: ItemDefinition = {
       id,
       name: 'New Item',

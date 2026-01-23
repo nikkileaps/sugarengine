@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem } from '../systems';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, WorldLabel } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
@@ -20,6 +20,14 @@ export interface CameraConfig {
 export interface EngineConfig {
   container: HTMLElement;
   camera: CameraConfig;
+}
+
+// NPC database entry (matches editor format)
+export interface NPCDatabaseEntry {
+  id: string;
+  name: string;
+  portrait?: string;
+  dialogue?: string;
 }
 
 export class SugarEngine {
@@ -45,6 +53,8 @@ export class SugarEngine {
   private currentRegionPath: string = '';
   private isPaused: boolean = false;
   private isRunning: boolean = false;
+  private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
+  private worldLabelSystem: WorldLabelSystem;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -98,6 +108,10 @@ export class SugarEngine {
     this.interactionSystem = new InteractionSystem(this.input);
     this.world.addSystem(this.interactionSystem);
 
+    // World label system for floating NPC names (pure Three.js)
+    this.worldLabelSystem = new WorldLabelSystem(this.scene, this.camera.getThreeCamera());
+    this.world.addSystem(this.worldLabelSystem);
+
     // Default trigger handler - handles built-in event types
     this.triggerSystem.setTriggerEnterHandler((event, triggerId) => {
       console.log(`Trigger entered: ${triggerId}`, event);
@@ -127,6 +141,7 @@ export class SugarEngine {
   }
 
   async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void> {
+    console.log('[Engine] loadRegion start:', regionPath);
     // Track current region path for saving
     this.currentRegionPath = regionPath;
 
@@ -147,11 +162,18 @@ export class SugarEngine {
     }
     this.triggerEntities = [];
 
-    // Remove old NPC entities (and their meshes)
+    // Remove old NPC entities (and their meshes and labels)
     for (const entityId of this.npcEntities) {
       const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
       if (renderable) {
         this.scene.remove(renderable.mesh);
+      }
+      // Clean up WorldLabel sprite
+      const label = this.world.getComponent<WorldLabel>(entityId, WorldLabel);
+      if (label?.sprite) {
+        this.scene.remove(label.sprite);
+        label.sprite.material.map?.dispose();
+        (label.sprite.material as THREE.SpriteMaterial).dispose();
       }
       this.world.removeEntity(entityId);
     }
@@ -213,11 +235,15 @@ export class SugarEngine {
         npcDef.position.z
       ));
 
-      // NPC data
+      // NPC data - look up display name from database, fall back to ID
+      const npcInfo = this.npcDatabase.get(npcDef.id);
+      const displayName = npcInfo?.name ?? npcDef.id;
+      const dialogueId = npcDef.dialogue ?? npcInfo?.dialogue;
+
       this.world.addComponent(entity, new NPC(
         npcDef.id,
-        npcDef.id, // Use ID as name for now
-        npcDef.dialogue
+        displayName,
+        dialogueId
       ));
 
       // Add movement components if movement is defined
@@ -254,6 +280,9 @@ export class SugarEngine {
       mesh.userData.npcId = npcDef.id;
       mesh.userData.entityId = entity;
       this.scene.add(mesh);
+
+      // Add floating name label component (rendered by WorldLabelSystem)
+      this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
 
       this.world.addComponent(entity, new Renderable(mesh));
       this.npcEntities.push(entity);
@@ -468,6 +497,37 @@ export class SugarEngine {
     this.world.addComponent(entity, new Renderable(mesh));
 
     return entity;
+  }
+
+  /**
+   * Load the NPC database from npcs.json
+   * This provides display names and metadata for NPCs referenced by UUID in maps
+   */
+  async loadNPCDatabase(): Promise<void> {
+    try {
+      const response = await fetch('/npcs/npcs.json');
+      if (response.ok) {
+        const data = await response.json() as { npcs: NPCDatabaseEntry[] };
+        this.npcDatabase.clear();
+        for (const npc of data.npcs) {
+          this.npcDatabase.set(npc.id, npc);
+          console.log(`  - NPC: ${npc.id} => "${npc.name}"`);
+        }
+        console.log(`Loaded NPC database: ${data.npcs.length} entries`);
+      } else {
+        console.warn(`Failed to load NPC database: ${response.status}`);
+      }
+    } catch (err) {
+      // No NPC database to load, will use IDs as names
+      console.log('No NPC database found, using IDs as names', err);
+    }
+  }
+
+  /**
+   * Get NPC info from the database by ID
+   */
+  getNPCInfo(id: string): NPCDatabaseEntry | undefined {
+    return this.npcDatabase.get(id);
   }
 
   private setupDefaultLighting(): void {

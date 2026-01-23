@@ -9,3 +9,4 @@ export { ItemPickup } from './ItemPickup';
 export { NPCMovement } from './NPCMovement';
 export type { Waypoint, MovementBehavior } from './NPCMovement';
 export { Inspectable } from './Inspectable';
+export { WorldLabel } from './WorldLabel';
