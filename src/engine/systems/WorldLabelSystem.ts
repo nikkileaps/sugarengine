@@ -33,30 +33,26 @@ export class WorldLabelSystem extends System {
     this.camera.getWorldPosition(cameraPos);
 
     for (const { components: [label, position] } of entities) {
-      try {
-        // Create sprite if it doesn't exist
-        if (!label.sprite) {
-          label.sprite = this.createTextSprite(label.text, label.fontSize, label.color);
-          this.scene.add(label.sprite);
-        }
-
-        // Update sprite position (above entity)
-        label.sprite.position.set(
-          position.x,
-          position.y + label.offsetY,
-          position.z
-        );
-
-        // Update visibility
-        label.sprite.visible = label.visible;
-
-        // Scale based on distance for consistent readability
-        const distance = label.sprite.position.distanceTo(cameraPos);
-        const scale = Math.max(0.5, Math.min(2, distance * 0.15));
-        label.sprite.scale.set(scale, scale * 0.5, 1);
-      } catch (err) {
-        console.error('WorldLabelSystem error:', err);
+      // Create sprite if it doesn't exist
+      if (!label.sprite) {
+        label.sprite = this.createTextSprite(label.text, label.fontSize, label.color);
+        this.scene.add(label.sprite);
       }
+
+      // Update sprite position (above entity)
+      label.sprite.position.set(
+        position.x,
+        position.y + label.offsetY,
+        position.z
+      );
+
+      // Update visibility
+      label.sprite.visible = label.visible;
+
+      // Scale based on distance for consistent readability
+      const distance = label.sprite.position.distanceTo(cameraPos);
+      const scale = Math.max(0.5, Math.min(2, distance * 0.15));
+      label.sprite.scale.set(scale, scale * 0.5, 1);
     }
   }
 
@@ -145,15 +141,4 @@ export class WorldLabelSystem extends System {
     ctx.closePath();
   }
 
-  /**
-   * Clean up sprite when entity is removed
-   */
-  onEntityRemoved(world: World, entityId: number): void {
-    const label = world.getComponent<WorldLabel>(entityId, WorldLabel);
-    if (label?.sprite) {
-      this.scene.remove(label.sprite);
-      label.sprite.material.map?.dispose();
-      (label.sprite.material as THREE.SpriteMaterial).dispose();
-    }
-  }
 }

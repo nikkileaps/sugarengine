@@ -141,7 +141,6 @@ export class SugarEngine {
   }
 
   async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void> {
-    console.log('[Engine] loadRegion start:', regionPath);
     // Track current region path for saving
     this.currentRegionPath = regionPath;
 
@@ -511,15 +510,11 @@ export class SugarEngine {
         this.npcDatabase.clear();
         for (const npc of data.npcs) {
           this.npcDatabase.set(npc.id, npc);
-          console.log(`  - NPC: ${npc.id} => "${npc.name}"`);
         }
         console.log(`Loaded NPC database: ${data.npcs.length} entries`);
-      } else {
-        console.warn(`Failed to load NPC database: ${response.status}`);
       }
-    } catch (err) {
+    } catch {
       // No NPC database to load, will use IDs as names
-      console.log('No NPC database found, using IDs as names', err);
     }
   }
 
