@@ -10,3 +10,9 @@ export { TabBar } from './TabBar';
 
 export { NodeCanvas } from './NodeCanvas';
 export type { NodePosition, CanvasNode, CanvasConnection, NodeCanvasConfig } from './NodeCanvas';
+
+export { CommandPalette } from './CommandPalette';
+export type { SearchableEntry } from './CommandPalette';
+
+export { KeyboardShortcuts } from './KeyboardShortcuts';
+export type { Shortcut } from './KeyboardShortcuts';

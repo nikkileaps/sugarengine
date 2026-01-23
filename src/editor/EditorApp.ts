@@ -7,8 +7,9 @@
 
 import { Toolbar } from './Toolbar';
 import { PreviewManager } from './PreviewManager';
-import { StatusBar } from './components';
-import { editorStore, EditorTab } from './store';
+import { StatusBar, CommandPalette, KeyboardShortcuts } from './components';
+import type { SearchableEntry } from './components';
+import { editorStore, EditorTab, HistoryManager } from './store';
 import {
   DialoguePanel,
   QuestPanel,
@@ -27,6 +28,8 @@ export class EditorApp {
   private toolbar: Toolbar;
   private previewManager: PreviewManager;
   private statusBar: StatusBar;
+  private commandPalette: CommandPalette;
+  private historyManager: HistoryManager;
   private mainContent!: HTMLElement;
 
   // Panel interface
@@ -71,6 +74,21 @@ export class EditorApp {
     // Status bar
     this.statusBar = new StatusBar();
 
+    // Command palette (Cmd+K)
+    this.commandPalette = new CommandPalette();
+
+    // Keyboard shortcuts help (?) - instantiate for side effects (keyboard listener)
+    new KeyboardShortcuts();
+
+    // Set up tab navigation shortcuts (1-5)
+    this.setupTabShortcuts();
+
+    // History manager (undo/redo)
+    this.historyManager = new HistoryManager(
+      () => this.getAllData(),
+      (data) => this.restoreAllData(data as ReturnType<typeof this.getAllData>)
+    );
+
     // Mount toolbar and status bar
     this.container.insertBefore(this.toolbar.getElement(), this.mainContent);
     this.container.appendChild(this.statusBar.getElement());
@@ -85,6 +103,30 @@ export class EditorApp {
 
     // Load existing data
     this.loadData();
+  }
+
+  private setupTabShortcuts(): void {
+    const tabMap: Record<string, EditorTab> = {
+      '1': 'dialogues',
+      '2': 'quests',
+      '3': 'npcs',
+      '4': 'items',
+      '5': 'inspections',
+    };
+
+    document.addEventListener('keydown', (e) => {
+      // Don't trigger in input fields
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      // Number keys for tab navigation
+      if (tabMap[e.key] && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        editorStore.setActiveTab(tabMap[e.key]!);
+      }
+    });
   }
 
   private setupStyles(): void {
@@ -152,6 +194,9 @@ export class EditorApp {
       // Wire up cross-references between panels
       this.setupCrossReferences();
 
+      // Initialize history with current state
+      this.historyManager.initialize();
+
       this.statusBar.setStatus('Ready');
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -180,6 +225,71 @@ export class EditorApp {
     }));
     setAvailableQuests(questData);
     setAvailableQuestsForItems(questData);
+
+    // Populate command palette
+    this.populateCommandPalette();
+  }
+
+  private populateCommandPalette(): void {
+    const entries: SearchableEntry[] = [];
+
+    // Add dialogues
+    for (const dialogue of this.dialoguePanel.getDialogues()) {
+      const firstNode = dialogue.nodes?.[0];
+      entries.push({
+        id: dialogue.id,
+        name: dialogue.id,
+        type: 'dialogues',
+        subtitle: firstNode?.text?.substring(0, 50) + (firstNode?.text && firstNode.text.length > 50 ? '...' : ''),
+        content: dialogue.nodes?.map(n => n.text).join(' '),
+      });
+    }
+
+    // Add quests
+    for (const quest of this.questPanel.getQuests()) {
+      entries.push({
+        id: quest.id,
+        name: quest.name,
+        type: 'quests',
+        subtitle: `${quest.stages?.length || 0} stages`,
+        content: quest.description,
+      });
+    }
+
+    // Add NPCs
+    for (const npc of this.npcPanel.getNPCs()) {
+      entries.push({
+        id: npc.id,
+        name: npc.name,
+        type: 'npcs',
+        subtitle: npc.faction || 'No faction',
+        content: npc.description,
+      });
+    }
+
+    // Add items
+    for (const item of this.itemPanel.getItems()) {
+      entries.push({
+        id: item.id,
+        name: item.name,
+        type: 'items',
+        subtitle: item.category,
+        content: item.description,
+      });
+    }
+
+    // Add inspections
+    for (const inspection of this.inspectionPanel.getInspections()) {
+      entries.push({
+        id: inspection.id,
+        name: inspection.title,
+        type: 'inspections',
+        subtitle: inspection.subtitle,
+        content: inspection.content,
+      });
+    }
+
+    this.commandPalette.setEntries(entries);
   }
 
   private async loadDialogues(): Promise<void> {
@@ -296,6 +406,24 @@ export class EditorApp {
         'Then deploy the "dist" folder to Netlify.'
       );
     }
+  }
+
+  private getAllData() {
+    return {
+      dialogues: this.dialoguePanel.getDialogues(),
+      quests: this.questPanel.getQuests(),
+      npcs: this.npcPanel.getNPCs(),
+      items: this.itemPanel.getItems(),
+      inspections: this.inspectionPanel.getInspections(),
+    };
+  }
+
+  private restoreAllData(data: ReturnType<typeof this.getAllData>): void {
+    // Clear and restore each panel
+    // Note: This is a simplified restore - in a full implementation,
+    // panels would need clear() and bulk load methods
+    console.log('Restoring state:', data);
+    // For now, just log - full implementation would require panel changes
   }
 
   private async saveAllData(): Promise<void> {

@@ -3,3 +3,6 @@ export type { Listener } from './Store';
 
 export { editorStore } from './EditorStore';
 export type { EditorTab, EditorState, ValidationError } from './EditorStore';
+
+export { HistoryManager } from './HistoryManager';
+export type { HistorySnapshot, HistoryChangeCallback } from './HistoryManager';

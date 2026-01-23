@@ -32,6 +32,7 @@ export interface NodeCanvasConfig {
   onNodeMove?: (nodeId: string, position: NodePosition) => void;
   onCanvasClick?: () => void;
   renderNode: (node: CanvasNode, element: HTMLElement) => void;
+  showMinimap?: boolean;
 }
 
 export class NodeCanvas {
@@ -40,6 +41,13 @@ export class NodeCanvas {
   private nodesContainer: HTMLElement;
   private connectionsCanvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+
+  // Mini-map
+  private minimapContainer: HTMLElement | null = null;
+  private minimapCanvas: HTMLCanvasElement | null = null;
+  private minimapCtx: CanvasRenderingContext2D | null = null;
+  private readonly MINIMAP_SIZE = 150;
+  private readonly MINIMAP_PADDING = 10;
 
   private nodes: Map<string, CanvasNode> = new Map();
   private nodeElements: Map<string, HTMLElement> = new Map();
@@ -54,6 +62,7 @@ export class NodeCanvas {
   // Interaction state
   private isPanning = false;
   private isDraggingNode = false;
+  private isDraggingMinimap = false;
   private dragNodeId: string | null = null;
   private dragStartX = 0;
   private dragStartY = 0;
@@ -113,6 +122,11 @@ export class NodeCanvas {
       left: 0;
     `;
     this.viewport.appendChild(this.nodesContainer);
+
+    // Mini-map (optional)
+    if (config.showMinimap !== false) {
+      this.createMinimap();
+    }
 
     // Event listeners
     this.setupEventListeners();
@@ -409,5 +423,178 @@ export class NodeCanvas {
       this.ctx.closePath();
       this.ctx.fill();
     }
+
+    // Update mini-map
+    this.renderMinimap();
+  }
+
+  private createMinimap(): void {
+    this.minimapContainer = document.createElement('div');
+    this.minimapContainer.style.cssText = `
+      position: absolute;
+      bottom: ${this.MINIMAP_PADDING}px;
+      right: ${this.MINIMAP_PADDING}px;
+      width: ${this.MINIMAP_SIZE}px;
+      height: ${this.MINIMAP_SIZE}px;
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    `;
+
+    this.minimapCanvas = document.createElement('canvas');
+    this.minimapCanvas.width = this.MINIMAP_SIZE;
+    this.minimapCanvas.height = this.MINIMAP_SIZE;
+    this.minimapCanvas.style.cssText = 'width: 100%; height: 100%;';
+    this.minimapCtx = this.minimapCanvas.getContext('2d')!;
+
+    this.minimapContainer.appendChild(this.minimapCanvas);
+    this.element.appendChild(this.minimapContainer);
+
+    // Click on minimap to navigate
+    this.minimapContainer.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      this.isDraggingMinimap = true;
+      this.navigateFromMinimap(e);
+    });
+
+    this.minimapContainer.addEventListener('mousemove', (e) => {
+      if (this.isDraggingMinimap) {
+        this.navigateFromMinimap(e);
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      this.isDraggingMinimap = false;
+    });
+  }
+
+  private navigateFromMinimap(e: MouseEvent): void {
+    if (!this.minimapContainer || this.nodes.size === 0) return;
+
+    const rect = this.minimapContainer.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    // Calculate content bounds
+    const bounds = this.getContentBounds();
+    if (!bounds) return;
+
+    const padding = 20;
+    const contentWidth = bounds.maxX - bounds.minX + padding * 2;
+    const contentHeight = bounds.maxY - bounds.minY + padding * 2;
+
+    // Calculate scale to fit content in minimap
+    const scale = Math.min(
+      this.MINIMAP_SIZE / contentWidth,
+      this.MINIMAP_SIZE / contentHeight
+    );
+
+    // Offset to center content in minimap
+    const offsetX = (this.MINIMAP_SIZE - contentWidth * scale) / 2;
+    const offsetY = (this.MINIMAP_SIZE - contentHeight * scale) / 2;
+
+    // Convert click to canvas coordinates
+    const canvasX = (clickX - offsetX) / scale + bounds.minX - padding;
+    const canvasY = (clickY - offsetY) / scale + bounds.minY - padding;
+
+    // Center viewport on clicked point
+    const viewRect = this.element.getBoundingClientRect();
+    this.panX = viewRect.width / 2 - canvasX * this.zoom;
+    this.panY = viewRect.height / 2 - canvasY * this.zoom;
+
+    this.updateTransform();
+    this.renderConnections();
+  }
+
+  private getContentBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (this.nodes.size === 0) return null;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const node of this.nodes.values()) {
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + (node.width ?? 200));
+      maxY = Math.max(maxY, node.position.y + (node.height ?? 100));
+    }
+
+    return { minX, minY, maxX, maxY };
+  }
+
+  private renderMinimap(): void {
+    if (!this.minimapCtx || !this.minimapCanvas) return;
+
+    const ctx = this.minimapCtx;
+    ctx.clearRect(0, 0, this.MINIMAP_SIZE, this.MINIMAP_SIZE);
+
+    if (this.nodes.size === 0) {
+      // Show empty state
+      ctx.fillStyle = '#313244';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No nodes', this.MINIMAP_SIZE / 2, this.MINIMAP_SIZE / 2);
+      return;
+    }
+
+    // Calculate content bounds
+    const bounds = this.getContentBounds();
+    if (!bounds) return;
+
+    const padding = 20;
+    const contentWidth = bounds.maxX - bounds.minX + padding * 2;
+    const contentHeight = bounds.maxY - bounds.minY + padding * 2;
+
+    // Calculate scale to fit content in minimap
+    const scale = Math.min(
+      this.MINIMAP_SIZE / contentWidth,
+      this.MINIMAP_SIZE / contentHeight
+    );
+
+    // Offset to center content in minimap
+    const offsetX = (this.MINIMAP_SIZE - contentWidth * scale) / 2;
+    const offsetY = (this.MINIMAP_SIZE - contentHeight * scale) / 2;
+
+    // Draw connections
+    ctx.strokeStyle = '#45475a';
+    ctx.lineWidth = 1;
+    for (const conn of this.connections) {
+      const fromNode = this.nodes.get(conn.fromId);
+      const toNode = this.nodes.get(conn.toId);
+      if (!fromNode || !toNode) continue;
+
+      const fromX = (fromNode.position.x + (fromNode.width ?? 180) - bounds.minX + padding) * scale + offsetX;
+      const fromY = (fromNode.position.y + (fromNode.height ?? 50) / 2 - bounds.minY + padding) * scale + offsetY;
+      const toX = (toNode.position.x - bounds.minX + padding) * scale + offsetX;
+      const toY = (toNode.position.y + (toNode.height ?? 50) / 2 - bounds.minY + padding) * scale + offsetY;
+
+      ctx.beginPath();
+      ctx.moveTo(fromX, fromY);
+      ctx.lineTo(toX, toY);
+      ctx.stroke();
+    }
+
+    // Draw nodes
+    for (const node of this.nodes.values()) {
+      const x = (node.position.x - bounds.minX + padding) * scale + offsetX;
+      const y = (node.position.y - bounds.minY + padding) * scale + offsetY;
+      const w = (node.width ?? 180) * scale;
+      const h = (node.height ?? 50) * scale;
+
+      ctx.fillStyle = node.id === this.selectedNodeId ? '#89b4fa' : '#6c7086';
+      ctx.fillRect(x, y, Math.max(w, 4), Math.max(h, 3));
+    }
+
+    // Draw viewport rectangle
+    const viewRect = this.element.getBoundingClientRect();
+    const viewLeft = (-this.panX / this.zoom - bounds.minX + padding) * scale + offsetX;
+    const viewTop = (-this.panY / this.zoom - bounds.minY + padding) * scale + offsetY;
+    const viewWidth = (viewRect.width / this.zoom) * scale;
+    const viewHeight = (viewRect.height / this.zoom) * scale;
+
+    ctx.strokeStyle = '#89b4fa';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(viewLeft, viewTop, viewWidth, viewHeight);
   }
 }
