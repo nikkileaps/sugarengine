@@ -4,17 +4,39 @@
  * Displays dialogue entries in the left panel and a node graph in the center.
  */
 
-import { EntryList, EntryListItem, Inspector, NodeCanvas, CanvasNode, CanvasConnection } from '../components';
+import { EntryList, EntryListItem, Inspector, NodeCanvas, CanvasNode, CanvasConnection, ActionMenu } from '../components';
 import type { FieldDefinition } from '../components';
 import { editorStore } from '../store';
 import { generateUUID, shortId } from '../utils';
-import type { DialogueTree, DialogueNode } from '../../engine/dialogue/types';
+import type { DialogueTree, DialogueNode, DialogueNext, NPCSpeaker } from '../../engine/dialogue/types';
+import { PLAYER, NARRATOR } from '../../engine/dialogue/types';
+
+// Available NPC speakers (populated from NPC panel)
+let availableNPCs: NPCSpeaker[] = [];
+let dialoguePanelInstance: DialoguePanel | null = null;
+
+export function setAvailableNPCsForDialogue(npcs: { id: string; name: string }[]): void {
+  // Convert NPCs to NPCSpeaker format
+  availableNPCs = npcs.map(npc => ({ id: npc.id, displayName: npc.name, kind: 'npc' as const }));
+  // Update the speaker field options if panel exists
+  dialoguePanelInstance?.updateSpeakerOptions();
+}
+
+/** Resolve a speaker ID to display name */
+function getSpeakerDisplayName(speakerId: string): string {
+  if (speakerId === PLAYER.id) return PLAYER.displayName;
+  if (speakerId === NARRATOR.id) return NARRATOR.displayName;
+  const npc = availableNPCs.find(n => n.id === speakerId);
+  if (npc) return npc.displayName;
+  // Fallback: return the ID itself (for legacy data or unknown speakers)
+  return speakerId;
+}
 
 const NODE_FIELDS: FieldDefinition[] = [
-  { key: 'id', label: 'Node ID', type: 'text', required: true },
-  { key: 'speaker', label: 'Speaker', type: 'text', placeholder: 'NPC name or "Player"' },
+  { key: 'id', label: 'Node ID', type: 'text', readonly: true },
+  { key: 'displayName', label: 'Display Name', type: 'text', placeholder: 'Human-readable name' },
+  { key: 'speaker', label: 'Speaker', type: 'select', options: [] },
   { key: 'text', label: 'Dialogue Text', type: 'textarea', required: true },
-  { key: 'next', label: 'Next Node', type: 'text', placeholder: 'Node ID (if no choices)' },
   { key: 'onEnter', label: 'On Enter Event', type: 'text', placeholder: 'Event to fire' },
 ];
 
@@ -26,6 +48,8 @@ export class DialoguePanel {
   private element: HTMLElement;
   private entryList: EntryList;
   private inspector: Inspector;
+  private rightPanel: HTMLElement;
+  private choicesEditor: HTMLElement;
   private centerPanel: HTMLElement;
   private nodeCanvas: NodeCanvas | null = null;
   private playtestPanel: HTMLElement | null = null;
@@ -40,6 +64,9 @@ export class DialoguePanel {
   private playtestNodeId: string | null = null;
 
   constructor() {
+    // Register instance for external updates
+    dialoguePanelInstance = this;
+
     this.element = document.createElement('div');
     this.element.className = 'panel dialogue-panel';
     this.element.style.cssText = `
@@ -67,19 +94,66 @@ export class DialoguePanel {
     `;
     this.element.appendChild(this.centerPanel);
 
-    // Inspector (right)
+    // Right panel (inspector + choices editor)
+    this.rightPanel = document.createElement('div');
+    this.rightPanel.style.cssText = `
+      width: 300px;
+      min-width: 250px;
+      background: #181825;
+      border-left: 1px solid #313244;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    `;
+
+    // Inspector
     this.inspector = new Inspector({
       title: 'Node Properties',
       fields: NODE_FIELDS,
       onChange: (key, value) => this.onFieldChange(key, value),
     });
-    this.element.appendChild(this.inspector.getElement());
+    const inspectorEl = this.inspector.getElement();
+    inspectorEl.style.borderLeft = 'none';
+    inspectorEl.style.flex = '0 0 auto';
+    this.rightPanel.appendChild(inspectorEl);
+
+    // Initialize speaker options
+    this.updateSpeakerOptions();
+
+    // Choices editor
+    this.choicesEditor = document.createElement('div');
+    this.choicesEditor.style.cssText = `
+      flex: 1;
+      overflow-y: auto;
+      border-top: 1px solid #313244;
+    `;
+    this.rightPanel.appendChild(this.choicesEditor);
+
+    this.element.appendChild(this.rightPanel);
 
     this.renderCenterPlaceholder();
   }
 
   getElement(): HTMLElement {
     return this.element;
+  }
+
+  /**
+   * Update the speaker dropdown options: Player, Narrator, and all NPCs
+   */
+  updateSpeakerOptions(): void {
+    const options: { value: string; label: string }[] = [
+      { value: '', label: '-- Select speaker --' },
+      { value: PLAYER.id, label: PLAYER.displayName },
+      { value: NARRATOR.id, label: NARRATOR.displayName },
+    ];
+
+    // Add all NPCs
+    for (const npc of availableNPCs) {
+      options.push({ value: npc.id, label: npc.displayName });
+    }
+
+    this.inspector.updateFieldOptions('speaker', options);
   }
 
   show(): void {
@@ -111,7 +185,7 @@ export class DialoguePanel {
   private updateEntryList(): void {
     const items: EntryListItem[] = Array.from(this.dialogues.values()).map(d => ({
       id: d.id,
-      name: d.id,
+      name: d.displayName ?? d.id,
       subtitle: `${d.nodes.length} nodes · ${shortId(d.id)}`,
       icon: '💬',
     }));
@@ -151,14 +225,12 @@ export class DialoguePanel {
       if (!node) continue;
 
       // Add children to queue
-      if (node.choices) {
-        for (const choice of node.choices) {
-          if (!visited.has(choice.next)) {
-            queue.push({ id: choice.next, depth: depth + 1, lane: 0 });
+      if (node.next) {
+        for (const nextItem of node.next) {
+          if (nextItem.nodeId && !visited.has(nextItem.nodeId)) {
+            queue.push({ id: nextItem.nodeId, depth: depth + 1, lane: 0 });
           }
         }
-      } else if (node.next && !visited.has(node.next)) {
-        queue.push({ id: node.next, depth: depth + 1, lane: 0 });
       }
     }
 
@@ -210,13 +282,40 @@ export class DialoguePanel {
       gap: 12px;
     `;
 
-    // Title
-    const title = document.createElement('span');
-    title.textContent = dialogue.id;
+    // Editable title (display name)
+    const title = document.createElement('input');
+    title.type = 'text';
+    title.value = dialogue.displayName ?? dialogue.id;
     title.style.cssText = `
       font-weight: 600;
       color: #cdd6f4;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 14px;
+      min-width: 150px;
+      max-width: 300px;
     `;
+    title.onfocus = () => {
+      title.style.borderColor = '#89b4fa';
+      title.style.background = '#313244';
+    };
+    title.onblur = () => {
+      title.style.borderColor = 'transparent';
+      title.style.background = 'transparent';
+      // Save on blur
+      if (title.value.trim()) {
+        dialogue.displayName = title.value.trim();
+        editorStore.setDirty(true);
+        this.updateEntryList();
+      }
+    };
+    title.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        title.blur();
+      }
+    };
     toolbar.appendChild(title);
 
     // Start node badge
@@ -296,6 +395,7 @@ export class DialoguePanel {
       onNodeSelect: (nodeId) => this.selectNode(nodeId),
       onNodeMove: (nodeId, pos) => this.onNodeMove(nodeId, pos),
       onCanvasClick: () => this.deselectNode(),
+      onConnect: (fromNodeId, toNodeId) => this.onNodeConnect(fromNodeId, toNodeId),
       renderNode: (node, el) => this.renderNodeContent(dialogue, node, el),
     });
     canvasContainer.appendChild(this.nodeCanvas.getElement());
@@ -323,22 +423,18 @@ export class DialoguePanel {
     // Create connections
     const connections: CanvasConnection[] = [];
     for (const node of dialogue.nodes) {
-      if (node.choices) {
-        for (let i = 0; i < node.choices.length; i++) {
-          const choice = node.choices[i]!;
+      if (node.next && node.next.length > 0) {
+        const isChoice = node.next.length > 1;
+        for (let i = 0; i < node.next.length; i++) {
+          const nextItem = node.next[i]!;
+          if (!nextItem.nodeId) continue; // Skip unselected connections
           connections.push({
             fromId: node.id,
-            toId: choice.next,
-            fromPort: `choice-${i}`,
-            color: this.getChoiceColor(i),
+            toId: nextItem.nodeId,
+            fromPort: isChoice ? `choice-${i}` : undefined,
+            color: isChoice ? this.getChoiceColor(i) : '#45475a',
           });
         }
-      } else if (node.next) {
-        connections.push({
-          fromId: node.id,
-          toId: node.next,
-          color: '#45475a',
-        });
       }
     }
 
@@ -380,26 +476,41 @@ export class DialoguePanel {
       header.appendChild(startIcon);
     }
 
-    const idLabel = document.createElement('span');
-    idLabel.textContent = node.id;
-    idLabel.style.cssText = `
-      font-family: monospace;
-      font-size: 11px;
-      color: ${isStart ? '#a6e3a1' : '#a6adc8'};
+    const nameLabel = document.createElement('span');
+    nameLabel.textContent = node.displayName ?? node.id;
+    nameLabel.style.cssText = `
+      font-size: 12px;
+      color: ${isStart ? '#a6e3a1' : '#cdd6f4'};
+      flex: 1;
     `;
-    header.appendChild(idLabel);
+    header.appendChild(nameLabel);
 
     if (node.speaker) {
       const speaker = document.createElement('span');
-      speaker.textContent = node.speaker;
+      speaker.textContent = getSpeakerDisplayName(node.speaker);
       speaker.style.cssText = `
-        margin-left: auto;
         font-size: 11px;
         font-weight: 600;
         color: #89b4fa;
       `;
       header.appendChild(speaker);
     }
+
+    // Action menu
+    const actionMenu = new ActionMenu({
+      items: [
+        {
+          label: 'Set as Start',
+          onClick: () => this.setStartNode(dialogue, node.id),
+        },
+        {
+          label: 'Delete',
+          danger: true,
+          onClick: () => this.deleteNode(dialogue, node.id),
+        },
+      ],
+    });
+    header.appendChild(actionMenu.getElement());
 
     element.appendChild(header);
 
@@ -416,8 +527,10 @@ export class DialoguePanel {
     textDiv.textContent = node.text.length > 80 ? node.text.slice(0, 80) + '...' : node.text;
     element.appendChild(textDiv);
 
-    // Choices or next indicator
-    if (node.choices && node.choices.length > 0) {
+    // Show connections (single next or multiple choices)
+    const connectionCount = node.next?.length ?? 0;
+    if (connectionCount > 1) {
+      // Multiple choices
       const choicesDiv = document.createElement('div');
       choicesDiv.style.cssText = `
         padding: 8px 12px;
@@ -427,8 +540,8 @@ export class DialoguePanel {
         gap: 4px;
       `;
 
-      for (let i = 0; i < node.choices.length; i++) {
-        const choice = node.choices[i]!;
+      for (let i = 0; i < node.next!.length; i++) {
+        const nextItem = node.next![i]!;
         const choiceEl = document.createElement('div');
         choiceEl.style.cssText = `
           display: flex;
@@ -447,12 +560,15 @@ export class DialoguePanel {
         choiceEl.appendChild(dot);
 
         const text = document.createElement('span');
-        text.textContent = choice.text.length > 25 ? choice.text.slice(0, 25) + '...' : choice.text;
+        const choiceText = nextItem.text ?? '';
+        text.textContent = choiceText.length > 25 ? choiceText.slice(0, 25) + '...' : choiceText;
         text.style.color = '#a6adc8';
         choiceEl.appendChild(text);
 
+        const targetNode = dialogue.nodes.find(n => n.id === nextItem.nodeId);
+        const targetLabel = targetNode?.displayName ?? nextItem.nodeId ?? '?';
         const arrow = document.createElement('span');
-        arrow.textContent = `→ ${choice.next}`;
+        arrow.textContent = `→ ${targetLabel}`;
         arrow.style.cssText = 'margin-left: auto; color: #6c7086; font-family: monospace;';
         choiceEl.appendChild(arrow);
 
@@ -460,7 +576,11 @@ export class DialoguePanel {
       }
 
       element.appendChild(choicesDiv);
-    } else if (node.next) {
+    } else if (connectionCount === 1) {
+      // Single next node
+      const nextItem = node.next![0]!;
+      const targetNode = dialogue.nodes.find(n => n.id === nextItem.nodeId);
+      const nextLabel = targetNode?.displayName ?? nextItem.nodeId ?? '?';
       const nextDiv = document.createElement('div');
       nextDiv.style.cssText = `
         padding: 6px 12px;
@@ -468,7 +588,7 @@ export class DialoguePanel {
         font-size: 11px;
         color: #6c7086;
       `;
-      nextDiv.textContent = `→ ${node.next}`;
+      nextDiv.textContent = `→ ${nextLabel}`;
       element.appendChild(nextDiv);
     } else {
       const endDiv = document.createElement('div');
@@ -495,11 +615,14 @@ export class DialoguePanel {
 
     this.inspector.setData({
       id: node.id,
+      displayName: node.displayName ?? '',
       speaker: node.speaker ?? '',
       text: node.text,
-      next: node.next ?? '',
       onEnter: node.onEnter ?? '',
     });
+
+    // Render choices editor
+    this.renderNextEditor(dialogue, node);
 
     this.nodeCanvas?.setSelectedNode(nodeId);
   }
@@ -507,7 +630,250 @@ export class DialoguePanel {
   private deselectNode(): void {
     this.currentNodeId = null;
     this.inspector.clear();
+    this.clearChoicesEditor();
     this.nodeCanvas?.setSelectedNode(null);
+  }
+
+  private clearChoicesEditor(): void {
+    this.choicesEditor.innerHTML = '';
+  }
+
+  private renderNextEditor(dialogue: DialogueTree, node: DialogueNode): void {
+    this.choicesEditor.innerHTML = '';
+
+    // Count connections from the next array
+    const connectionCount = node.next?.length ?? 0;
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = `
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    `;
+
+    const title = document.createElement('h3');
+    title.textContent = 'Next';
+    title.style.cssText = `
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #cdd6f4;
+    `;
+    header.appendChild(title);
+
+    const addBtn = document.createElement('button');
+    addBtn.textContent = '+ Add';
+    addBtn.style.cssText = `
+      padding: 4px 10px;
+      border: 1px solid #313244;
+      border-radius: 4px;
+      background: #313244;
+      color: #cdd6f4;
+      font-size: 11px;
+      cursor: pointer;
+    `;
+    addBtn.onclick = () => this.addNextConnection(dialogue, node);
+    header.appendChild(addBtn);
+
+    this.choicesEditor.appendChild(header);
+
+    // Content
+    const list = document.createElement('div');
+    list.style.cssText = `padding: 0 16px 16px;`;
+
+    if (connectionCount === 0) {
+      // No connections - end of dialogue
+      const empty = document.createElement('div');
+      empty.style.cssText = `
+        padding: 16px;
+        text-align: center;
+        color: #6c7086;
+        font-size: 12px;
+        background: #1e1e2e;
+        border: 1px solid #313244;
+        border-radius: 6px;
+      `;
+      empty.textContent = 'End of dialogue. Add a connection to continue.';
+      list.appendChild(empty);
+    } else if (connectionCount === 1) {
+      // Single connection - just show dropdown (no choice text needed)
+      const item = this.renderNextItem(dialogue, node, node.next![0]!, 0, false);
+      list.appendChild(item);
+    } else {
+      // Multiple connections - show text + dropdown for each
+      for (let i = 0; i < node.next!.length; i++) {
+        const nextItem = node.next![i]!;
+        const itemEl = this.renderNextItem(dialogue, node, nextItem, i, true);
+        list.appendChild(itemEl);
+      }
+    }
+
+    this.choicesEditor.appendChild(list);
+  }
+
+  private renderNextItem(dialogue: DialogueTree, node: DialogueNode, _nextItem: DialogueNext, index: number, showTextInput: boolean): HTMLElement {
+    // Get the actual reference from the array to ensure mutations persist
+    const nextItem = node.next![index]!;
+    const item = document.createElement('div');
+    item.style.cssText = `
+      margin-bottom: 12px;
+      padding: 12px;
+      background: #1e1e2e;
+      border: 1px solid #313244;
+      border-radius: 6px;
+    `;
+
+    // Header with index badge and delete button
+    const itemHeader = document.createElement('div');
+    itemHeader.style.cssText = `
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: ${showTextInput ? '8px' : '0'};
+    `;
+
+    if (showTextInput) {
+      const indexBadge = document.createElement('span');
+      indexBadge.textContent = `Option ${index + 1}`;
+      indexBadge.style.cssText = `
+        font-size: 11px;
+        font-weight: 600;
+        color: ${this.getChoiceColor(index)};
+      `;
+      itemHeader.appendChild(indexBadge);
+    } else {
+      // Spacer for single item
+      const spacer = document.createElement('span');
+      itemHeader.appendChild(spacer);
+    }
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '✕';
+    deleteBtn.style.cssText = `
+      width: 20px;
+      height: 20px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #6c7086;
+      font-size: 12px;
+      cursor: pointer;
+    `;
+    deleteBtn.onclick = () => this.removeNextConnection(dialogue, node, index);
+    itemHeader.appendChild(deleteBtn);
+
+    item.appendChild(itemHeader);
+
+    // Choice text input (only when multiple choices)
+    if (showTextInput) {
+      const textLabel = document.createElement('label');
+      textLabel.textContent = 'Choice Text';
+      textLabel.style.cssText = `
+        display: block;
+        font-size: 11px;
+        color: #a6adc8;
+        margin-bottom: 4px;
+      `;
+      item.appendChild(textLabel);
+
+      const textInput = document.createElement('input');
+      textInput.type = 'text';
+      textInput.value = nextItem.text ?? '';
+      textInput.placeholder = 'What the player sees';
+      textInput.style.cssText = `
+        width: 100%;
+        padding: 6px 10px;
+        border: 1px solid #313244;
+        border-radius: 4px;
+        background: #181825;
+        color: #cdd6f4;
+        font-size: 12px;
+        margin-bottom: 8px;
+        box-sizing: border-box;
+      `;
+      textInput.oninput = () => {
+        nextItem.text = textInput.value;
+        editorStore.setDirty(true);
+        this.updateCanvas(dialogue);
+      };
+      item.appendChild(textInput);
+    }
+
+    // Next node select
+    const nextLabel = document.createElement('label');
+    nextLabel.textContent = 'Goes to';
+    nextLabel.style.cssText = `
+      display: block;
+      font-size: 11px;
+      color: #a6adc8;
+      margin-bottom: 4px;
+    `;
+    item.appendChild(nextLabel);
+
+    const nextSelect = document.createElement('select');
+    nextSelect.style.cssText = `
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #313244;
+      border-radius: 4px;
+      background: #181825;
+      color: #cdd6f4;
+      font-size: 12px;
+      box-sizing: border-box;
+    `;
+
+    // Add empty option
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '-- Select node --';
+    nextSelect.appendChild(emptyOpt);
+
+    // Add all other nodes
+    for (const n of dialogue.nodes) {
+      if (n.id === node.id) continue;
+      const opt = document.createElement('option');
+      opt.value = n.id;
+      opt.textContent = n.displayName ?? n.id;
+      opt.selected = nextItem.nodeId === n.id;
+      nextSelect.appendChild(opt);
+    }
+
+    nextSelect.onchange = () => {
+      nextItem.nodeId = nextSelect.value;
+      editorStore.setDirty(true);
+      this.updateCanvas(dialogue);
+    };
+    item.appendChild(nextSelect);
+
+    return item;
+  }
+
+  private addNextConnection(dialogue: DialogueTree, node: DialogueNode): void {
+    if (!node.next) {
+      node.next = [];
+    }
+    node.next.push({ nodeId: '' });
+
+    editorStore.setDirty(true);
+    this.renderNextEditor(dialogue, node);
+    this.updateCanvas(dialogue);
+  }
+
+  private removeNextConnection(dialogue: DialogueTree, node: DialogueNode, index: number): void {
+    if (!node.next) return;
+
+    node.next.splice(index, 1);
+
+    // Clean up empty array
+    if (node.next.length === 0) {
+      delete node.next;
+    }
+
+    editorStore.setDirty(true);
+    this.renderNextEditor(dialogue, node);
+    this.updateCanvas(dialogue);
   }
 
   private onNodeMove(nodeId: string, position: { x: number; y: number }): void {
@@ -523,10 +889,46 @@ export class DialoguePanel {
     editorStore.setDirty(true);
   }
 
+  private onNodeConnect(fromNodeId: string, toNodeId: string): void {
+    if (!this.currentDialogueId) return;
+
+    const dialogue = this.dialogues.get(this.currentDialogueId);
+    if (!dialogue) return;
+
+    const fromNode = dialogue.nodes.find(n => n.id === fromNodeId);
+    if (!fromNode) return;
+
+    const toNode = dialogue.nodes.find(n => n.id === toNodeId);
+    const toLabel = toNode?.displayName ?? toNodeId;
+
+    // Initialize next array if needed
+    if (!fromNode.next) {
+      fromNode.next = [];
+    }
+
+    // Add the new connection (with placeholder text if this creates choices)
+    const needsText = fromNode.next.length >= 1;
+    fromNode.next.push({
+      nodeId: toNodeId,
+      text: needsText ? `Go to ${toLabel}` : undefined
+    });
+
+    editorStore.setDirty(true);
+
+    // Update the canvas to show the new connection
+    this.updateCanvas(dialogue);
+
+    // Update the inspector if this node is selected
+    if (this.currentNodeId === fromNodeId) {
+      this.selectNode(fromNodeId);
+    }
+  }
+
   private createNewDialogue(): void {
     const id = generateUUID();
     const dialogue: DialogueTree = {
       id,
+      displayName: 'New Dialogue',
       startNode: 'start',
       nodes: [
         {
@@ -550,6 +952,7 @@ export class DialoguePanel {
     const nodeId = generateUUID();
     const newNode: DialogueNode = {
       id: nodeId,
+      displayName: 'New Node',
       speaker: 'NPC',
       text: 'New dialogue text...',
     };
@@ -570,6 +973,50 @@ export class DialoguePanel {
     this.updateEntryList();
     this.updateCanvas(dialogue);
     this.selectNode(nodeId);
+  }
+
+  private deleteNode(dialogue: DialogueTree, nodeId: string): void {
+    // Don't allow deleting the start node
+    if (nodeId === dialogue.startNode) {
+      console.warn('Cannot delete the start node');
+      return;
+    }
+
+    // Remove the node
+    const index = dialogue.nodes.findIndex(n => n.id === nodeId);
+    if (index === -1) return;
+
+    dialogue.nodes.splice(index, 1);
+
+    // Remove position
+    const positions = this.nodePositions.get(dialogue.id);
+    if (positions) {
+      positions.delete(nodeId);
+    }
+
+    // Remove any connections pointing to this node
+    for (const node of dialogue.nodes) {
+      if (node.next) {
+        node.next = node.next.filter(n => n.nodeId !== nodeId);
+        if (node.next.length === 0) {
+          delete node.next;
+        }
+      }
+    }
+
+    // Clear selection if this node was selected
+    if (this.currentNodeId === nodeId) {
+      this.deselectNode();
+    }
+
+    editorStore.setDirty(true);
+    this.updateCanvas(dialogue);
+  }
+
+  private setStartNode(dialogue: DialogueTree, nodeId: string): void {
+    dialogue.startNode = nodeId;
+    editorStore.setDirty(true);
+    this.updateCanvas(dialogue);
   }
 
   private onDialogueSelect(id: string): void {
@@ -693,7 +1140,7 @@ export class DialoguePanel {
     // Speaker
     if (node.speaker) {
       const speaker = document.createElement('div');
-      speaker.textContent = node.speaker;
+      speaker.textContent = getSpeakerDisplayName(node.speaker);
       speaker.style.cssText = `
         padding: 12px 16px 0;
         font-weight: 600;
@@ -722,10 +1169,12 @@ export class DialoguePanel {
       gap: 8px;
     `;
 
-    if (node.choices && node.choices.length > 0) {
-      for (const choice of node.choices) {
+    const connectionCount = node.next?.length ?? 0;
+    if (connectionCount > 1) {
+      // Multiple choices
+      for (const nextItem of node.next!) {
         const btn = document.createElement('button');
-        btn.textContent = choice.text;
+        btn.textContent = nextItem.text ?? 'Continue';
         btn.style.cssText = `
           padding: 10px 16px;
           border: 1px solid #313244;
@@ -739,10 +1188,11 @@ export class DialoguePanel {
         `;
         btn.onmouseenter = () => btn.style.background = '#45475a';
         btn.onmouseleave = () => btn.style.background = '#313244';
-        btn.onclick = () => this.playtestAdvance(dialogue, choice.next);
+        btn.onclick = () => this.playtestAdvance(dialogue, nextItem.nodeId);
         actions.appendChild(btn);
       }
-    } else if (node.next) {
+    } else if (connectionCount === 1) {
+      // Single next
       const btn = document.createElement('button');
       btn.textContent = 'Continue →';
       btn.style.cssText = `
@@ -754,7 +1204,7 @@ export class DialoguePanel {
         font-size: 13px;
         cursor: pointer;
       `;
-      btn.onclick = () => this.playtestAdvance(dialogue, node.next!);
+      btn.onclick = () => this.playtestAdvance(dialogue, node.next![0]!.nodeId);
       actions.appendChild(btn);
     } else {
       const endMsg = document.createElement('div');

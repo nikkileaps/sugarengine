@@ -388,6 +388,34 @@ export class QuestManager {
     return loaded?.definition.name ?? null;
   }
 
+  /**
+   * Find a quest objective that wants to talk to a specific NPC.
+   * Returns the objective info if found, including which dialogue to use.
+   */
+  getQuestDialogueForNpc(npcId: string): {
+    questId: string;
+    objectiveId: string;
+    dialogue: string;
+    completeOn: 'dialogueEnd' | string;
+  } | null {
+    for (const [questId, state] of this.activeQuests) {
+      for (const [objId, objective] of state.objectiveProgress) {
+        if (objective.completed) continue;
+        if (objective.type !== 'talk') continue;
+        if (objective.target !== npcId) continue;
+        if (!objective.dialogue) continue; // No specific dialogue = use NPC default
+
+        return {
+          questId,
+          objectiveId: objId,
+          dialogue: objective.dialogue,
+          completeOn: objective.completeOn ?? 'dialogueEnd'
+        };
+      }
+    }
+    return null;
+  }
+
   // ============================================
   // Helpers
   // ============================================

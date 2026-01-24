@@ -1,6 +1,6 @@
-import { DialogueNode, DialogueChoice } from '../dialogue';
+import { DialogueNode, DialogueNext } from '../dialogue';
 
-export type DialogueBoxCallback = (choice?: DialogueChoice) => void;
+export type DialogueBoxCallback = (selected?: DialogueNext) => void;
 export type DialogueCancelCallback = () => void;
 
 /**
@@ -23,7 +23,7 @@ export class DialogueBox {
   private isTyping = false;
   private typewriterSpeed = 30; // ms per character
 
-  private currentChoices: DialogueChoice[] = [];
+  private currentNext: DialogueNext[] = [];
   private onComplete: DialogueBoxCallback | null = null;
   private onCancel: DialogueCancelCallback | null = null;
 
@@ -250,21 +250,21 @@ export class DialogueBox {
       if (this.isTyping) {
         // Skip typewriter, show full text
         this.skipTypewriter();
-      } else if (this.currentChoices.length === 0) {
-        // No choices, advance dialogue
+      } else if (this.currentNext.length <= 1) {
+        // No choices (0 or 1 connection), advance dialogue
         if (this.onComplete) {
-          this.onComplete();
+          this.onComplete(this.currentNext[0]); // undefined if no next
         }
       }
     }
 
-    // Number keys for choices
-    if (this.currentChoices.length > 0 && !this.isTyping) {
+    // Number keys for choices (only when multiple options)
+    if (this.currentNext.length > 1 && !this.isTyping) {
       const num = parseInt(e.key);
-      if (num >= 1 && num <= this.currentChoices.length) {
-        const choice = this.currentChoices[num - 1];
-        if (choice && this.onComplete) {
-          this.onComplete(choice);
+      if (num >= 1 && num <= this.currentNext.length) {
+        const selected = this.currentNext[num - 1];
+        if (selected && this.onComplete) {
+          this.onComplete(selected);
         }
       }
     }
@@ -276,7 +276,7 @@ export class DialogueBox {
   show(node: DialogueNode, onComplete: DialogueBoxCallback, onCancel?: DialogueCancelCallback): void {
     this.onComplete = onComplete;
     this.onCancel = onCancel ?? null;
-    this.currentChoices = node.choices ?? [];
+    this.currentNext = node.next ?? [];
 
     // Set speaker
     if (node.speaker) {
@@ -344,10 +344,12 @@ export class DialogueBox {
     this.cursorEl.classList.add('dialogue-cursor-blink');
 
     // Show choices or continue hint
-    if (this.currentChoices.length > 0) {
+    if (this.currentNext.length > 1) {
+      // Multiple options - show choice buttons
       this.cursorEl.style.opacity = '0'; // Hide cursor when choices appear
       this.showChoices();
     } else {
+      // Single connection or end - show continue hint
       this.continueHint.style.display = 'block';
     }
   }
@@ -355,7 +357,7 @@ export class DialogueBox {
   private showChoices(): void {
     this.choicesEl.innerHTML = '';
 
-    this.currentChoices.forEach((choice, index) => {
+    this.currentNext.forEach((nextItem, index) => {
       const btn = document.createElement('button');
       btn.className = 'dialogue-choice-btn';
 
@@ -365,11 +367,11 @@ export class DialogueBox {
       numberSpan.textContent = String(index + 1);
 
       btn.appendChild(numberSpan);
-      btn.appendChild(document.createTextNode(choice.text));
+      btn.appendChild(document.createTextNode(nextItem.text ?? 'Continue'));
 
       btn.addEventListener('click', () => {
         if (this.onComplete) {
-          this.onComplete(choice);
+          this.onComplete(nextItem);
         }
       });
 

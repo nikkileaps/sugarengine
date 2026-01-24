@@ -17,6 +17,7 @@ import {
   ItemPanel,
   InspectionPanel,
   setAvailableNPCs,
+  setAvailableNPCsForDialogue,
   setAvailableItems,
   setAvailableDialogues,
   setAvailableQuests,
@@ -298,13 +299,21 @@ export class EditorApp {
       const response = await fetch('/dialogue/index.json');
       if (response.ok) {
         const index = await response.json() as { dialogues: string[] };
+        const loadedDialogues: { id: string; name: string }[] = [];
         for (const id of index.dialogues) {
           const dialogueRes = await fetch(`/dialogue/${id}.json`);
           if (dialogueRes.ok) {
             const dialogue = await dialogueRes.json();
             this.dialoguePanel.addDialogue(dialogue);
+            // Collect for quest picker - try to get a friendly name from the first node's speaker
+            const firstNode = dialogue.nodes?.find((n: { id: string }) => n.id === dialogue.startNode);
+            const speaker = firstNode?.speaker;
+            const name = speaker ? `${speaker}: ${dialogue.id}` : dialogue.id;
+            loadedDialogues.push({ id: dialogue.id, name });
           }
         }
+        // Update available dialogues for quest editor reference picker
+        setAvailableDialogues(loadedDialogues);
       }
     } catch {
       // No dialogues to load
@@ -337,8 +346,10 @@ export class EditorApp {
         for (const npc of data.npcs) {
           this.npcPanel.addNPC(npc as Parameters<NPCPanel['addNPC']>[0]);
         }
-        // Update available NPCs for quest editor reference picker
-        setAvailableNPCs(data.npcs.map(n => ({ id: n.id, name: n.name })));
+        // Update available NPCs for quest editor and dialogue editor
+        const npcList = data.npcs.map(n => ({ id: n.id, name: n.name }));
+        setAvailableNPCs(npcList);
+        setAvailableNPCsForDialogue(npcList);
       }
     } catch {
       // No NPCs to load

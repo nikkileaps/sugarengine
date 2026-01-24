@@ -1,8 +1,9 @@
 import { DialogueLoader } from './DialogueLoader';
-import { DialogueNode, DialogueChoice, LoadedDialogue } from './types';
+import { DialogueNode, DialogueNext, LoadedDialogue } from './types';
 import { DialogueBox } from '../ui/DialogueBox';
 
 export type DialogueEventHandler = (eventName: string) => void;
+export type DialogueNodeHandler = (nodeId: string) => void;
 
 /**
  * Manages dialogue flow - loading, displaying, and handling choices
@@ -18,6 +19,7 @@ export class DialogueManager {
   private onDialogueStart: (() => void) | null = null;
   private onDialogueEnd: (() => void) | null = null;
   private onEvent: DialogueEventHandler | null = null;
+  private onNodeEnter: DialogueNodeHandler | null = null;
 
   constructor(container: HTMLElement) {
     this.loader = new DialogueLoader();
@@ -43,6 +45,13 @@ export class DialogueManager {
    */
   setOnEvent(handler: DialogueEventHandler): void {
     this.onEvent = handler;
+  }
+
+  /**
+   * Set callback for when any node is entered (fires with node id)
+   */
+  setOnNodeEnter(handler: DialogueNodeHandler): void {
+    this.onNodeEnter = handler;
   }
 
   /**
@@ -83,6 +92,11 @@ export class DialogueManager {
   private showNode(node: DialogueNode): void {
     this.currentNode = node;
 
+    // Fire node enter callback (for quest tracking)
+    if (this.onNodeEnter) {
+      this.onNodeEnter(node.id);
+    }
+
     // Fire onEnter event if present
     if (node.onEnter && this.onEvent) {
       this.onEvent(node.onEnter);
@@ -91,8 +105,8 @@ export class DialogueManager {
     // Show in UI
     this.dialogueBox.show(
       node,
-      (choice?: DialogueChoice) => {
-        this.handleAdvance(choice);
+      (selected?: DialogueNext) => {
+        this.handleAdvance(selected);
       },
       () => {
         // Cancel callback - end dialogue on Escape
@@ -104,7 +118,7 @@ export class DialogueManager {
   /**
    * Handle advancing to next node (via choice or continue)
    */
-  private handleAdvance(choice?: DialogueChoice): void {
+  private handleAdvance(selected?: DialogueNext): void {
     if (!this.currentDialogue || !this.currentNode) {
       this.end();
       return;
@@ -112,10 +126,12 @@ export class DialogueManager {
 
     // Determine next node ID
     let nextId: string | undefined;
-    if (choice) {
-      nextId = choice.next;
+    if (selected) {
+      // Player selected a specific choice
+      nextId = selected.nodeId;
     } else {
-      nextId = this.currentNode.next;
+      // Auto-advance (single connection or continue button)
+      nextId = this.currentNode.next?.[0]?.nodeId;
     }
 
     // If no next node, end dialogue

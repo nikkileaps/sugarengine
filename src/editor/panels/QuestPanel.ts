@@ -16,6 +16,10 @@ interface QuestObjective {
   count?: number;
   optional?: boolean;
   completed?: boolean;
+  // For 'talk' objectives - which dialogue to trigger (overrides NPC default)
+  dialogue?: string;
+  // When does the objective complete? 'dialogueEnd' (default) or specific node id
+  completeOn?: 'dialogueEnd' | string;
 }
 
 interface QuestStage {
@@ -44,6 +48,7 @@ interface QuestDefinition {
 // Available data for pickers (will be populated from other panels)
 let availableNPCs: { id: string; name: string }[] = [];
 let availableItems: { id: string; name: string }[] = [];
+let availableDialogues: { id: string; name: string }[] = [];
 
 export function setAvailableNPCs(npcs: { id: string; name: string }[]): void {
   availableNPCs = npcs;
@@ -51,6 +56,10 @@ export function setAvailableNPCs(npcs: { id: string; name: string }[]): void {
 
 export function setAvailableItems(items: { id: string; name: string }[]): void {
   availableItems = items;
+}
+
+export function setAvailableDialogues(dialogues: { id: string; name: string }[]): void {
+  availableDialogues = dialogues;
 }
 
 const QUEST_FIELDS: FieldDefinition[] = [
@@ -654,6 +663,11 @@ export class QuestPanel {
       select.onchange = () => {
         obj.type = select.value as QuestObjective['type'];
         editorStore.setDirty(true);
+        // Show/hide dialogue fields based on type
+        const dialogueField = form.querySelector('#dialogue-field') as HTMLElement;
+        const completeOnField = form.querySelector('#complete-on-field') as HTMLElement;
+        if (dialogueField) dialogueField.style.display = obj.type === 'talk' ? 'block' : 'none';
+        if (completeOnField) completeOnField.style.display = obj.type === 'talk' ? 'block' : 'none';
       };
       return select;
     }));
@@ -705,6 +719,227 @@ export class QuestPanel {
 
       return container;
     }));
+
+    // Dialogue picker (only for 'talk' type)
+    const dialogueField = this.createFormField('Dialogue', () => {
+      const container = document.createElement('div');
+      container.style.cssText = 'position: relative;';
+
+      // Create searchable select
+      const selectWrapper = document.createElement('div');
+      selectWrapper.style.cssText = `
+        position: relative;
+        width: 100%;
+      `;
+
+      const selectedDisplay = document.createElement('div');
+      selectedDisplay.style.cssText = `
+        ${this.getInputStyle()}
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        min-height: 38px;
+      `;
+
+      const updateDisplay = () => {
+        if (obj.dialogue) {
+          const dialogue = availableDialogues.find(d => d.id === obj.dialogue);
+          selectedDisplay.innerHTML = `
+            <span style="display: flex; align-items: center; gap: 8px;">
+              <span style="color: #89b4fa;">💬</span>
+              <span>${dialogue?.name ?? obj.dialogue}</span>
+            </span>
+            <span style="color: #6c7086;">▼</span>
+          `;
+        } else {
+          selectedDisplay.innerHTML = `
+            <span style="color: #6c7086;">Use NPC's default dialogue</span>
+            <span style="color: #6c7086;">▼</span>
+          `;
+        }
+      };
+      updateDisplay();
+
+      selectWrapper.appendChild(selectedDisplay);
+
+      // Dropdown
+      const dropdown = document.createElement('div');
+      dropdown.style.cssText = `
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: #1e1e2e;
+        border: 1px solid #313244;
+        border-radius: 6px;
+        margin-top: 4px;
+        max-height: 250px;
+        overflow-y: auto;
+        z-index: 1002;
+        display: none;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      `;
+
+      // Search input
+      const searchContainer = document.createElement('div');
+      searchContainer.style.cssText = `
+        padding: 8px;
+        border-bottom: 1px solid #313244;
+        position: sticky;
+        top: 0;
+        background: #1e1e2e;
+      `;
+      const searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.placeholder = 'Search dialogues...';
+      searchInput.style.cssText = `
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #313244;
+        border-radius: 4px;
+        background: #181825;
+        color: #cdd6f4;
+        font-size: 12px;
+        outline: none;
+      `;
+      searchContainer.appendChild(searchInput);
+      dropdown.appendChild(searchContainer);
+
+      // Options container
+      const optionsContainer = document.createElement('div');
+      dropdown.appendChild(optionsContainer);
+
+      const renderOptions = (filter: string = '') => {
+        optionsContainer.innerHTML = '';
+        const filterLower = filter.toLowerCase();
+
+        // "None" option
+        const noneOption = document.createElement('div');
+        noneOption.style.cssText = `
+          padding: 10px 12px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          border-bottom: 1px solid #313244;
+          color: #6c7086;
+          font-style: italic;
+        `;
+        noneOption.innerHTML = `
+          <span>🚫</span>
+          <span>Use NPC's default dialogue</span>
+        `;
+        noneOption.onmouseenter = () => noneOption.style.background = '#313244';
+        noneOption.onmouseleave = () => noneOption.style.background = 'transparent';
+        noneOption.onclick = () => {
+          obj.dialogue = undefined;
+          editorStore.setDirty(true);
+          updateDisplay();
+          dropdown.style.display = 'none';
+        };
+        optionsContainer.appendChild(noneOption);
+
+        // Dialogue options
+        const filtered = availableDialogues.filter(d =>
+          d.id.toLowerCase().includes(filterLower) ||
+          d.name.toLowerCase().includes(filterLower)
+        );
+
+        if (filtered.length === 0 && filter) {
+          const noResults = document.createElement('div');
+          noResults.style.cssText = 'padding: 12px; color: #6c7086; text-align: center; font-size: 12px;';
+          noResults.textContent = 'No dialogues found';
+          optionsContainer.appendChild(noResults);
+        }
+
+        for (const dialogue of filtered) {
+          const option = document.createElement('div');
+          const isSelected = obj.dialogue === dialogue.id;
+          option.style.cssText = `
+            padding: 10px 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: ${isSelected ? '#313244' : 'transparent'};
+          `;
+          option.innerHTML = `
+            <span style="font-size: 16px;">💬</span>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 13px; color: #cdd6f4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                ${dialogue.name}
+              </div>
+              <div style="font-size: 10px; color: #6c7086; margin-top: 2px;">
+                ${dialogue.id}
+              </div>
+            </div>
+            ${isSelected ? '<span style="color: #a6e3a1;">✓</span>' : ''}
+          `;
+          option.onmouseenter = () => { if (!isSelected) option.style.background = '#313244'; };
+          option.onmouseleave = () => { if (!isSelected) option.style.background = 'transparent'; };
+          option.onclick = () => {
+            obj.dialogue = dialogue.id;
+            editorStore.setDirty(true);
+            updateDisplay();
+            dropdown.style.display = 'none';
+          };
+          optionsContainer.appendChild(option);
+        }
+      };
+
+      searchInput.oninput = () => renderOptions(searchInput.value);
+
+      // Toggle dropdown
+      selectedDisplay.onclick = () => {
+        const isOpen = dropdown.style.display === 'block';
+        dropdown.style.display = isOpen ? 'none' : 'block';
+        if (!isOpen) {
+          searchInput.value = '';
+          renderOptions();
+          setTimeout(() => searchInput.focus(), 0);
+        }
+      };
+
+      // Close on click outside
+      const closeHandler = (e: MouseEvent) => {
+        if (!selectWrapper.contains(e.target as Node)) {
+          dropdown.style.display = 'none';
+        }
+      };
+      document.addEventListener('click', closeHandler);
+
+      selectWrapper.appendChild(dropdown);
+      container.appendChild(selectWrapper);
+
+      return container;
+    });
+    dialogueField.id = 'dialogue-field';
+    dialogueField.style.display = obj.type === 'talk' ? 'block' : 'none';
+    form.appendChild(dialogueField);
+
+    // Complete on (only for 'talk' type with dialogue)
+    const completeOnField = this.createFormField('Complete When', () => {
+      const select = document.createElement('select');
+      select.style.cssText = this.getInputStyle();
+
+      const endOption = document.createElement('option');
+      endOption.value = 'dialogueEnd';
+      endOption.textContent = 'Dialogue ends';
+      endOption.selected = !obj.completeOn || obj.completeOn === 'dialogueEnd';
+      select.appendChild(endOption);
+
+      // TODO: Could add node picker here for specific node completion
+
+      select.onchange = () => {
+        obj.completeOn = select.value as 'dialogueEnd' | string;
+        editorStore.setDirty(true);
+      };
+      return select;
+    });
+    completeOnField.id = 'complete-on-field';
+    completeOnField.style.display = obj.type === 'talk' ? 'block' : 'none';
+    form.appendChild(completeOnField);
 
     // Optional checkbox
     form.appendChild(this.createFormField('Optional', () => {

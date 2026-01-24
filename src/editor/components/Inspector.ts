@@ -13,6 +13,7 @@ export interface FieldDefinition {
   options?: { value: string; label: string }[];  // For select type
   placeholder?: string;
   required?: boolean;
+  readonly?: boolean;
 }
 
 export interface InspectorConfig {
@@ -78,6 +79,21 @@ export class Inspector {
   setData(data: Record<string, unknown>): void {
     this.data = data;
     this.render();
+  }
+
+  setFields(fields: FieldDefinition[]): void {
+    this.config.fields = fields;
+  }
+
+  updateFieldOptions(key: string, options: { value: string; label: string }[]): void {
+    const field = this.config.fields.find(f => f.key === key);
+    if (field) {
+      field.options = options;
+      // Re-render if we have data
+      if (Object.keys(this.data).length > 0) {
+        this.render();
+      }
+    }
   }
 
   clear(): void {
@@ -224,10 +240,20 @@ export class Inspector {
         input.type = 'text';
         input.value = (value as string) ?? '';
         input.placeholder = field.placeholder ?? '';
-        input.style.cssText = baseStyle;
-        input.onfocus = () => input.style.borderColor = '#89b4fa';
-        input.onblur = () => input.style.borderColor = '#313244';
-        input.oninput = () => this.config.onChange(field.key, input.value);
+        if (field.readonly) {
+          input.readOnly = true;
+          input.style.cssText = baseStyle + `
+            background: #11111b;
+            color: #6c7086;
+            cursor: default;
+            user-select: all;
+          `;
+        } else {
+          input.style.cssText = baseStyle;
+          input.onfocus = () => input.style.borderColor = '#89b4fa';
+          input.onblur = () => input.style.borderColor = '#313244';
+          input.oninput = () => this.config.onChange(field.key, input.value);
+        }
         return input;
       }
     }

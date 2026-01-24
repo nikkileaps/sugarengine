@@ -1,5 +1,5 @@
 export { BasePanel } from './BasePanel';
-export { DialoguePanel } from './DialoguePanel';
+export { DialoguePanel, setAvailableNPCsForDialogue } from './DialoguePanel';
 export { QuestPanel, setAvailableNPCs, setAvailableItems } from './QuestPanel';
 export { NPCPanel, setAvailableDialogues, setAvailableQuests } from './NPCPanel';
 export { ItemPanel, setAvailableQuestsForItems } from './ItemPanel';

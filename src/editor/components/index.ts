@@ -1,3 +1,6 @@
+export { ActionMenu } from './ActionMenu';
+export type { ActionMenuItem, ActionMenuConfig } from './ActionMenu';
+
 export { EntryList } from './EntryList';
 export type { EntryListItem, EntryListConfig } from './EntryList';
 

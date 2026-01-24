@@ -31,8 +31,10 @@ export interface NodeCanvasConfig {
   onNodeSelect?: (nodeId: string) => void;
   onNodeMove?: (nodeId: string, position: NodePosition) => void;
   onCanvasClick?: () => void;
+  onConnect?: (fromNodeId: string, toNodeId: string) => void;
   renderNode: (node: CanvasNode, element: HTMLElement) => void;
   showMinimap?: boolean;
+  showPorts?: boolean;
 }
 
 export class NodeCanvas {
@@ -63,11 +65,17 @@ export class NodeCanvas {
   private isPanning = false;
   private isDraggingNode = false;
   private isDraggingMinimap = false;
+  private isDraggingConnection = false;
   private dragNodeId: string | null = null;
   private dragStartX = 0;
   private dragStartY = 0;
   private dragNodeStartX = 0;
   private dragNodeStartY = 0;
+
+  // Connection drawing state
+  private connectionFromNodeId: string | null = null;
+  private connectionMouseX = 0;
+  private connectionMouseY = 0;
 
   private config: NodeCanvasConfig;
 
@@ -109,7 +117,11 @@ export class NodeCanvas {
       top: 0;
       left: 0;
       pointer-events: none;
+      width: 2000px;
+      height: 2000px;
     `;
+    this.connectionsCanvas.width = 2000;
+    this.connectionsCanvas.height = 2000;
     this.viewport.appendChild(this.connectionsCanvas);
     this.ctx = this.connectionsCanvas.getContext('2d')!;
 
@@ -196,14 +208,32 @@ export class NodeCanvas {
   }
 
   private setupEventListeners(): void {
-    // Mouse down - start pan or node drag
+    // Mouse down - start pan, node drag, or connection drag
     this.element.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
 
       const target = e.target as HTMLElement;
+
+      // Check if clicking on an output port to start connection
+      if (target.classList.contains('node-port-output')) {
+        e.stopPropagation();
+        const nodeId = target.dataset.nodeId!;
+        this.isDraggingConnection = true;
+        this.connectionFromNodeId = nodeId;
+        this.connectionMouseX = e.clientX;
+        this.connectionMouseY = e.clientY;
+        this.element.style.cursor = 'crosshair';
+        return;
+      }
+
+      // Check if clicking on an input port (ignore, connections start from output)
+      if (target.classList.contains('node-port-input')) {
+        return;
+      }
+
       const nodeEl = target.closest('[data-node-id]') as HTMLElement;
 
-      if (nodeEl) {
+      if (nodeEl && !target.classList.contains('node-port')) {
         // Start node drag
         const nodeId = nodeEl.dataset.nodeId!;
         const node = this.nodes.get(nodeId);
@@ -229,7 +259,7 @@ export class NodeCanvas {
       }
     });
 
-    // Mouse move - pan or drag node
+    // Mouse move - pan, drag node, or drag connection
     this.element.addEventListener('mousemove', (e) => {
       if (this.isPanning) {
         this.panX = e.clientX - this.dragStartX;
@@ -253,16 +283,46 @@ export class NodeCanvas {
         }
 
         this.renderConnections();
+      } else if (this.isDraggingConnection) {
+        this.connectionMouseX = e.clientX;
+        this.connectionMouseY = e.clientY;
+        this.renderConnections();
       }
     });
 
-    // Mouse up - end pan or drag
+    // Mouse up - end pan, drag, or connection
+    this.element.addEventListener('mouseup', (e) => {
+      // Check if releasing on an input port to complete connection
+      if (this.isDraggingConnection && this.connectionFromNodeId) {
+        const target = e.target as HTMLElement;
+        if (target.classList.contains('node-port-input')) {
+          const toNodeId = target.dataset.nodeId!;
+          // Don't allow self-connections
+          if (toNodeId !== this.connectionFromNodeId) {
+            this.config.onConnect?.(this.connectionFromNodeId, toNodeId);
+          }
+        }
+        this.isDraggingConnection = false;
+        this.connectionFromNodeId = null;
+        this.renderConnections();
+        this.element.style.cursor = 'grab';
+        return;
+      }
+    });
+
     window.addEventListener('mouseup', () => {
       if (this.isDraggingNode && this.dragNodeId) {
         const node = this.nodes.get(this.dragNodeId);
         if (node) {
           this.config.onNodeMove?.(this.dragNodeId, { ...node.position });
         }
+      }
+
+      // Cancel connection drag if releasing outside
+      if (this.isDraggingConnection) {
+        this.isDraggingConnection = false;
+        this.connectionFromNodeId = null;
+        this.renderConnections();
       }
 
       this.isPanning = false;
@@ -347,6 +407,71 @@ export class NodeCanvas {
       // Let the config render the node content
       this.config.renderNode(node, nodeEl);
 
+      // Add connection ports if enabled
+      if (this.config.showPorts !== false) {
+        // Input port (left side)
+        const inputPort = document.createElement('div');
+        inputPort.className = 'node-port node-port-input';
+        inputPort.dataset.portType = 'input';
+        inputPort.dataset.nodeId = node.id;
+        inputPort.style.cssText = `
+          position: absolute;
+          left: -6px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 12px;
+          height: 12px;
+          background: #313244;
+          border: 2px solid #45475a;
+          border-radius: 50%;
+          cursor: crosshair;
+          z-index: 10;
+          transition: all 0.15s;
+        `;
+        inputPort.onmouseenter = () => {
+          inputPort.style.background = '#89b4fa';
+          inputPort.style.borderColor = '#89b4fa';
+          inputPort.style.transform = 'translateY(-50%) scale(1.3)';
+        };
+        inputPort.onmouseleave = () => {
+          inputPort.style.background = '#313244';
+          inputPort.style.borderColor = '#45475a';
+          inputPort.style.transform = 'translateY(-50%) scale(1)';
+        };
+        nodeEl.appendChild(inputPort);
+
+        // Output port (right side)
+        const outputPort = document.createElement('div');
+        outputPort.className = 'node-port node-port-output';
+        outputPort.dataset.portType = 'output';
+        outputPort.dataset.nodeId = node.id;
+        outputPort.style.cssText = `
+          position: absolute;
+          right: -6px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 12px;
+          height: 12px;
+          background: #313244;
+          border: 2px solid #45475a;
+          border-radius: 50%;
+          cursor: crosshair;
+          z-index: 10;
+          transition: all 0.15s;
+        `;
+        outputPort.onmouseenter = () => {
+          outputPort.style.background = '#a6e3a1';
+          outputPort.style.borderColor = '#a6e3a1';
+          outputPort.style.transform = 'translateY(-50%) scale(1.3)';
+        };
+        outputPort.onmouseleave = () => {
+          outputPort.style.background = '#313244';
+          outputPort.style.borderColor = '#45475a';
+          outputPort.style.transform = 'translateY(-50%) scale(1)';
+        };
+        nodeEl.appendChild(outputPort);
+      }
+
       this.nodesContainer.appendChild(nodeEl);
       this.nodeElements.set(node.id, nodeEl);
 
@@ -422,6 +547,36 @@ export class NodeCanvas {
       );
       this.ctx.closePath();
       this.ctx.fill();
+    }
+
+    // Draw in-progress connection if dragging
+    if (this.isDraggingConnection && this.connectionFromNodeId) {
+      const fromNode = this.nodes.get(this.connectionFromNodeId);
+      if (fromNode) {
+        const fromX = fromNode.position.x + (fromNode.width ?? 180);
+        const fromY = fromNode.position.y + (fromNode.height ?? 50) / 2;
+
+        // Convert mouse position to canvas coordinates
+        const rect = this.element.getBoundingClientRect();
+        const toX = (this.connectionMouseX - rect.left - this.panX) / this.zoom;
+        const toY = (this.connectionMouseY - rect.top - this.panY) / this.zoom;
+
+        // Draw dashed bezier curve
+        this.ctx.beginPath();
+        this.ctx.strokeStyle = '#89b4fa';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([5, 5]);
+
+        const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
+        this.ctx.moveTo(fromX, fromY);
+        this.ctx.bezierCurveTo(
+          fromX + controlOffset, fromY,
+          toX - controlOffset, toY,
+          toX, toY
+        );
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+      }
     }
 
     // Update mini-map

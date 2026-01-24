@@ -15,6 +15,11 @@ export interface QuestObjective {
   current?: number;       // Current progress for countable objectives
   completed: boolean;
   optional?: boolean;     // Optional objectives don't block stage completion
+
+  // For 'talk' objectives - which dialogue to trigger (overrides NPC default)
+  dialogue?: string;
+  // When does the objective complete? 'dialogueEnd' (default) or specific node id
+  completeOn?: 'dialogueEnd' | string;
 }
 
 /**
