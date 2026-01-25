@@ -483,18 +483,6 @@ export class NPCPanel extends BasePanel {
           name.style.cssText = 'font-size: 13px; color: #cdd6f4;';
           refEl.appendChild(name);
 
-          const badge = document.createElement('span');
-          badge.textContent = ref.type;
-          badge.style.cssText = `
-            margin-left: auto;
-            padding: 2px 6px;
-            background: #89b4fa22;
-            color: #89b4fa;
-            border-radius: 3px;
-            font-size: 10px;
-          `;
-          refEl.appendChild(badge);
-
           refSection.appendChild(refEl);
         }
       }
