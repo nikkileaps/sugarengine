@@ -7,7 +7,7 @@
 
 import { Toolbar } from './Toolbar';
 import { PreviewManager } from './PreviewManager';
-import { StatusBar, CommandPalette, KeyboardShortcuts } from './components';
+import { StatusBar, CommandPalette, KeyboardShortcuts, ProjectManagerDialog } from './components';
 import type { SearchableEntry } from './components';
 import { editorStore, EditorTab, HistoryManager } from './store';
 import {
@@ -36,6 +36,7 @@ export class EditorApp {
   private previewManager: PreviewManager;
   private statusBar: StatusBar;
   private commandPalette: CommandPalette;
+  private projectManagerDialog: ProjectManagerDialog;
   private historyManager: HistoryManager;
   private mainContent!: HTMLElement;
 
@@ -48,7 +49,8 @@ export class EditorApp {
   private regionPanel: RegionPanel;
   private panels!: Map<EditorTab, { show: () => void; hide: () => void; getElement: () => HTMLElement }>;
 
-  // Episode data
+  // Project data
+  private projectName: string | null = null;
   private seasons: Season[] = [];
   private episodes: Episode[] = [];
 
@@ -83,14 +85,22 @@ export class EditorApp {
 
     // Initialize subsystems
     this.previewManager = new PreviewManager();
+
+    // Project Manager Dialog
+    this.projectManagerDialog = new ProjectManagerDialog({
+      onProjectCreate: (name) => this.handleProjectCreate(name),
+      onProjectOpen: () => this.handleLoad(),
+      onProjectSave: () => this.handleSave(),
+      onEpisodeSelect: (seasonId, episodeId) => this.handleEpisodeSelect(seasonId, episodeId),
+      onSeasonsChange: (seasons) => this.handleSeasonsChange(seasons),
+      onEpisodesChange: (episodes) => this.handleEpisodesChange(episodes),
+      getRegions: () => this.regionPanel.getRegions().map(r => ({ id: r.id, name: r.name })),
+    });
+
+    // Toolbar
     this.toolbar = new Toolbar({
       onPreview: () => this.openPreview(),
-      onSave: () => this.handleSave(),
-      onLoad: () => this.handleLoad(),
-      onPublish: () => this.handlePublish(),
-      onEpisodeChange: (episodeId) => this.handleEpisodeChange(episodeId),
-      onSeasonChange: (seasonId) => this.handleSeasonChange(seasonId),
-      onEpisodeCreate: () => this.handleEpisodeCreate(),
+      onOpenProjectManager: () => this.openProjectManager(),
     });
 
     // Status bar
@@ -123,8 +133,11 @@ export class EditorApp {
     // Show initial panel
     this.showPanel(editorStore.getState().activeTab);
 
-    // Load existing data
-    this.loadData();
+    // Load data from JSON files (legacy support)
+    this.loadLegacyData();
+
+    // Open Project Manager on launch
+    this.projectManagerDialog.open();
   }
 
   private setupTabShortcuts(): void {
@@ -217,30 +230,18 @@ export class EditorApp {
     this.setupCrossReferences();
   }
 
-  private async loadData(): Promise<void> {
+  private async loadLegacyData(): Promise<void> {
     this.statusBar.setStatus('Loading data...');
 
     try {
-      // Load dialogues
-      await this.loadDialogues();
-
       // Load quests
       await this.loadQuests();
-
-      // Load NPCs
-      await this.loadNPCs();
 
       // Load items
       await this.loadItems();
 
       // Load inspections
       await this.loadInspections();
-
-      // Wire up cross-references between panels
-      this.setupCrossReferences();
-
-      // Initialize history with current state
-      this.historyManager.initialize();
 
       this.statusBar.setStatus('Ready');
     } catch (error) {
@@ -296,10 +297,6 @@ export class EditorApp {
     }));
     setAvailableQuests(questData);
     setAvailableQuestsForItems(questData);
-
-    // Update toolbar with seasons/episodes
-    this.toolbar.setSeasons(this.seasons);
-    this.toolbar.setEpisodes(this.episodes);
 
     // Populate command palette
     this.populateCommandPalette();
@@ -367,10 +364,6 @@ export class EditorApp {
     this.commandPalette.setEntries(entries);
   }
 
-  private async loadDialogues(): Promise<void> {
-    // Dialogues are loaded from .sgrgame project files
-  }
-
   private async loadQuests(): Promise<void> {
     try {
       const response = await fetch('/quests/index.json');
@@ -387,10 +380,6 @@ export class EditorApp {
     } catch {
       // No quests to load
     }
-  }
-
-  private async loadNPCs(): Promise<void> {
-    // NPCs are loaded from .sgrgame project files
   }
 
   private async loadItems(): Promise<void> {
@@ -427,57 +416,114 @@ export class EditorApp {
     }
   }
 
-  private async handlePublish(): Promise<void> {
-    // Check for unsaved changes
-    if (editorStore.getState().isDirty) {
-      const saveFirst = confirm(
-        'You have unsaved changes. Would you like to save before publishing?'
-      );
-      if (saveFirst) {
-        await this.handleSave();
-      }
-    }
-
-    // For now, just build and show instructions
-    const confirmed = confirm(
-      'This will build your game for production.\n\n' +
-      'After building, you can:\n' +
-      '1. Drag the "dist" folder to Netlify\n' +
-      '2. Or use "netlify deploy" CLI\n\n' +
-      'Proceed with build?'
-    );
-
-    if (confirmed) {
-      alert(
-        'To build for production, run:\n\n' +
-        'npm run build\n\n' +
-        'Then deploy the "dist" folder to Netlify.'
-      );
-    }
-  }
-
   private openPreview(): void {
-    // Pass project data to preview
     const projectData = this.getProjectData();
     const currentEpisodeId = editorStore.getState().currentEpisodeId;
     this.previewManager.openPreviewWithData(projectData, currentEpisodeId || undefined);
   }
 
-  private handleEpisodeChange(episodeId: string): void {
-    console.log('Episode changed:', episodeId);
+  private openProjectManager(): void {
+    // Update dialog with current data
+    if (this.projectName) {
+      this.projectManagerDialog.setProject(this.projectName, this.seasons, this.episodes);
+    }
+    this.projectManagerDialog.open();
+  }
+
+  private handleProjectCreate(name: string): void {
+    // Clear existing data
+    this.clearAllData();
+
+    // Set project info
+    this.projectName = name;
+
+    // Create default season and episode
+    const defaultSeason: Season = {
+      id: this.generateUUID(),
+      name: 'Season 1',
+      order: 1,
+    };
+    const defaultEpisode: Episode = {
+      id: this.generateUUID(),
+      seasonId: defaultSeason.id,
+      name: 'Episode 1',
+      order: 1,
+      startRegion: '',
+    };
+
+    this.seasons = [defaultSeason];
+    this.episodes = [defaultEpisode];
+
+    // Update state
+    editorStore.setProjectLoaded(true, name);
+    editorStore.setCurrentSeason(defaultSeason.id);
+    editorStore.setCurrentEpisode(defaultEpisode.id);
+
+    // Update toolbar
+    this.toolbar.setProjectLoaded(true);
+    this.toolbar.setCurrentContext(defaultSeason, defaultEpisode);
+
+    // Update dialog
+    this.projectManagerDialog.setProject(name, this.seasons, this.episodes);
+
+    // Initialize history
+    this.historyManager.initialize();
+
+    this.statusBar.setStatus(`Created project: ${name}`);
+  }
+
+  private handleEpisodeSelect(seasonId: string, episodeId: string): void {
+    editorStore.setCurrentSeason(seasonId);
+    editorStore.setCurrentEpisode(episodeId);
+
+    const season = this.seasons.find(s => s.id === seasonId);
+    const episode = this.episodes.find(e => e.id === episodeId);
+
+    this.toolbar.setCurrentContext(season || null, episode || null);
+    this.setupCrossReferences();
+
+    if (season && episode) {
+      this.statusBar.setStatus(`Editing: ${season.name}, ${episode.name}`);
+    }
+  }
+
+  private handleSeasonsChange(seasons: Season[]): void {
+    this.seasons = seasons;
+    editorStore.setDirty(true);
     this.setupCrossReferences();
   }
 
-  private handleSeasonChange(seasonId: string): void {
-    console.log('Season changed:', seasonId);
+  private handleEpisodesChange(episodes: Episode[]): void {
+    this.episodes = episodes;
+    editorStore.setDirty(true);
     this.setupCrossReferences();
   }
 
-  private handleEpisodeCreate(): void {
-    // Update toolbar with new episode data
-    this.toolbar.setSeasons(this.seasons);
-    this.toolbar.setEpisodes(this.episodes);
-    this.setupCrossReferences();
+  private clearAllData(): void {
+    this.dialoguePanel.clear();
+    this.questPanel.clear();
+    this.npcPanel.clear();
+    this.itemPanel.clear();
+    this.inspectionPanel.clear();
+    this.regionPanel.clear();
+    this.seasons = [];
+    this.episodes = [];
+    this.projectName = null;
+
+    editorStore.setProjectLoaded(false, null);
+    editorStore.setCurrentSeason(null);
+    editorStore.setCurrentEpisode(null);
+
+    this.toolbar.setProjectLoaded(false);
+    this.toolbar.setCurrentContext(null, null);
+  }
+
+  private generateUUID(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
   }
 
   private getProjectData() {
@@ -485,7 +531,7 @@ export class EditorApp {
       version: 2,
       meta: {
         gameId: 'sugar-game',
-        name: 'Sugar Engine Game',
+        name: this.projectName || 'Sugar Engine Game',
       },
       seasons: this.seasons,
       episodes: this.episodes,
@@ -526,7 +572,7 @@ export class EditorApp {
       // Try File System Access API first (Chrome/Edge)
       if ('showSaveFilePicker' in window) {
         const handle = await (window as Window & { showSaveFilePicker: (options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }) => Promise<FileSystemFileHandle> }).showSaveFilePicker({
-          suggestedName: 'project.sgrgame',
+          suggestedName: `${this.projectName || 'project'}.sgrgame`,
           types: [{
             description: 'Sugar Engine Project',
             accept: { 'application/json': ['.sgrgame'] },
@@ -552,7 +598,7 @@ export class EditorApp {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'project.sgrgame';
+    a.download = `${this.projectName || 'project'}.sgrgame`;
     a.click();
     URL.revokeObjectURL(url);
 
@@ -574,7 +620,7 @@ export class EditorApp {
         if (!handle) return;
         const file = await handle.getFile();
         const text = await file.text();
-        await this.loadProjectData(text);
+        await this.loadProjectData(text, file.name);
         return;
       }
     } catch (e) {
@@ -592,27 +638,23 @@ export class EditorApp {
       const file = input.files?.[0];
       if (file) {
         const text = await file.text();
-        await this.loadProjectData(text);
+        await this.loadProjectData(text, file.name);
       }
     };
     input.click();
   }
 
-  private async loadProjectData(jsonText: string): Promise<void> {
+  private async loadProjectData(jsonText: string, filename?: string): Promise<void> {
     this.statusBar.setStatus('Loading project...');
 
     try {
       const data = JSON.parse(jsonText);
 
       // Clear existing data
-      this.dialoguePanel.clear();
-      this.questPanel.clear();
-      this.npcPanel.clear();
-      this.itemPanel.clear();
-      this.inspectionPanel.clear();
-      this.regionPanel.clear();
-      this.seasons = [];
-      this.episodes = [];
+      this.clearAllData();
+
+      // Extract project name from meta or filename
+      this.projectName = data.meta?.name || filename?.replace('.sgrgame', '') || 'Untitled Project';
 
       // Load seasons and episodes (v2 format)
       for (const season of data.seasons || []) {
@@ -624,12 +666,13 @@ export class EditorApp {
       }
 
       // Set current episode context
-      const firstSeason = this.seasons[0];
+      const firstSeason = this.seasons.sort((a, b) => a.order - b.order)[0];
+      let firstEpisode: Episode | undefined;
       if (firstSeason) {
         editorStore.setCurrentSeason(firstSeason.id);
-      }
-      if (this.episodes.length > 0) {
-        const firstEpisode = this.episodes.find(e => e.order === 1);
+        firstEpisode = this.episodes
+          .filter(e => e.seasonId === firstSeason.id)
+          .sort((a, b) => a.order - b.order)[0];
         if (firstEpisode) {
           editorStore.setCurrentEpisode(firstEpisode.id);
         }
@@ -665,6 +708,14 @@ export class EditorApp {
         this.regionPanel.addRegion(region);
       }
 
+      // Update project state
+      editorStore.setProjectLoaded(true, this.projectName);
+      this.toolbar.setProjectLoaded(true);
+      this.toolbar.setCurrentContext(firstSeason || null, firstEpisode || null);
+
+      // Update Project Manager dialog
+      this.projectManagerDialog.setProject(this.projectName || 'Untitled', this.seasons, this.episodes);
+
       // Refresh cross-references
       this.setupCrossReferences();
 
@@ -673,6 +724,14 @@ export class EditorApp {
 
       editorStore.setDirty(false);
       this.statusBar.setStatus('Project loaded');
+
+      // Close dialog if open
+      if (this.projectManagerDialog.isOpen()) {
+        // If we have an episode selected, close the dialog
+        if (firstEpisode) {
+          this.projectManagerDialog.close();
+        }
+      }
     } catch (e) {
       console.error('Failed to load project:', e);
       this.statusBar.setStatus('Failed to load project');

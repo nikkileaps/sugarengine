@@ -12,9 +12,15 @@ import { editorStore } from '../store';
 import { generateUUID } from '../utils';
 import type { Season, Episode } from '../../engine/episodes/types';
 
+export interface RegionOption {
+  id: string;
+  name: string;
+}
+
 export interface EpisodeSelectorConfig {
   onSeasonChange?: (seasonId: string) => void;
   onEpisodeChange?: (episodeId: string) => void;
+  onStartRegionChange?: (episodeId: string, regionId: string) => void;
   onCreate?: () => void;
 }
 
@@ -22,6 +28,7 @@ export class EpisodeSelector {
   private element: HTMLElement;
   private seasons: Season[] = [];
   private episodes: Episode[] = [];
+  private regions: RegionOption[] = [];
   private config: EpisodeSelectorConfig;
 
   constructor(config: EpisodeSelectorConfig = {}) {
@@ -46,6 +53,11 @@ export class EpisodeSelector {
 
   setEpisodes(episodes: Episode[]): void {
     this.episodes = episodes;
+    this.render();
+  }
+
+  setRegions(regions: RegionOption[]): void {
+    this.regions = regions;
     this.render();
   }
 
@@ -113,6 +125,30 @@ export class EpisodeSelector {
       }
     );
     this.element.appendChild(episodeSelect);
+
+    // Start region selector (if we have regions)
+    const currentEpisode = this.episodes.find(e => e.id === currentEpisodeId);
+    if (this.regions.length > 0 && currentEpisode) {
+      const regionLabel = document.createElement('span');
+      regionLabel.textContent = 'Start:';
+      regionLabel.style.cssText = 'font-size: 11px; color: #6c7086; margin-left: 8px;';
+      this.element.appendChild(regionLabel);
+
+      const regionOptions = [
+        { value: '', label: '(none)' },
+        ...this.regions.map(r => ({ value: r.id, label: r.name }))
+      ];
+
+      const regionSelect = this.createSelect(
+        regionOptions,
+        currentEpisode.startRegion || '',
+        (value) => {
+          this.config.onStartRegionChange?.(currentEpisode.id, value);
+        }
+      );
+      regionSelect.style.minWidth = '80px';
+      this.element.appendChild(regionSelect);
+    }
 
     // Add episode button
     const addBtn = document.createElement('button');
@@ -301,6 +337,7 @@ export class EpisodeSelector {
         seasonId,
         name: episodeInput.value || 'New Episode',
         order: existingInSeason + 1,
+        startRegion: '', // Will be set when a region is created
       };
       this.episodes.push(episode);
       editorStore.setCurrentEpisode(episodeId);

@@ -125,7 +125,24 @@ export class Game {
       quests?: { id: string }[];
       npcs?: { id: string; name: string }[];
       items?: { id: string; name: string }[];
+      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number } }[];
     };
+
+    // Pre-register regions (must happen before loadRegion)
+    if (project.regions) {
+      for (const region of project.regions) {
+        // Convert to minimal RegionData format expected by engine
+        this.engine.registerRegion({
+          id: region.id,
+          name: region.name,
+          geometry: { path: region.geometry.path },
+          gridPosition: region.gridPosition ?? { x: 0, z: 0 },
+          playerSpawn: region.playerSpawn ?? { x: 0, y: 0, z: 0 },
+          npcs: [],
+          triggers: [],
+        });
+      }
+    }
 
     // Pre-register dialogues
     if (project.dialogues) {
@@ -156,6 +173,7 @@ export class Game {
     }
 
     console.log('[Game] Registered project content:', {
+      regions: project.regions?.length || 0,
       dialogues: project.dialogues?.length || 0,
       quests: project.quests?.length || 0,
       npcs: project.npcs?.length || 0,
@@ -184,6 +202,13 @@ export class Game {
    */
   getPlayerPosition(): { x: number; y: number; z: number } | null {
     return this.engine.getPlayerPosition();
+  }
+
+  /**
+   * Get current region info (for debug HUD)
+   */
+  getRegionInfo(): { path: string; name?: string } | null {
+    return this.engine.getCurrentRegionInfo();
   }
 
   /**
@@ -364,9 +389,11 @@ export class Game {
       this.quests.clearAllQuests();
       this.saveManager.clearCollectedPickups();
 
-      // Load starting region
-      const startRegion = this.config.startRegion ?? '/regions/test/';
-      await this.engine.loadRegion(startRegion);
+      // Load starting region (geometry.path format, e.g., 'cafe-nollie')
+      if (!this.config.startRegion) {
+        throw new Error('No startRegion configured. Set startRegion in GameConfig.');
+      }
+      await this.engine.loadRegion(this.config.startRegion);
 
       // Start initial quest if configured
       if (this.config.startQuest) {

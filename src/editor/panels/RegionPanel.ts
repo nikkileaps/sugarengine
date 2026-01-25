@@ -57,9 +57,11 @@ const REGION_FIELDS: FieldDefinition[] = [
   { key: 'id', label: 'ID', type: 'text', required: true, readonly: true },
   { key: 'name', label: 'Name', type: 'text', required: true },
   { key: 'geometryPath', label: 'Geometry Path', type: 'text', required: true, placeholder: 'cafe-nollie' },
-  { key: 'playerSpawnX', label: 'Spawn X', type: 'number' },
-  { key: 'playerSpawnY', label: 'Spawn Y', type: 'number' },
-  { key: 'playerSpawnZ', label: 'Spawn Z', type: 'number' },
+  { key: 'gridX', label: 'Grid X', type: 'number' },
+  { key: 'gridZ', label: 'Grid Z', type: 'number' },
+  { key: 'playerSpawnX', label: 'Player Spawn X', type: 'number' },
+  { key: 'playerSpawnY', label: 'Player Spawn Y', type: 'number' },
+  { key: 'playerSpawnZ', label: 'Player Spawn Z', type: 'number' },
   { key: 'fromEpisode', label: 'Available From Episode', type: 'text', placeholder: 'episode-uuid' },
   { key: 'untilEpisode', label: 'Available Until Episode', type: 'text', placeholder: 'episode-uuid' },
 ];
@@ -916,6 +918,7 @@ export class RegionPanel extends BasePanel {
       id,
       name: 'New Region',
       geometry: { path: '' },
+      gridPosition: { x: 0, z: 0 },
       playerSpawn: { x: 0, y: 0, z: 0 },
       npcs: [],
       triggers: [],
@@ -937,6 +940,8 @@ export class RegionPanel extends BasePanel {
         id: region.id,
         name: region.name,
         geometryPath: region.geometry?.path ?? '',
+        gridX: region.gridPosition?.x ?? 0,
+        gridZ: region.gridPosition?.z ?? 0,
         playerSpawnX: region.playerSpawn.x,
         playerSpawnY: region.playerSpawn.y,
         playerSpawnZ: region.playerSpawn.z,
@@ -962,6 +967,16 @@ export class RegionPanel extends BasePanel {
         region.geometry = { path: '' };
       }
       region.geometry.path = value as string;
+    } else if (key === 'gridX') {
+      if (!region.gridPosition) {
+        region.gridPosition = { x: 0, z: 0 };
+      }
+      region.gridPosition.x = value as number;
+    } else if (key === 'gridZ') {
+      if (!region.gridPosition) {
+        region.gridPosition = { x: 0, z: 0 };
+      }
+      region.gridPosition.z = value as number;
     } else if (key === 'playerSpawnX') {
       region.playerSpawn.x = value as number;
     } else if (key === 'playerSpawnY') {

@@ -216,7 +216,10 @@ export class SaveManager {
 
   private gatherPlayerState(): GameSaveData['player'] {
     const position = this.engine!.getPlayerPosition?.() ?? { x: 0, y: 0, z: 0 };
-    const currentRegion = this.engine!.getCurrentRegion?.() ?? '/regions/test/';
+    const currentRegion = this.engine!.getCurrentRegion?.();
+    if (!currentRegion) {
+      throw new Error('Cannot save: no region is currently loaded');
+    }
 
     return {
       position,

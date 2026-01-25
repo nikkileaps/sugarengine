@@ -31,6 +31,38 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   const isDevelopmentMode = !!projectData;
 
+  // Determine start region from episode if in development mode
+  let startRegionPath: string | null = null;
+
+  if (isDevelopmentMode && projectData) {
+    const project = projectData as {
+      episodes?: { id: string; startRegion?: string }[];
+      regions?: { id: string; name?: string; geometry?: { path: string } }[];
+    };
+
+    // Find the episode (use provided episodeId or first episode)
+    const episode = episodeId ? project.episodes?.find(e => e.id === episodeId) : project.episodes?.[0];
+
+    if (episode?.startRegion) {
+      // Find the region and use its geometry.path
+      const region = project.regions?.find(r => r.id === episode.startRegion);
+      if (region?.geometry?.path) {
+        startRegionPath = region.geometry.path;
+      } else {
+        throw new Error(`Region '${episode.startRegion}' has no geometry.path configured`);
+      }
+    } else if (episode) {
+      throw new Error(`Episode '${episode.id}' has no startRegion configured`);
+    } else {
+      throw new Error('No episode found in project');
+    }
+  }
+
+  // No fallback - require proper configuration
+  if (!startRegionPath) {
+    throw new Error('No start region configured. Set startRegion on the episode or ensure the region has a geometry.path.');
+  }
+
   // Create game with all systems wired up
   const game = new Game({
     container,
@@ -44,7 +76,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
       autoSaveEnabled: !isDevelopmentMode, // Disable auto-save in dev mode
       autoSaveDebounceMs: 10000
     },
-    startRegion: '/regions/test/',
+    startRegion: startRegionPath,
     startQuest: isDevelopmentMode ? undefined : 'intro-quest',
     startItems: isDevelopmentMode ? [] : [
       { itemId: 'fresh-bread', quantity: 2 },
@@ -72,6 +104,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   const debugHUD = new DebugHUD(container, game.quests);
 
   debugHUD.setPlayerPositionProvider(() => game.getPlayerPosition());
+  debugHUD.setRegionInfoProvider(() => game.getRegionInfo());
 
   // ========================================
   // Game Event Handlers → UI Updates
@@ -234,7 +267,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   // Start Game
   // ========================================
 
-  await game.loadRegion('/regions/test/');
+  await game.loadRegion(startRegionPath);
   game.run();
   game.pause();
   await game.showTitle();

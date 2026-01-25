@@ -10,6 +10,8 @@ export type {
   PickupDefinition,
   InspectableDefinition,
   Vec3,
+  GridPosition,
+  RegionStreamingConfig,
   LightingDefinition,
   LightDefinition,
   FogDefinition,

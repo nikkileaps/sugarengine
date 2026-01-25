@@ -12,6 +12,9 @@ export interface EditorState {
   isDirty: boolean;
   validationErrors: ValidationError[];
   searchQuery: string;
+  // Project context
+  projectLoaded: boolean;
+  projectName: string | null;
   // Episode context
   currentSeasonId: string | null;
   currentEpisodeId: string | null;
@@ -31,6 +34,8 @@ const initialState: EditorState = {
   isDirty: false,
   validationErrors: [],
   searchQuery: '',
+  projectLoaded: false,
+  projectName: null,
   currentSeasonId: null,
   currentEpisodeId: null,
   episodeFilter: 'all',
@@ -76,6 +81,10 @@ class EditorStoreClass extends Store<EditorState> {
 
   setEpisodeFilter(filter: 'all' | 'current'): void {
     this.setState({ episodeFilter: filter });
+  }
+
+  setProjectLoaded(loaded: boolean, name: string | null = null): void {
+    this.setState({ projectLoaded: loaded, projectName: name });
   }
 }
 

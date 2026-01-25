@@ -30,6 +30,9 @@ export interface Episode {
   name: string;         // "Episode 1: New Beginnings"
   order: number;        // 1, 2, 3... within season
 
+  /** Region ID where the player spawns when starting this episode */
+  startRegion: string;
+
   /** What marks this episode as complete */
   completionCondition?: CompletionCondition;
 

@@ -6,6 +6,7 @@ import { QuestManager } from '../quests/QuestManager';
  */
 export class DebugHUD {
   private container: HTMLDivElement;
+  private regionInfo: HTMLDivElement;
   private questInfo: HTMLDivElement;
   private positionInfo: HTMLDivElement;
   private fpsInfo: HTMLDivElement;
@@ -13,6 +14,7 @@ export class DebugHUD {
 
   private quests: QuestManager;
   private getPlayerPosition: (() => { x: number; y: number; z: number } | null) | null = null;
+  private getRegionInfo: (() => { path: string; name?: string } | null) | null = null;
 
   private lastFrameTime = performance.now();
   private frameCount = 0;
@@ -63,6 +65,11 @@ export class DebugHUD {
     this.positionInfo.style.cssText = 'margin-bottom: 8px; color: #80c0ff;';
     this.container.appendChild(this.positionInfo);
 
+    // Region info
+    this.regionInfo = document.createElement('div');
+    this.regionInfo.style.cssText = 'margin-bottom: 8px; color: #c080ff;';
+    this.container.appendChild(this.regionInfo);
+
     // Quest info
     this.questInfo = document.createElement('div');
     this.questInfo.style.cssText = 'color: #ffcc80;';
@@ -84,6 +91,13 @@ export class DebugHUD {
    */
   setPlayerPositionProvider(fn: () => { x: number; y: number; z: number } | null): void {
     this.getPlayerPosition = fn;
+  }
+
+  /**
+   * Set function to get current region info
+   */
+  setRegionInfoProvider(fn: () => { path: string; name?: string } | null): void {
+    this.getRegionInfo = fn;
   }
 
   /**
@@ -119,6 +133,19 @@ export class DebugHUD {
       }
     } else {
       this.positionInfo.textContent = '';
+    }
+
+    // Region info
+    if (this.getRegionInfo) {
+      const region = this.getRegionInfo();
+      if (region) {
+        const name = region.name || region.path;
+        this.regionInfo.textContent = `Region: ${name}`;
+      } else {
+        this.regionInfo.textContent = 'Region: (none)';
+      }
+    } else {
+      this.regionInfo.textContent = 'Region: --';
     }
 
     // Quest info

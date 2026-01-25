@@ -6,7 +6,7 @@
 
 // Core
 export { SugarEngine } from './core/Engine';
-export type { EngineConfig, CameraConfig } from './core/Engine';
+export type { EngineConfig, CameraConfig, LoadedRegionState, NPCDatabaseEntry } from './core/Engine';
 export { Game } from './core/Game';
 export type { GameConfig, GameEventHandlers } from './core/Game';
 export { GameCamera } from './core/GameCamera';
@@ -52,7 +52,10 @@ export type {
 // Loaders
 export { ModelLoader } from './loaders/ModelLoader';
 export { RegionLoader } from './loaders/RegionLoader';
-export type { RegionData, LoadedRegion } from './loaders/RegionLoader';
+export type { RegionData, LoadedRegion, RegionStreamingConfig, GridPosition, Vec3 } from './loaders/RegionLoader';
+
+// Streaming
+export * from './streaming';
 
 // Dialogue
 export { DialogueManager } from './dialogue/DialogueManager';

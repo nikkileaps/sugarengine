@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, WorldLabel } from '../components';
 import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem } from '../systems';
-import { ModelLoader, RegionLoader, LoadedRegion, RegionData } from '../loaders';
+import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3 } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
+import { getRegionWorldOffset, gridKey } from '../streaming';
 
 export interface CameraConfig {
   style: 'isometric' | 'perspective';
@@ -30,6 +31,20 @@ export interface NPCDatabaseEntry {
   dialogue?: string;
 }
 
+/**
+ * Tracks a loaded region and all entities belonging to it.
+ * Used for multi-region streaming support.
+ */
+export interface LoadedRegionState {
+  region: LoadedRegion;
+  worldOffset: Vec3;
+  triggerEntities: number[];
+  npcEntities: number[];
+  pickupEntities: number[];
+  inspectableEntities: number[];
+  lights: THREE.Light[];
+}
+
 export class SugarEngine {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -38,12 +53,20 @@ export class SugarEngine {
   private clock: THREE.Clock;
   private postProcessing: PostProcessing;
   private playerEntity: number = -1;
+
+  // Multi-region support
+  private loadedRegions: Map<string, LoadedRegionState> = new Map();  // regionId -> state
+  private activeRegionId: string | null = null;  // Region player is in (for lighting/fog)
+  private streamingConfig: RegionStreamingConfig = { regionSize: 64, streamingDistance: 1 };
+
+  // Legacy single-region support (for backward compatibility)
   private currentRegion: LoadedRegion | null = null;
   private regionLights: THREE.Light[] = [];
   private triggerEntities: number[] = [];
   private npcEntities: number[] = [];
   private pickupEntities: number[] = [];
   private inspectableEntities: number[] = [];
+
   private triggerSystem: TriggerSystem;
   private interactionSystem: InteractionSystem;
   private movementSystem: MovementSystem;
@@ -55,6 +78,7 @@ export class SugarEngine {
   private isRunning: boolean = false;
   private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
   private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
+  private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
   private worldLabelSystem: WorldLabelSystem;
 
   readonly world: World;
@@ -146,6 +170,46 @@ export class SugarEngine {
    */
   registerRegion(region: RegionData): void {
     this.regionRegistry.set(region.geometry.path, region);
+    // Also index by grid position for streaming lookup
+    if (region.gridPosition) {
+      const key = gridKey(region.gridPosition);
+      this.regionsByGridKey.set(key, region);
+    }
+  }
+
+  /**
+   * Set the streaming configuration for multi-region support.
+   */
+  setStreamingConfig(config: RegionStreamingConfig): void {
+    this.streamingConfig = config;
+  }
+
+  /**
+   * Get the streaming configuration.
+   */
+  getStreamingConfig(): RegionStreamingConfig {
+    return this.streamingConfig;
+  }
+
+  /**
+   * Get a region by its grid position.
+   */
+  getRegionAtGrid(x: number, z: number): RegionData | undefined {
+    return this.regionsByGridKey.get(gridKey({ x, z }));
+  }
+
+  /**
+   * Check if a region is currently loaded.
+   */
+  isRegionLoaded(regionId: string): boolean {
+    return this.loadedRegions.has(regionId);
+  }
+
+  /**
+   * Get all currently loaded regions.
+   */
+  getLoadedRegions(): LoadedRegionState[] {
+    return Array.from(this.loadedRegions.values());
   }
 
   async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void> {
@@ -418,6 +482,309 @@ export class SugarEngine {
     }
 
     console.log(`Loaded region: ${this.currentRegion.data.name}`);
+  }
+
+  /**
+   * Load a region by ID for multi-region streaming.
+   * Positions the region at its grid position and tracks all spawned entities.
+   */
+  async loadRegionById(regionId: string, collectedPickups?: string[]): Promise<void> {
+    // Check if already loaded
+    if (this.loadedRegions.has(regionId)) {
+      return;
+    }
+
+    // Find region by ID
+    const regionData = Array.from(this.regionRegistry.values()).find(r => r.id === regionId);
+    if (!regionData) {
+      throw new Error(`Region not found: ${regionId}`);
+    }
+
+    // Calculate world offset from grid position
+    const worldOffset = getRegionWorldOffset(
+      regionData.gridPosition ?? { x: 0, z: 0 },
+      this.streamingConfig
+    );
+
+    // Load region geometry and data
+    const loadedRegion = await this.regions.load(regionData);
+
+    // Position geometry at world offset
+    loadedRegion.geometry.position.set(worldOffset.x, worldOffset.y, worldOffset.z);
+    this.scene.add(loadedRegion.geometry);
+
+    // Track state for this region
+    const state: LoadedRegionState = {
+      region: loadedRegion,
+      worldOffset,
+      triggerEntities: [],
+      npcEntities: [],
+      pickupEntities: [],
+      inspectableEntities: [],
+      lights: []
+    };
+
+    // Create trigger entities (offset by world position)
+    for (const triggerDef of regionData.triggers) {
+      const entity = this.world.createEntity();
+      this.world.addComponent(entity, new TriggerZone(
+        triggerDef.id,
+        triggerDef.bounds.min[0] + worldOffset.x,
+        triggerDef.bounds.min[1] + worldOffset.y,
+        triggerDef.bounds.min[2] + worldOffset.z,
+        triggerDef.bounds.max[0] + worldOffset.x,
+        triggerDef.bounds.max[1] + worldOffset.y,
+        triggerDef.bounds.max[2] + worldOffset.z,
+        triggerDef.event
+      ));
+      state.triggerEntities.push(entity);
+    }
+
+    // Create NPC entities (offset by world position)
+    for (const npcDef of regionData.npcs) {
+      const entity = this.world.createEntity();
+      const worldX = npcDef.position.x + worldOffset.x;
+      const worldY = npcDef.position.y + worldOffset.y;
+      const worldZ = npcDef.position.z + worldOffset.z;
+
+      this.world.addComponent(entity, new Position(worldX, worldY, worldZ));
+
+      const npcInfo = this.npcDatabase.get(npcDef.id);
+      const displayName = npcInfo?.name ?? npcDef.id;
+      const dialogueId = npcInfo?.dialogue;
+
+      this.world.addComponent(entity, new NPC(npcDef.id, displayName, dialogueId));
+
+      if (npcDef.movement) {
+        this.world.addComponent(entity, new Velocity());
+        const waypoints: Waypoint[] = npcDef.movement.waypoints.map(wp => ({
+          x: wp.x + worldOffset.x,
+          y: wp.y + worldOffset.y,
+          z: wp.z + worldOffset.z,
+          pauseDuration: wp.pause ?? 0.5
+        }));
+        const npcMovement = new NPCMovement(
+          waypoints,
+          npcDef.movement.behavior,
+          npcDef.movement.speed ?? 2
+        );
+        npcMovement.isMoving = !npcDef.movement.startPaused;
+        this.world.addComponent(entity, npcMovement);
+      }
+
+      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(worldX, worldY + 0.7, worldZ);
+      mesh.name = `npc-${npcDef.id}`;
+      mesh.userData.npcId = npcDef.id;
+      mesh.userData.entityId = entity;
+      mesh.userData.regionId = regionId;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
+      this.world.addComponent(entity, new Renderable(mesh));
+      state.npcEntities.push(entity);
+    }
+
+    // Create pickup entities (offset by world position)
+    const pickups = regionData.pickups ?? [];
+    const collectedSet = new Set(collectedPickups ?? []);
+    for (const pickupDef of pickups) {
+      if (collectedSet.has(pickupDef.id)) continue;
+
+      const entity = this.world.createEntity();
+      const worldX = pickupDef.position.x + worldOffset.x;
+      const worldY = pickupDef.position.y + worldOffset.y;
+      const worldZ = pickupDef.position.z + worldOffset.z;
+
+      this.world.addComponent(entity, new Position(worldX, worldY, worldZ));
+      this.world.addComponent(entity, new ItemPickup(
+        pickupDef.id,
+        pickupDef.itemId,
+        pickupDef.quantity ?? 1
+      ));
+
+      const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xffdd44,
+        emissive: 0xffaa00,
+        emissiveIntensity: 0.5
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(worldX, worldY + 0.3, worldZ);
+      mesh.name = `pickup-${pickupDef.id}`;
+      mesh.userData.pickupId = pickupDef.id;
+      mesh.userData.entityId = entity;
+      mesh.userData.regionId = regionId;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      state.pickupEntities.push(entity);
+    }
+
+    // Create inspectable entities (offset by world position)
+    const inspectables = regionData.inspectables ?? [];
+    for (const inspectableDef of inspectables) {
+      const entity = this.world.createEntity();
+      const worldX = inspectableDef.position.x + worldOffset.x;
+      const worldY = inspectableDef.position.y + worldOffset.y;
+      const worldZ = inspectableDef.position.z + worldOffset.z;
+
+      this.world.addComponent(entity, new Position(worldX, worldY, worldZ));
+      this.world.addComponent(entity, new Inspectable(
+        inspectableDef.id,
+        inspectableDef.inspectionId,
+        inspectableDef.promptText
+      ));
+
+      const geometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x8888ff,
+        emissive: 0x4444aa,
+        emissiveIntensity: 0.3
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(worldX, worldY + 0.2, worldZ);
+      mesh.name = `inspectable-${inspectableDef.id}`;
+      mesh.userData.inspectableId = inspectableDef.id;
+      mesh.userData.entityId = entity;
+      mesh.userData.regionId = regionId;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      state.inspectableEntities.push(entity);
+    }
+
+    // Add lights from region (offset by world position)
+    for (const light of loadedRegion.lights) {
+      if (light.position) {
+        light.position.x += worldOffset.x;
+        light.position.z += worldOffset.z;
+      }
+      this.scene.add(light);
+      state.lights.push(light);
+    }
+
+    this.loadedRegions.set(regionId, state);
+    console.log(`Loaded region: ${regionData.name} at grid (${regionData.gridPosition?.x ?? 0}, ${regionData.gridPosition?.z ?? 0})`);
+  }
+
+  /**
+   * Unload a region by ID, removing all its entities and geometry.
+   */
+  unloadRegionById(regionId: string): void {
+    const state = this.loadedRegions.get(regionId);
+    if (!state) return;
+
+    // Remove geometry
+    this.scene.remove(state.region.geometry);
+
+    // Remove lights
+    for (const light of state.lights) {
+      this.scene.remove(light);
+    }
+
+    // Remove trigger entities
+    for (const entityId of state.triggerEntities) {
+      this.world.removeEntity(entityId);
+    }
+
+    // Remove NPC entities and their meshes/labels
+    for (const entityId of state.npcEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
+      const label = this.world.getComponent<WorldLabel>(entityId, WorldLabel);
+      if (label?.sprite) {
+        this.scene.remove(label.sprite);
+        label.sprite.material.map?.dispose();
+        (label.sprite.material as THREE.SpriteMaterial).dispose();
+      }
+      this.world.removeEntity(entityId);
+    }
+
+    // Remove pickup entities and their meshes
+    for (const entityId of state.pickupEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
+      this.world.removeEntity(entityId);
+    }
+
+    // Remove inspectable entities and their meshes
+    for (const entityId of state.inspectableEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
+      this.world.removeEntity(entityId);
+    }
+
+    this.loadedRegions.delete(regionId);
+
+    // Clear active region if it was unloaded
+    if (this.activeRegionId === regionId) {
+      this.activeRegionId = null;
+    }
+
+    console.log(`Unloaded region: ${regionId}`);
+  }
+
+  /**
+   * Set the active region (player's current region) for lighting and fog.
+   */
+  setActiveRegion(regionId: string): void {
+    const state = this.loadedRegions.get(regionId);
+    if (!state) return;
+
+    this.activeRegionId = regionId;
+
+    const lighting = state.region.mapData.lighting;
+    if (lighting) {
+      this.scene.background = new THREE.Color(lighting.backgroundColor);
+      if (lighting.fog?.enabled) {
+        this.scene.fog = new THREE.FogExp2(lighting.fog.color, lighting.fog.density);
+      } else {
+        this.scene.fog = null;
+      }
+    }
+
+    const postProcessingConfig = state.region.mapData.postProcessing;
+    if (postProcessingConfig?.bloom) {
+      this.postProcessing.setBloomConfig(postProcessingConfig.bloom);
+    }
+  }
+
+  /**
+   * Spawn player at a specific world position.
+   */
+  async spawnPlayerAt(worldPos: Vec3): Promise<void> {
+    if (this.playerEntity < 0) {
+      this.playerEntity = await this.createPlayer(worldPos.x, worldPos.y, worldPos.z);
+    } else {
+      const pos = this.world.getComponent<Position>(this.playerEntity, Position);
+      if (pos) {
+        pos.x = worldPos.x;
+        pos.y = worldPos.y + 0.75;
+        pos.z = worldPos.z;
+      }
+    }
+  }
+
+  /**
+   * Get the player's current world position.
+   */
+  getPlayerWorldPosition(): Vec3 | null {
+    if (this.playerEntity < 0) return null;
+    const pos = this.world.getComponent<Position>(this.playerEntity, Position);
+    if (!pos) return null;
+    return { x: pos.x, y: pos.y, z: pos.z };
   }
 
   private applyRegionLighting(): void {
@@ -936,6 +1303,19 @@ export class SugarEngine {
    */
   getCurrentRegion(): string {
     return this.currentRegionPath;
+  }
+
+  /**
+   * Get current region info (for debug display)
+   */
+  getCurrentRegionInfo(): { path: string; name?: string } | null {
+    if (!this.currentRegionPath) {
+      return null;
+    }
+    return {
+      path: this.currentRegionPath,
+      name: this.currentRegion?.data.name,
+    };
   }
 
   /**

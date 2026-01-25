@@ -61,6 +61,23 @@ export interface RegionAvailability {
 }
 
 /**
+ * Grid position for region placement in the world.
+ * Grid (0,0) is centered at world origin.
+ */
+export interface GridPosition {
+  x: number;  // Grid cell X coordinate
+  z: number;  // Grid cell Z coordinate
+}
+
+/**
+ * Configuration for region streaming (set once per project).
+ */
+export interface RegionStreamingConfig {
+  regionSize: number;       // Width/depth in world units (e.g., 64)
+  streamingDistance: number; // In grid cells (e.g., 2 = load current + 2 cells in each direction)
+}
+
+/**
  * Reference to geometry exported from Sugarbuilder.
  * Points to public/regions/{path}/ which contains geometry.glb and map.json.
  */
@@ -134,7 +151,8 @@ export interface RegionData {
   id: string;                    // UUID for region identification
   name: string;                  // Display name
   geometry: RegionGeometry;      // Reference to Sugarbuilder export
-  playerSpawn: Vec3;
+  gridPosition: GridPosition;    // Position in world grid (grid 0,0 centered at origin)
+  playerSpawn: Vec3;             // Local coordinates within region (0 to regionSize)
   npcs: NPCDefinition[];
   triggers: TriggerDefinition[];
   pickups?: PickupDefinition[];

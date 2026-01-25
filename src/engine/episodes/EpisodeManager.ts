@@ -17,6 +17,17 @@ import type {
   CompletionCondition,
 } from './types';
 import type { GameSaveData } from '../save/types';
+import type { RegionData, RegionStreamingConfig, Vec3 } from '../loaders';
+import { getEpisodeStartPosition } from '../streaming';
+
+/**
+ * Information needed to start an episode in the game.
+ */
+export interface EpisodeStartInfo {
+  episodeId: string;
+  regionId: string;
+  playerWorldPosition: Vec3;
+}
 
 export interface EpisodeManagerConfig {
   /** Base URL for fetching content (default: '') */
@@ -410,5 +421,71 @@ export class EpisodeManager {
     }
 
     return dialogues;
+  }
+
+  /**
+   * Get the start information for an episode.
+   * Returns the region ID and player world position.
+   *
+   * @param episodeId - The episode to start
+   * @param regions - Map of region ID to RegionData
+   * @param streamingConfig - Streaming configuration for world position calculation
+   */
+  getEpisodeStartInfo(
+    episodeId: string,
+    regions: Map<string, RegionData>,
+    streamingConfig: RegionStreamingConfig
+  ): EpisodeStartInfo | null {
+    const episode = this.getEpisode(episodeId);
+    if (!episode) {
+      console.warn(`Episode not found: ${episodeId}`);
+      return null;
+    }
+
+    if (!episode.startRegion) {
+      console.warn(`Episode ${episodeId} has no startRegion configured`);
+      return null;
+    }
+
+    const region = regions.get(episode.startRegion);
+    if (!region) {
+      console.warn(`Start region not found: ${episode.startRegion}`);
+      return null;
+    }
+
+    const playerWorldPosition = getEpisodeStartPosition(region, streamingConfig);
+
+    return {
+      episodeId,
+      regionId: episode.startRegion,
+      playerWorldPosition
+    };
+  }
+
+  /**
+   * Get all regions needed for an episode.
+   * In the future, this could analyze quest dependencies to determine required regions.
+   * For now, returns just the start region.
+   */
+  getEpisodeRegions(episodeId: string): string[] {
+    const episode = this.getEpisode(episodeId);
+    if (!episode) return [];
+
+    const regions: string[] = [];
+
+    if (episode.startRegion) {
+      regions.push(episode.startRegion);
+    }
+
+    // Include manually included regions
+    if (episode.manualIncludes?.regions) {
+      for (const regionId of episode.manualIncludes.regions) {
+        if (!regions.includes(regionId)) {
+          regions.push(regionId);
+        }
+      }
+    }
+
+    return regions;
   }
 }
