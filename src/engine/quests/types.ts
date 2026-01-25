@@ -54,6 +54,7 @@ export interface QuestDefinition {
   stages: QuestStage[];
   rewards?: QuestReward[];
   repeatable?: boolean;   // Can quest be done again after completion?
+  episodeId?: string;     // UUID of the episode this quest belongs to
 }
 
 /**

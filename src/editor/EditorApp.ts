@@ -16,13 +16,19 @@ import {
   NPCPanel,
   ItemPanel,
   InspectionPanel,
+  RegionPanel,
   setAvailableNPCs,
   setAvailableNPCsForDialogue,
   setAvailableItems,
   setAvailableDialogues,
   setAvailableQuests,
   setAvailableQuestsForItems,
+  setAvailableNPCsForRegion,
+  setAvailableItemsForRegion,
+  setAvailableInspectionsForRegion,
+  setAvailableEpisodesForRegion,
 } from './panels';
+import type { Season, Episode } from '../engine/episodes/types';
 
 export class EditorApp {
   private container: HTMLElement;
@@ -39,7 +45,15 @@ export class EditorApp {
   private npcPanel: NPCPanel;
   private itemPanel: ItemPanel;
   private inspectionPanel: InspectionPanel;
+  private regionPanel: RegionPanel;
   private panels!: Map<EditorTab, { show: () => void; hide: () => void; getElement: () => HTMLElement }>;
+
+  // Episode data
+  private seasons: Season[] = [];
+  private episodes: Episode[] = [];
+
+  // Track current tab to avoid unnecessary re-renders
+  private currentTab: EditorTab | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -54,6 +68,7 @@ export class EditorApp {
     this.npcPanel = new NPCPanel();
     this.itemPanel = new ItemPanel();
     this.inspectionPanel = new InspectionPanel();
+    this.regionPanel = new RegionPanel();
 
     this.panels = new Map<EditorTab, { show: () => void; hide: () => void; getElement: () => HTMLElement }>();
     this.panels.set('dialogues', this.dialoguePanel);
@@ -61,6 +76,7 @@ export class EditorApp {
     this.panels.set('npcs', this.npcPanel);
     this.panels.set('items', this.itemPanel);
     this.panels.set('inspections', this.inspectionPanel);
+    this.panels.set('regions', this.regionPanel);
 
     // Create layout
     this.createLayout();
@@ -68,10 +84,13 @@ export class EditorApp {
     // Initialize subsystems
     this.previewManager = new PreviewManager();
     this.toolbar = new Toolbar({
-      onPreview: () => this.previewManager.openPreview(),
+      onPreview: () => this.openPreview(),
       onSave: () => this.handleSave(),
       onLoad: () => this.handleLoad(),
       onPublish: () => this.handlePublish(),
+      onEpisodeChange: (episodeId) => this.handleEpisodeChange(episodeId),
+      onSeasonChange: (seasonId) => this.handleSeasonChange(seasonId),
+      onEpisodeCreate: () => this.handleEpisodeCreate(),
     });
 
     // Status bar
@@ -115,6 +134,7 @@ export class EditorApp {
       '3': 'npcs',
       '4': 'items',
       '5': 'inspections',
+      '6': 'regions',
     };
 
     document.addEventListener('keydown', (e) => {
@@ -180,6 +200,11 @@ export class EditorApp {
   }
 
   private showPanel(tab: EditorTab): void {
+    // Only update if tab actually changed
+    if (tab === this.currentTab) return;
+
+    this.currentTab = tab;
+
     for (const [id, panel] of this.panels) {
       if (id === tab) {
         panel.show();
@@ -229,11 +254,30 @@ export class EditorApp {
     const dialogues = this.dialoguePanel.getDialogues();
     const quests = this.questPanel.getQuests();
     const npcs = this.npcPanel.getNPCs();
+    const items = this.itemPanel.getItems();
+    const inspections = this.inspectionPanel.getInspections();
 
     // Set NPCs for dialogue panel speaker dropdown
     const npcList = npcs.map(n => ({ id: n.id, name: n.name }));
     setAvailableNPCs(npcList);
     setAvailableNPCsForDialogue(npcList);
+    setAvailableNPCsForRegion(npcList);
+
+    // Set items for region panel
+    const itemList = items.map(i => ({ id: i.id, name: i.name }));
+    setAvailableItemsForRegion(itemList);
+
+    // Set inspections for region panel
+    setAvailableInspectionsForRegion(inspections.map(i => ({
+      id: i.id,
+      displayName: i.title,
+    })));
+
+    // Set episodes for region panel availability
+    setAvailableEpisodesForRegion(this.episodes.map(e => ({
+      id: e.id,
+      name: e.name,
+    })));
 
     // Set dialogues for NPC panel reference tracking
     // Extract speaker info from nodes
@@ -252,6 +296,10 @@ export class EditorApp {
     }));
     setAvailableQuests(questData);
     setAvailableQuestsForItems(questData);
+
+    // Update toolbar with seasons/episodes
+    this.toolbar.setSeasons(this.seasons);
+    this.toolbar.setEpisodes(this.episodes);
 
     // Populate command palette
     this.populateCommandPalette();
@@ -408,6 +456,48 @@ export class EditorApp {
     }
   }
 
+  private openPreview(): void {
+    // Pass project data to preview
+    const projectData = this.getProjectData();
+    const currentEpisodeId = editorStore.getState().currentEpisodeId;
+    this.previewManager.openPreviewWithData(projectData, currentEpisodeId || undefined);
+  }
+
+  private handleEpisodeChange(episodeId: string): void {
+    console.log('Episode changed:', episodeId);
+    this.setupCrossReferences();
+  }
+
+  private handleSeasonChange(seasonId: string): void {
+    console.log('Season changed:', seasonId);
+    this.setupCrossReferences();
+  }
+
+  private handleEpisodeCreate(): void {
+    // Update toolbar with new episode data
+    this.toolbar.setSeasons(this.seasons);
+    this.toolbar.setEpisodes(this.episodes);
+    this.setupCrossReferences();
+  }
+
+  private getProjectData() {
+    return {
+      version: 2,
+      meta: {
+        gameId: 'sugar-game',
+        name: 'Sugar Engine Game',
+      },
+      seasons: this.seasons,
+      episodes: this.episodes,
+      dialogues: this.dialoguePanel.getDialogues(),
+      quests: this.questPanel.getQuests(),
+      npcs: this.npcPanel.getNPCs(),
+      items: this.itemPanel.getItems(),
+      inspections: this.inspectionPanel.getInspections(),
+      regions: this.regionPanel.getRegions(),
+    };
+  }
+
   private getAllData() {
     return {
       dialogues: this.dialoguePanel.getDialogues(),
@@ -415,6 +505,7 @@ export class EditorApp {
       npcs: this.npcPanel.getNPCs(),
       items: this.itemPanel.getItems(),
       inspections: this.inspectionPanel.getInspections(),
+      regions: this.regionPanel.getRegions(),
     };
   }
 
@@ -429,14 +520,7 @@ export class EditorApp {
   private async handleSave(): Promise<void> {
     this.statusBar.setStatus('Saving...');
 
-    const data = {
-      version: 1,
-      dialogues: this.dialoguePanel.getDialogues(),
-      quests: this.questPanel.getQuests(),
-      npcs: this.npcPanel.getNPCs(),
-      items: this.itemPanel.getItems(),
-      inspections: this.inspectionPanel.getInspections(),
-    };
+    const data = this.getProjectData();
 
     try {
       // Try File System Access API first (Chrome/Edge)
@@ -526,6 +610,30 @@ export class EditorApp {
       this.npcPanel.clear();
       this.itemPanel.clear();
       this.inspectionPanel.clear();
+      this.regionPanel.clear();
+      this.seasons = [];
+      this.episodes = [];
+
+      // Load seasons and episodes (v2 format)
+      for (const season of data.seasons || []) {
+        this.seasons.push(season);
+      }
+
+      for (const episode of data.episodes || []) {
+        this.episodes.push(episode);
+      }
+
+      // Set current episode context
+      const firstSeason = this.seasons[0];
+      if (firstSeason) {
+        editorStore.setCurrentSeason(firstSeason.id);
+      }
+      if (this.episodes.length > 0) {
+        const firstEpisode = this.episodes.find(e => e.order === 1);
+        if (firstEpisode) {
+          editorStore.setCurrentEpisode(firstEpisode.id);
+        }
+      }
 
       // Load dialogues
       for (const dialogue of data.dialogues || []) {
@@ -550,6 +658,11 @@ export class EditorApp {
       // Load inspections
       for (const inspection of data.inspections || []) {
         this.inspectionPanel.addInspection(inspection);
+      }
+
+      // Load regions (v2 format)
+      for (const region of data.regions || []) {
+        this.regionPanel.addRegion(region);
       }
 
       // Refresh cross-references

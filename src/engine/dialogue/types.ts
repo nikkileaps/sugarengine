@@ -76,6 +76,7 @@ export interface DialogueTree {
   displayName?: string;     // Human-readable name shown in UI
   startNode: string;        // ID of first node
   nodes: DialogueNode[];    // All nodes in this dialogue
+  episodeId?: string;       // UUID of the episode this dialogue belongs to
 }
 
 /**

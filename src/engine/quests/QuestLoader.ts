@@ -80,6 +80,28 @@ export class QuestLoader {
   }
 
   /**
+   * Register a quest directly (for development mode)
+   */
+  register(questId: string, definition: QuestDefinition): void {
+    // Build lookup maps
+    const stageMap = new Map<string, QuestStage>();
+    const objectiveMap = new Map<string, QuestObjective>();
+
+    for (const stage of definition.stages) {
+      stageMap.set(stage.id, stage);
+      for (const objective of stage.objectives) {
+        objectiveMap.set(objective.id, objective);
+      }
+    }
+
+    this.cache.set(questId, {
+      definition,
+      stageMap,
+      objectiveMap,
+    });
+  }
+
+  /**
    * Clear the cache
    */
   clearCache(): void {

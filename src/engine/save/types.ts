@@ -1,7 +1,15 @@
 /**
  * Save data format version for migration support
  */
-export const SAVE_DATA_VERSION = 1;
+export const SAVE_DATA_VERSION = 2;
+
+/**
+ * Episode progression data
+ */
+export interface EpisodeProgressionData {
+  currentEpisodeId: string;
+  completedEpisodeIds: string[];
+}
 
 /**
  * Player position data
@@ -77,6 +85,8 @@ export interface GameSaveData {
   world: {
     collectedPickups: CollectedPickupsData;
   };
+
+  episodes?: EpisodeProgressionData;
 }
 
 /**

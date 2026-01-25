@@ -539,4 +539,11 @@ export class QuestManager {
 
     this.activeQuests.set(savedState.questId, state);
   }
+
+  /**
+   * Register a quest directly (for development mode)
+   */
+  registerQuest(questId: string, quest: unknown): void {
+    this.loader.register(questId, quest as import('./types').QuestDefinition);
+  }
 }

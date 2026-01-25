@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, WorldLabel } from '../components';
 import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem } from '../systems';
-import { ModelLoader, RegionLoader, LoadedRegion } from '../loaders';
+import { ModelLoader, RegionLoader, LoadedRegion, RegionData } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
@@ -54,6 +54,7 @@ export class SugarEngine {
   private isPaused: boolean = false;
   private isRunning: boolean = false;
   private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
+  private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
   private worldLabelSystem: WorldLabelSystem;
 
   readonly world: World;
@@ -140,7 +141,20 @@ export class SugarEngine {
     this.renderer.domElement.addEventListener('click', (event) => this.handleClick(event));
   }
 
+  /**
+   * Register a region from the project. Call this for each region before loading.
+   */
+  registerRegion(region: RegionData): void {
+    this.regionRegistry.set(region.geometry.path, region);
+  }
+
   async loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void> {
+    // Look up RegionData from registry
+    const regionData = this.regionRegistry.get(regionPath);
+    if (!regionData) {
+      throw new Error(`Region not found in registry: ${regionPath}. Call registerRegion() first.`);
+    }
+
     // Track current region path for saving
     this.currentRegionPath = regionPath;
 
@@ -198,8 +212,8 @@ export class SugarEngine {
     }
     this.inspectableEntities = [];
 
-    // Load new region
-    this.currentRegion = await this.regions.load(regionPath);
+    // Load new region using RegionData
+    this.currentRegion = await this.regions.load(regionData);
 
     // Apply lighting and atmosphere
     this.applyRegionLighting();
@@ -234,10 +248,10 @@ export class SugarEngine {
         npcDef.position.z
       ));
 
-      // NPC data - look up display name from database, fall back to ID
+      // NPC data - look up display name and dialogue from database
       const npcInfo = this.npcDatabase.get(npcDef.id);
       const displayName = npcInfo?.name ?? npcDef.id;
-      const dialogueId = npcDef.dialogue ?? npcInfo?.dialogue;
+      const dialogueId = npcInfo?.dialogue;
 
       this.world.addComponent(entity, new NPC(
         npcDef.id,
@@ -407,11 +421,11 @@ export class SugarEngine {
   }
 
   private applyRegionLighting(): void {
-    if (!this.currentRegion?.data.lighting) {
+    if (!this.currentRegion?.mapData.lighting) {
       return;
     }
 
-    const lighting = this.currentRegion.data.lighting;
+    const lighting = this.currentRegion.mapData.lighting;
 
     // Apply background color
     this.scene.background = new THREE.Color(lighting.backgroundColor);
@@ -430,7 +444,7 @@ export class SugarEngine {
     }
 
     // Apply bloom settings if available
-    const postProcessingConfig = this.currentRegion.data.postProcessing;
+    const postProcessingConfig = this.currentRegion.mapData.postProcessing;
     if (postProcessingConfig?.bloom) {
       this.postProcessing.setBloomConfig(postProcessingConfig.bloom);
     }
@@ -922,5 +936,12 @@ export class SugarEngine {
    */
   getCurrentRegion(): string {
     return this.currentRegionPath;
+  }
+
+  /**
+   * Register an NPC directly (for development mode)
+   */
+  registerNPC(id: string, name: string, dialogue?: string): void {
+    this.npcDatabase.set(id, { id, name, dialogue });
   }
 }

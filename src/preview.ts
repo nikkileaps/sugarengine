@@ -2,6 +2,9 @@
  * Game Preview Entry Point
  *
  * This runs the actual game - opened from the editor's Preview button.
+ * Supports two modes:
+ * - Development: receives project data via postMessage from editor
+ * - Production: loads from published files
  */
 
 import {
@@ -15,8 +18,18 @@ import {
   DebugHUD,
 } from './engine';
 
-async function runGame() {
+interface ProjectMessage {
+  type: 'LOAD_PROJECT' | 'UPDATE_PROJECT';
+  project?: unknown;
+  episodeId?: string;
+}
+
+let gameInstance: Game | null = null;
+
+async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
+
+  const isDevelopmentMode = !!projectData;
 
   // Create game with all systems wired up
   const game = new Game({
@@ -28,16 +41,21 @@ async function runGame() {
       }
     },
     save: {
-      autoSaveEnabled: true,
+      autoSaveEnabled: !isDevelopmentMode, // Disable auto-save in dev mode
       autoSaveDebounceMs: 10000
     },
     startRegion: '/regions/test/',
-    startQuest: 'intro-quest',
-    startItems: [
+    startQuest: isDevelopmentMode ? undefined : 'intro-quest',
+    startItems: isDevelopmentMode ? [] : [
       { itemId: 'fresh-bread', quantity: 2 },
       { itemId: 'wildflower-bouquet' }
-    ]
+    ],
+    mode: isDevelopmentMode ? 'development' : 'production',
+    projectData,
+    currentEpisode: episodeId,
   });
+
+  gameInstance = game;
 
   await game.init();
 
@@ -222,4 +240,47 @@ async function runGame() {
   await game.showTitle();
 }
 
-runGame();
+// ========================================
+// Development Mode: Listen for project data from editor
+// ========================================
+
+// Check if we were opened by the editor
+const isFromEditor = !!window.opener;
+
+if (isFromEditor) {
+  // Notify editor we're ready to receive data
+  window.addEventListener('load', () => {
+    window.opener?.postMessage({ type: 'PREVIEW_READY' }, '*');
+  });
+
+  // Listen for project data from editor
+  window.addEventListener('message', async (event: MessageEvent<ProjectMessage>) => {
+    if (event.data.type === 'LOAD_PROJECT') {
+      console.log('[Preview] Received project data from editor');
+
+      const { project, episodeId } = event.data;
+
+      // If game is already running, update it
+      if (gameInstance) {
+        gameInstance.updateProjectData(project);
+        console.log('[Preview] Updated project data');
+      } else {
+        // Start new game with project data
+        await runGame(project, episodeId);
+      }
+    }
+
+    if (event.data.type === 'UPDATE_PROJECT') {
+      console.log('[Preview] Received project update from editor');
+
+      if (gameInstance) {
+        gameInstance.updateProjectData(event.data.project);
+      }
+    }
+  });
+
+  console.log('[Preview] Waiting for project data from editor...');
+} else {
+  // Production mode: run normally
+  runGame();
+}

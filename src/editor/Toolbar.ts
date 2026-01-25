@@ -4,18 +4,23 @@
  * Contains tabs and main actions: Preview, Publish, etc.
  */
 
-import { TabBar } from './components';
+import { TabBar, EpisodeSelector } from './components';
+import type { Season, Episode } from '../engine/episodes/types';
 
 export interface ToolbarOptions {
   onPreview: () => void;
   onSave: () => void;
   onLoad: () => void;
   onPublish: () => void;
+  onEpisodeChange?: (episodeId: string) => void;
+  onSeasonChange?: (seasonId: string) => void;
+  onEpisodeCreate?: () => void;
 }
 
 export class Toolbar {
   private element: HTMLElement;
   private tabBar: TabBar;
+  private episodeSelector: EpisodeSelector;
 
   constructor(options: ToolbarOptions) {
     this.element = document.createElement('div');
@@ -40,6 +45,14 @@ export class Toolbar {
     `;
     title.textContent = '🍬 Sugar Engine';
     this.element.appendChild(title);
+
+    // Episode selector
+    this.episodeSelector = new EpisodeSelector({
+      onEpisodeChange: options.onEpisodeChange,
+      onSeasonChange: options.onSeasonChange,
+      onCreate: options.onEpisodeCreate,
+    });
+    this.element.appendChild(this.episodeSelector.getElement());
 
     // Tab bar
     this.tabBar = new TabBar();
@@ -221,5 +234,13 @@ export class Toolbar {
 
   getElement(): HTMLElement {
     return this.element;
+  }
+
+  setSeasons(seasons: Season[]): void {
+    this.episodeSelector.setSeasons(seasons);
+  }
+
+  setEpisodes(episodes: Episode[]): void {
+    this.episodeSelector.setEpisodes(episodes);
   }
 }

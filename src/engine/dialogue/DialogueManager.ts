@@ -178,6 +178,13 @@ export class DialogueManager {
     await this.loader.preloadAll(dialogueIds);
   }
 
+  /**
+   * Register a dialogue directly (for development mode)
+   */
+  registerDialogue(dialogueId: string, dialogue: unknown): void {
+    this.loader.register(dialogueId, dialogue as import('./types').DialogueTree);
+  }
+
   dispose(): void {
     this.dialogueBox.dispose();
   }

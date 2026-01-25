@@ -73,4 +73,12 @@ export class ItemLoader {
   isLoaded(): boolean {
     return this.loaded;
   }
+
+  /**
+   * Register an item directly (for development mode)
+   */
+  registerItem(item: ItemDefinition): void {
+    this.items.set(item.id, item);
+    this.loaded = true;
+  }
 }

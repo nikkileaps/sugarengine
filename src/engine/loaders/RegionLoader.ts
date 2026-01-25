@@ -24,7 +24,6 @@ export interface NPCMovementDefinition {
 export interface NPCDefinition {
   id: string;
   position: Vec3;
-  dialogue?: string;
   movement?: NPCMovementDefinition;
 }
 
@@ -54,6 +53,29 @@ export interface InspectableDefinition {
   position: Vec3;
   inspectionId: string;
   promptText?: string;
+}
+
+export interface RegionAvailability {
+  fromEpisode?: string;   // First episode this region is accessible
+  untilEpisode?: string;  // Last episode (for temporary areas)
+}
+
+/**
+ * Reference to geometry exported from Sugarbuilder.
+ * Points to public/regions/{path}/ which contains geometry.glb and map.json.
+ */
+export interface RegionGeometry {
+  path: string;      // "cafe-nollie" -> public/regions/cafe-nollie/
+  version?: number;  // Export version from Sugarbuilder
+}
+
+/**
+ * Data loaded from Sugarbuilder's map.json (read-only, visual/rendering only).
+ */
+export interface SugarbuilderMapData {
+  version: number;
+  lighting?: LightingDefinition;
+  postProcessing?: PostProcessingDefinition;
 }
 
 export interface LightDefinition {
@@ -104,20 +126,25 @@ export interface PostProcessingDefinition {
   bloom?: BloomDefinition;
 }
 
+/**
+ * Region data managed by Sugar Engine (stored in project file).
+ * References Sugarbuilder geometry, defines game logic (spawns, player start).
+ */
 export interface RegionData {
-  version: number;
-  name: string;
+  id: string;                    // UUID for region identification
+  name: string;                  // Display name
+  geometry: RegionGeometry;      // Reference to Sugarbuilder export
   playerSpawn: Vec3;
-  lighting?: LightingDefinition;
-  postProcessing?: PostProcessingDefinition;
   npcs: NPCDefinition[];
   triggers: TriggerDefinition[];
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
+  availability?: RegionAvailability;
 }
 
 export interface LoadedRegion {
   data: RegionData;
+  mapData: SugarbuilderMapData;  // Loaded from map.json (lighting, etc.)
   geometry: THREE.Group;
   lights: THREE.Light[];
 }
@@ -125,12 +152,15 @@ export interface LoadedRegion {
 export class RegionLoader {
   constructor(private modelLoader: ModelLoader) {}
 
-  async load(regionPath: string): Promise<LoadedRegion> {
-    // Normalize path (ensure trailing slash)
-    const basePath = regionPath.endsWith('/') ? regionPath : `${regionPath}/`;
+  /**
+   * Load a region using RegionData from Sugar Engine.
+   * Loads geometry and map.json from the path specified in RegionData.geometry.
+   */
+  async load(regionData: RegionData): Promise<LoadedRegion> {
+    const basePath = `/regions/${regionData.geometry.path}/`;
 
     // Load map.json and geometry.glb in parallel
-    const [data, geometry] = await Promise.all([
+    const [mapData, geometry] = await Promise.all([
       this.loadMapData(`${basePath}map.json`),
       this.modelLoader.load(`${basePath}geometry.glb`)
     ]);
@@ -143,14 +173,14 @@ export class RegionLoader {
       }
     });
 
-    // Create lights from definition
-    const lights = data.lighting ? this.createLights(data.lighting) : [];
+    // Create lights from Sugarbuilder's lighting definition
+    const lights = mapData.lighting ? this.createLights(mapData.lighting) : [];
 
     // Auto-create point lights from emissive materials in the geometry
     const emissiveLights = this.createLightsFromEmissiveMaterials(geometry);
     lights.push(...emissiveLights);
 
-    return { data, geometry, lights };
+    return { data: regionData, mapData, geometry, lights };
   }
 
   private createLights(lighting: LightingDefinition): THREE.Light[] {
@@ -272,10 +302,10 @@ export class RegionLoader {
     return lights;
   }
 
-  private async loadMapData(url: string): Promise<RegionData> {
+  private async loadMapData(url: string): Promise<SugarbuilderMapData> {
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Failed to load region data: ${url}`);
+      throw new Error(`Failed to load region map data: ${url}`);
     }
     return response.json();
   }

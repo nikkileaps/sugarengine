@@ -49,6 +49,20 @@ export class DialogueLoader {
   }
 
   /**
+   * Register a dialogue directly (for development mode)
+   */
+  register(dialogueId: string, tree: DialogueTree): void {
+    // Build node lookup map
+    const nodeMap = new Map<string, DialogueNode>();
+    for (const node of tree.nodes) {
+      nodeMap.set(node.id, node);
+    }
+
+    const loaded: LoadedDialogue = { tree, nodeMap };
+    this.cache.set(dialogueId, loaded);
+  }
+
+  /**
    * Clear the cache
    */
   clearCache(): void {

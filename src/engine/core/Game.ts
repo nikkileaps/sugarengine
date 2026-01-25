@@ -5,6 +5,7 @@ import { QuestManager } from '../quests/QuestManager';
 import { InventoryManager } from '../inventory/InventoryManager';
 import { SaveManager, SaveManagerConfig } from '../save/SaveManager';
 import { SceneManager } from '../scenes/SceneManager';
+import { EpisodeManager } from '../episodes/EpisodeManager';
 import { ObjectiveType } from '../quests/types';
 
 export interface GameConfig {
@@ -14,6 +15,12 @@ export interface GameConfig {
   startRegion?: string;
   startQuest?: string;
   startItems?: { itemId: string; quantity?: number }[];
+  /** Development mode - use in-memory project data */
+  mode?: 'production' | 'development';
+  /** Project data for development mode */
+  projectData?: unknown;
+  /** Current episode ID for development mode */
+  currentEpisode?: string;
 }
 
 export interface GameEventHandlers {
@@ -37,10 +44,12 @@ export class Game {
   readonly inventory: InventoryManager;
   readonly saveManager: SaveManager;
   readonly sceneManager: SceneManager;
+  readonly episodes: EpisodeManager;
 
   private config: GameConfig;
   private eventHandlers: GameEventHandlers = {};
   private nearbyNpcId: string | null = null;
+  private projectData: unknown = null;
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -52,6 +61,11 @@ export class Game {
   constructor(config: GameConfig) {
     this.config = config;
     const { container } = config;
+
+    // Store project data for development mode
+    if (config.projectData) {
+      this.projectData = config.projectData;
+    }
 
     // Create engine
     this.engine = new SugarEngine({
@@ -73,6 +87,12 @@ export class Game {
     });
     this.sceneManager = new SceneManager(container);
 
+    // Create episode manager
+    this.episodes = new EpisodeManager({
+      developmentMode: config.mode === 'development',
+      projectData: config.projectData,
+    });
+
     // Wire up all cross-system connections
     this.wireUpSystems();
   }
@@ -84,10 +104,72 @@ export class Game {
     await this.inventory.init();
     await this.saveManager.init();
     await this.engine.loadNPCDatabase();
+    await this.episodes.initialize();
+
+    // If in development mode, register content from project data
+    if (this.config.mode === 'development' && this.projectData) {
+      await this.registerProjectContent(this.projectData);
+    }
 
     // Connect save manager to game systems
     this.saveManager.setGameSystems(this.engine, this.quests, this.inventory);
     this.sceneManager.setGameSystems(this.engine, this.saveManager);
+  }
+
+  /**
+   * Register content from project data (development mode)
+   */
+  private async registerProjectContent(projectData: unknown): Promise<void> {
+    const project = projectData as {
+      dialogues?: { id: string }[];
+      quests?: { id: string }[];
+      npcs?: { id: string; name: string }[];
+      items?: { id: string; name: string }[];
+    };
+
+    // Pre-register dialogues
+    if (project.dialogues) {
+      for (const dialogue of project.dialogues) {
+        this.dialogue.registerDialogue(dialogue.id, dialogue);
+      }
+    }
+
+    // Pre-register quests
+    if (project.quests) {
+      for (const quest of project.quests) {
+        this.quests.registerQuest(quest.id, quest);
+      }
+    }
+
+    // Register NPCs
+    if (project.npcs) {
+      for (const npc of project.npcs) {
+        this.engine.registerNPC(npc.id, npc.name);
+      }
+    }
+
+    // Register items
+    if (project.items) {
+      for (const item of project.items) {
+        this.inventory.registerItem(item);
+      }
+    }
+
+    console.log('[Game] Registered project content:', {
+      dialogues: project.dialogues?.length || 0,
+      quests: project.quests?.length || 0,
+      npcs: project.npcs?.length || 0,
+      items: project.items?.length || 0,
+    });
+  }
+
+  /**
+   * Update project data (for hot reload in development mode)
+   */
+  updateProjectData(projectData: unknown): void {
+    this.projectData = projectData;
+    // Re-register content
+    this.registerProjectContent(projectData);
   }
 
   /**

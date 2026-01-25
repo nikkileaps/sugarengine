@@ -2,6 +2,8 @@ export { ModelLoader } from './ModelLoader';
 export { RegionLoader } from './RegionLoader';
 export type {
   RegionData,
+  RegionGeometry,
+  SugarbuilderMapData,
   LoadedRegion,
   NPCDefinition,
   TriggerDefinition,

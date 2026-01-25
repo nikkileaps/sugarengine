@@ -193,4 +193,20 @@ export class InventoryManager {
   getLoader(): ItemLoader {
     return this.loader;
   }
+
+  /**
+   * Register an item directly (for development mode)
+   */
+  registerItem(item: { id: string; name: string; [key: string]: unknown }): void {
+    // Create a minimal item definition with required fields
+    const itemDef: ItemDefinition = {
+      id: item.id,
+      name: item.name,
+      description: (item.description as string) || '',
+      category: (item.category as 'quest' | 'gift' | 'key' | 'misc') || 'misc',
+      stackable: (item.stackable as boolean) ?? true,
+      giftable: (item.giftable as boolean) ?? false,
+    };
+    this.loader.registerItem(itemDef);
+  }
 }

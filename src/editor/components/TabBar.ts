@@ -16,6 +16,7 @@ const TABS: TabDefinition[] = [
   { id: 'npcs', label: 'NPCs', icon: '👤' },
   { id: 'items', label: 'Items', icon: '🎒' },
   { id: 'inspections', label: 'Inspections', icon: '🔍' },
+  { id: 'regions', label: 'Regions', icon: '🗺️' },
 ];
 
 export class TabBar {

@@ -19,3 +19,6 @@ export type { SearchableEntry } from './CommandPalette';
 
 export { KeyboardShortcuts } from './KeyboardShortcuts';
 export type { Shortcut } from './KeyboardShortcuts';
+
+export { EpisodeSelector } from './EpisodeSelector';
+export type { EpisodeSelectorConfig } from './EpisodeSelector';

@@ -4,7 +4,7 @@
 
 import { Store } from './Store';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions';
 
 export interface EditorState {
   activeTab: EditorTab;
@@ -12,6 +12,10 @@ export interface EditorState {
   isDirty: boolean;
   validationErrors: ValidationError[];
   searchQuery: string;
+  // Episode context
+  currentSeasonId: string | null;
+  currentEpisodeId: string | null;
+  episodeFilter: 'all' | 'current';
 }
 
 export interface ValidationError {
@@ -27,6 +31,9 @@ const initialState: EditorState = {
   isDirty: false,
   validationErrors: [],
   searchQuery: '',
+  currentSeasonId: null,
+  currentEpisodeId: null,
+  episodeFilter: 'all',
 };
 
 class EditorStoreClass extends Store<EditorState> {
@@ -57,6 +64,18 @@ class EditorStoreClass extends Store<EditorState> {
 
   clearValidationErrors(): void {
     this.setState({ validationErrors: [] });
+  }
+
+  setCurrentSeason(seasonId: string | null): void {
+    this.setState({ currentSeasonId: seasonId });
+  }
+
+  setCurrentEpisode(episodeId: string | null): void {
+    this.setState({ currentEpisodeId: episodeId });
+  }
+
+  setEpisodeFilter(filter: 'all' | 'current'): void {
+    this.setState({ episodeFilter: filter });
   }
 }
 
