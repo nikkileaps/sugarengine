@@ -88,4 +88,7 @@ export abstract class BasePanel {
 
   protected abstract onEntrySelect(id: string): void;
   protected abstract onFieldChange(key: string, value: unknown): void;
+
+  /** Clear all data from the panel */
+  abstract clear(): void;
 }

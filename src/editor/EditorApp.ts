@@ -69,6 +69,8 @@ export class EditorApp {
     this.previewManager = new PreviewManager();
     this.toolbar = new Toolbar({
       onPreview: () => this.previewManager.openPreview(),
+      onSave: () => this.handleSave(),
+      onLoad: () => this.handleLoad(),
       onPublish: () => this.handlePublish(),
     });
 
@@ -116,7 +118,21 @@ export class EditorApp {
     };
 
     document.addEventListener('keydown', (e) => {
-      // Don't trigger in input fields
+      // Cmd+S to save
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        this.handleSave();
+        return;
+      }
+
+      // Cmd+O to load
+      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+        e.preventDefault();
+        this.handleLoad();
+        return;
+      }
+
+      // Don't trigger in input fields for other shortcuts
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
         return;
@@ -171,6 +187,9 @@ export class EditorApp {
         panel.hide();
       }
     }
+
+    // Refresh cross-references when switching panels to pick up any changes
+    this.setupCrossReferences();
   }
 
   private async loadData(): Promise<void> {
@@ -209,11 +228,18 @@ export class EditorApp {
     // Get all loaded data
     const dialogues = this.dialoguePanel.getDialogues();
     const quests = this.questPanel.getQuests();
+    const npcs = this.npcPanel.getNPCs();
+
+    // Set NPCs for dialogue panel speaker dropdown
+    const npcList = npcs.map(n => ({ id: n.id, name: n.name }));
+    setAvailableNPCs(npcList);
+    setAvailableNPCsForDialogue(npcList);
 
     // Set dialogues for NPC panel reference tracking
     // Extract speaker info from nodes
     setAvailableDialogues(dialogues.map(d => ({
       id: d.id,
+      displayName: d.displayName,
       nodes: d.nodes?.map(n => ({ speaker: n.speaker })),
     })));
 
@@ -294,30 +320,7 @@ export class EditorApp {
   }
 
   private async loadDialogues(): Promise<void> {
-    try {
-      // Try to load dialogue index
-      const response = await fetch('/dialogue/index.json');
-      if (response.ok) {
-        const index = await response.json() as { dialogues: string[] };
-        const loadedDialogues: { id: string; name: string }[] = [];
-        for (const id of index.dialogues) {
-          const dialogueRes = await fetch(`/dialogue/${id}.json`);
-          if (dialogueRes.ok) {
-            const dialogue = await dialogueRes.json();
-            this.dialoguePanel.addDialogue(dialogue);
-            // Collect for quest picker - try to get a friendly name from the first node's speaker
-            const firstNode = dialogue.nodes?.find((n: { id: string }) => n.id === dialogue.startNode);
-            const speaker = firstNode?.speaker;
-            const name = speaker ? `${speaker}: ${dialogue.id}` : dialogue.id;
-            loadedDialogues.push({ id: dialogue.id, name });
-          }
-        }
-        // Update available dialogues for quest editor reference picker
-        setAvailableDialogues(loadedDialogues);
-      }
-    } catch {
-      // No dialogues to load
-    }
+    // Dialogues are loaded from .sgrgame project files
   }
 
   private async loadQuests(): Promise<void> {
@@ -339,21 +342,7 @@ export class EditorApp {
   }
 
   private async loadNPCs(): Promise<void> {
-    try {
-      const response = await fetch('/npcs/npcs.json');
-      if (response.ok) {
-        const data = await response.json() as { npcs: { id: string; name: string }[] };
-        for (const npc of data.npcs) {
-          this.npcPanel.addNPC(npc as Parameters<NPCPanel['addNPC']>[0]);
-        }
-        // Update available NPCs for quest editor and dialogue editor
-        const npcList = data.npcs.map(n => ({ id: n.id, name: n.name }));
-        setAvailableNPCs(npcList);
-        setAvailableNPCsForDialogue(npcList);
-      }
-    } catch {
-      // No NPCs to load
-    }
+    // NPCs are loaded from .sgrgame project files
   }
 
   private async loadItems(): Promise<void> {
@@ -397,7 +386,7 @@ export class EditorApp {
         'You have unsaved changes. Would you like to save before publishing?'
       );
       if (saveFirst) {
-        await this.saveAllData();
+        await this.handleSave();
       }
     }
 
@@ -437,12 +426,11 @@ export class EditorApp {
     // For now, just log - full implementation would require panel changes
   }
 
-  private async saveAllData(): Promise<void> {
+  private async handleSave(): Promise<void> {
     this.statusBar.setStatus('Saving...');
 
-    // In a browser environment, we can't directly write to files
-    // Instead, we'll log the data and prompt for download
     const data = {
+      version: 1,
       dialogues: this.dialoguePanel.getDialogues(),
       quests: this.questPanel.getQuests(),
       npcs: this.npcPanel.getNPCs(),
@@ -450,18 +438,131 @@ export class EditorApp {
       inspections: this.inspectionPanel.getInspections(),
     };
 
-    console.log('Editor data to save:', data);
+    try {
+      // Try File System Access API first (Chrome/Edge)
+      if ('showSaveFilePicker' in window) {
+        const handle = await (window as Window & { showSaveFilePicker: (options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }) => Promise<FileSystemFileHandle> }).showSaveFilePicker({
+          suggestedName: 'project.sgrgame',
+          types: [{
+            description: 'Sugar Engine Project',
+            accept: { 'application/json': ['.sgrgame'] },
+          }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(JSON.stringify(data, null, 2));
+        await writable.close();
+        editorStore.setDirty(false);
+        this.statusBar.setStatus('Project saved');
+        return;
+      }
+    } catch (e) {
+      // User cancelled or API not available
+      if ((e as Error).name === 'AbortError') {
+        this.statusBar.setStatus('Save cancelled');
+        return;
+      }
+    }
 
-    // Create downloadable JSON
+    // Fallback to download
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'editor-export.json';
+    a.download = 'project.sgrgame';
     a.click();
     URL.revokeObjectURL(url);
 
     editorStore.setDirty(false);
-    this.statusBar.setStatus('Data exported');
+    this.statusBar.setStatus('Project downloaded');
+  }
+
+  private async handleLoad(): Promise<void> {
+    try {
+      // Try File System Access API first (Chrome/Edge)
+      if ('showOpenFilePicker' in window) {
+        const handles = await (window as Window & { showOpenFilePicker: (options: { types: { description: string; accept: Record<string, string[]> }[] }) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker({
+          types: [{
+            description: 'Sugar Engine Project',
+            accept: { 'application/json': ['.sgrgame', '.json'] },
+          }],
+        });
+        const handle = handles[0];
+        if (!handle) return;
+        const file = await handle.getFile();
+        const text = await file.text();
+        await this.loadProjectData(text);
+        return;
+      }
+    } catch (e) {
+      // User cancelled or API not available
+      if ((e as Error).name === 'AbortError') {
+        return;
+      }
+    }
+
+    // Fallback to file input
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.sgrgame,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (file) {
+        const text = await file.text();
+        await this.loadProjectData(text);
+      }
+    };
+    input.click();
+  }
+
+  private async loadProjectData(jsonText: string): Promise<void> {
+    this.statusBar.setStatus('Loading project...');
+
+    try {
+      const data = JSON.parse(jsonText);
+
+      // Clear existing data
+      this.dialoguePanel.clear();
+      this.questPanel.clear();
+      this.npcPanel.clear();
+      this.itemPanel.clear();
+      this.inspectionPanel.clear();
+
+      // Load dialogues
+      for (const dialogue of data.dialogues || []) {
+        this.dialoguePanel.addDialogue(dialogue);
+      }
+
+      // Load quests
+      for (const quest of data.quests || []) {
+        this.questPanel.addQuest(quest);
+      }
+
+      // Load NPCs
+      for (const npc of data.npcs || []) {
+        this.npcPanel.addNPC(npc);
+      }
+
+      // Load items
+      for (const item of data.items || []) {
+        this.itemPanel.addItem(item);
+      }
+
+      // Load inspections
+      for (const inspection of data.inspections || []) {
+        this.inspectionPanel.addInspection(inspection);
+      }
+
+      // Refresh cross-references
+      this.setupCrossReferences();
+
+      // Re-initialize history
+      this.historyManager.initialize();
+
+      editorStore.setDirty(false);
+      this.statusBar.setStatus('Project loaded');
+    } catch (e) {
+      console.error('Failed to load project:', e);
+      this.statusBar.setStatus('Failed to load project');
+    }
   }
 }

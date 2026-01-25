@@ -105,6 +105,14 @@ export class ItemPanel extends BasePanel {
     return Array.from(this.items.values());
   }
 
+  clear(): void {
+    this.items.clear();
+    this.currentItemId = null;
+    this.updateEntryList();
+    this.clearInspector();
+    this.renderCenterPlaceholder();
+  }
+
   private updateEntryList(): void {
     const items = Array.from(this.items.values()).map(i => ({
       id: i.id,

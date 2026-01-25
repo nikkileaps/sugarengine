@@ -58,6 +58,14 @@ export class InspectionPanel extends BasePanel {
     return Array.from(this.inspections.values());
   }
 
+  clear(): void {
+    this.inspections.clear();
+    this.currentInspectionId = null;
+    this.updateEntryList();
+    this.clearInspector();
+    this.renderCenterPlaceholder();
+  }
+
   private updateEntryList(): void {
     const items = Array.from(this.inspections.values()).map(i => ({
       id: i.id,

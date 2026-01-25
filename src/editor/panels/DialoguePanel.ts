@@ -143,7 +143,6 @@ export class DialoguePanel {
    */
   updateSpeakerOptions(): void {
     const options: { value: string; label: string }[] = [
-      { value: '', label: '-- Select speaker --' },
       { value: PLAYER.id, label: PLAYER.displayName },
       { value: NARRATOR.id, label: NARRATOR.displayName },
     ];
@@ -180,6 +179,16 @@ export class DialoguePanel {
 
   getDialogues(): DialogueTree[] {
     return Array.from(this.dialogues.values());
+  }
+
+  clear(): void {
+    this.dialogues.clear();
+    this.nodePositions.clear();
+    this.currentDialogueId = null;
+    this.currentNodeId = null;
+    this.updateEntryList();
+    this.inspector.clear();
+    this.renderCenterPlaceholder();
   }
 
   private updateEntryList(): void {

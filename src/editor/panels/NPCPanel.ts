@@ -37,7 +37,7 @@ interface QuestReference {
 }
 
 // Available data for reference tracking
-let availableDialogues: { id: string; speakerId?: string; nodes?: { speaker?: string }[] }[] = [];
+let availableDialogues: { id: string; displayName?: string; nodes?: { speaker?: string }[] }[] = [];
 let availableQuests: { id: string; name: string; stages: { id: string; description: string; objectives: { type: string; target: string; description: string }[] }[] }[] = [];
 
 export function setAvailableDialogues(dialogues: typeof availableDialogues): void {
@@ -81,6 +81,14 @@ export class NPCPanel extends BasePanel {
     return Array.from(this.npcs.values());
   }
 
+  clear(): void {
+    this.npcs.clear();
+    this.currentNpcId = null;
+    this.updateEntryList();
+    this.clearInspector();
+    this.renderCenterPlaceholder();
+  }
+
   private updateEntryList(): void {
     const items = Array.from(this.npcs.values()).map(n => {
       const warnings = this.validateNPC(n);
@@ -119,24 +127,16 @@ export class NPCPanel extends BasePanel {
     const refs: DialogueReference[] = [];
 
     for (const dialogue of availableDialogues) {
-      // Check if NPC is the main speaker
-      if (dialogue.speakerId === npcId) {
-        refs.push({
-          id: dialogue.id,
-          name: dialogue.id,
-          type: 'speaker',
-        });
-      }
-
-      // Check if NPC appears in any nodes
+      // Check if NPC appears as speaker in any nodes
       if (dialogue.nodes) {
         for (const node of dialogue.nodes) {
           if (node.speaker === npcId && !refs.some(r => r.id === dialogue.id)) {
             refs.push({
               id: dialogue.id,
-              name: dialogue.id,
+              name: dialogue.displayName || dialogue.id,
               type: 'speaker',
             });
+            break; // Only add once per dialogue
           }
         }
       }
@@ -377,22 +377,6 @@ export class NPCPanel extends BasePanel {
       dialogueLink.appendChild(link);
 
       info.appendChild(dialogueLink);
-    } else {
-      // Quick-create dialogue button
-      const createBtn = document.createElement('button');
-      createBtn.textContent = '+ Create Dialogue';
-      createBtn.style.cssText = `
-        margin-top: 8px;
-        padding: 6px 12px;
-        border: 1px dashed #a6e3a1;
-        border-radius: 4px;
-        background: transparent;
-        color: #a6e3a1;
-        font-size: 12px;
-        cursor: pointer;
-      `;
-      createBtn.onclick = () => this.createDialogueForNPC(npc);
-      info.appendChild(createBtn);
     }
 
     header.appendChild(info);
@@ -608,23 +592,6 @@ export class NPCPanel extends BasePanel {
     }
 
     this.setCenterContent(detail);
-  }
-
-  private createDialogueForNPC(npc: NPCEntry): void {
-    const dialogueId = `${npc.id}-dialogue`;
-
-    // Set the NPC's default dialogue
-    npc.defaultDialogue = dialogueId;
-    editorStore.setDirty(true);
-
-    // Switch to dialogues tab
-    editorStore.setActiveTab('dialogues');
-
-    // Note: The actual dialogue creation would be handled by DialoguePanel
-    // For now, just alert the user
-    alert(`Dialogue ID "${dialogueId}" has been set.\n\nSwitch to the Dialogues tab and create a new dialogue with this ID.`);
-
-    this.renderNPCDetail(npc);
   }
 
   private createNewNPC(): void {

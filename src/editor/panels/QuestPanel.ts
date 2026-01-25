@@ -147,6 +147,16 @@ export class QuestPanel {
     return Array.from(this.quests.values());
   }
 
+  clear(): void {
+    this.quests.clear();
+    this.currentQuestId = null;
+    this.selectedStageId = null;
+    this.selectedObjectiveId = null;
+    this.updateEntryList();
+    this.inspector.clear();
+    this.renderCenterPlaceholder();
+  }
+
   private updateEntryList(): void {
     const items: EntryListItem[] = Array.from(this.quests.values()).map(q => ({
       id: q.id,
