@@ -25,3 +25,9 @@ export type { EpisodeSelectorConfig, RegionOption } from './EpisodeSelector';
 
 export { ProjectManagerDialog } from './ProjectManagerDialog';
 export type { ProjectManagerConfig } from './ProjectManagerDialog';
+
+export { createNPCSelector } from './NPCSelector';
+export type { NPCOption, NPCSelectorConfig } from './NPCSelector';
+
+export { showNPCSelectDialog } from './NPCSelectDialog';
+export type { NPCSelectDialogConfig } from './NPCSelectDialog';

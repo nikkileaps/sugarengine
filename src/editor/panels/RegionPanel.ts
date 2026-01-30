@@ -12,6 +12,7 @@
 import { BasePanel } from './BasePanel';
 import { editorStore } from '../store';
 import { generateUUID, shortId } from '../utils';
+import { showNPCSelectDialog } from '../components';
 import type { FieldDefinition } from '../components';
 import type {
   RegionData,
@@ -829,8 +830,12 @@ export class RegionPanel extends BasePanel {
       `;
       btn.innerHTML = `<span style="font-size: 20px;">${icon}</span>${label}`;
       btn.onclick = () => {
-        this.addSpawn(region, type);
         overlay.remove();
+        if (type === 'npc') {
+          this.showNPCSelector(region);
+        } else {
+          this.addSpawn(region, type);
+        }
       };
       dialog.appendChild(btn);
     }
@@ -858,19 +863,30 @@ export class RegionPanel extends BasePanel {
     document.body.appendChild(overlay);
   }
 
+  private showNPCSelector(region: RegionData): void {
+    showNPCSelectDialog({
+      title: 'Select NPC to Spawn',
+      npcs: availableNPCs,
+      onSelect: (npcId) => this.addNPCSpawn(region, npcId),
+    });
+  }
+
+  private addNPCSpawn(region: RegionData, npcId: string): void {
+    if (!region.npcs) region.npcs = [];
+    region.npcs.push({
+      id: npcId,
+      position: { x: 0, y: 0, z: 0 },
+    });
+    editorStore.setDirty(true);
+    this.updateEntryList();
+    this.renderRegionDetail(region);
+  }
+
   private addSpawn(region: RegionData, type: SpawnType): void {
     const id = generateUUID();
     const defaultPos: Vec3 = { x: 0, y: 0, z: 0 };
 
     switch (type) {
-      case 'npc':
-        if (!region.npcs) region.npcs = [];
-        region.npcs.push({
-          id,
-          position: { ...defaultPos },
-        });
-        break;
-
       case 'pickup':
         if (!region.pickups) region.pickups = [];
         region.pickups.push({

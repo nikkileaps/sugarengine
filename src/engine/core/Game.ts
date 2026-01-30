@@ -125,7 +125,7 @@ export class Game {
       quests?: { id: string }[];
       npcs?: { id: string; name: string }[];
       items?: { id: string; name: string }[];
-      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number } }[];
+      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[] }[];
     };
 
     // Pre-register regions (must happen before loadRegion)
@@ -138,7 +138,7 @@ export class Game {
           geometry: { path: region.geometry.path },
           gridPosition: region.gridPosition ?? { x: 0, z: 0 },
           playerSpawn: region.playerSpawn ?? { x: 0, y: 0, z: 0 },
-          npcs: [],
+          npcs: region.npcs ?? [],
           triggers: [],
         });
       }

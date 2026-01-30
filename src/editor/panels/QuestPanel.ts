@@ -2,7 +2,7 @@
  * QuestPanel - Editor for quests with stage flow visualization
  */
 
-import { EntryList, EntryListItem, Inspector } from '../components';
+import { EntryList, EntryListItem, Inspector, createNPCSelector } from '../components';
 import type { FieldDefinition } from '../components';
 import { editorStore } from '../store';
 import { generateUUID, shortId } from '../utils';
@@ -695,40 +695,57 @@ export class QuestPanel {
       return input;
     }));
 
-    // Target with picker
-    form.appendChild(this.createFormField('Target', () => {
-      const container = document.createElement('div');
-      container.style.cssText = 'display: flex; gap: 8px;';
-
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = obj.target;
-      input.style.cssText = this.getInputStyle() + 'flex: 1;';
-      input.oninput = () => {
-        obj.target = input.value;
-        editorStore.setDirty(true);
-      };
-      container.appendChild(input);
-
-      // Picker button based on type
-      if (obj.type === 'talk' && availableNPCs.length > 0) {
-        const picker = this.createPickerButton('NPC', availableNPCs, (id) => {
-          input.value = id;
-          obj.target = id;
-          editorStore.setDirty(true);
+    // Target - use appropriate selector based on objective type
+    if (obj.type === 'talk') {
+      form.appendChild(this.createFormField('NPC', () => {
+        return createNPCSelector({
+          npcs: availableNPCs,
+          selectedId: obj.target,
+          onChange: (npcId) => {
+            obj.target = npcId;
+            editorStore.setDirty(true);
+          },
         });
-        container.appendChild(picker);
-      } else if (obj.type === 'collect' && availableItems.length > 0) {
-        const picker = this.createPickerButton('Item', availableItems, (id) => {
-          input.value = id;
-          obj.target = id;
-          editorStore.setDirty(true);
-        });
-        container.appendChild(picker);
-      }
+      }));
+    } else if (obj.type === 'collect') {
+      form.appendChild(this.createFormField('Item', () => {
+        const select = document.createElement('select');
+        select.style.cssText = this.getInputStyle();
 
-      return container;
-    }));
+        const emptyOption = document.createElement('option');
+        emptyOption.value = '';
+        emptyOption.textContent = '-- Select Item --';
+        select.appendChild(emptyOption);
+
+        for (const item of availableItems) {
+          const option = document.createElement('option');
+          option.value = item.id;
+          option.textContent = item.name;
+          option.selected = item.id === obj.target;
+          select.appendChild(option);
+        }
+
+        select.onchange = () => {
+          obj.target = select.value;
+          editorStore.setDirty(true);
+        };
+
+        return select;
+      }));
+    } else {
+      // For other types (location, trigger, custom), keep text input
+      form.appendChild(this.createFormField('Target', () => {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = obj.target;
+        input.style.cssText = this.getInputStyle();
+        input.oninput = () => {
+          obj.target = input.value;
+          editorStore.setDirty(true);
+        };
+        return input;
+      }));
+    }
 
     // Dialogue picker (only for 'talk' type)
     const dialogueField = this.createFormField('Dialogue', () => {
