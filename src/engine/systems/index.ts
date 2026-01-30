@@ -6,3 +6,5 @@ export { InteractionSystem } from './InteractionSystem';
 export type { InteractionHandler, InspectionHandler, InteractableType, NearbyInteractable } from './InteractionSystem';
 export { NPCMovementSystem } from './NPCMovementSystem';
 export { WorldLabelSystem } from './WorldLabelSystem';
+export { LODSystem } from './LODSystem';
+export type { LODStats } from './LODSystem';

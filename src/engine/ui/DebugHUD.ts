@@ -1,4 +1,6 @@
+import * as THREE from 'three';
 import { QuestManager } from '../quests/QuestManager';
+import type { LODStats } from '../systems';
 
 /**
  * Debug HUD for Preview mode - shows quest state, player position, and other dev info.
@@ -10,11 +12,17 @@ export class DebugHUD {
   private questInfo: HTMLDivElement;
   private positionInfo: HTMLDivElement;
   private fpsInfo: HTMLDivElement;
+  private renderInfo: HTMLDivElement;
+  private lodInfo: HTMLDivElement;
   private customInfo: HTMLDivElement;
 
   private quests: QuestManager;
   private getPlayerPosition: (() => { x: number; y: number; z: number } | null) | null = null;
   private getRegionInfo: (() => { path: string; name?: string } | null) | null = null;
+  private getLODStats: (() => LODStats) | null = null;
+  private setForcedLOD: ((level: 0 | 1 | null) => void) | null = null;
+  private getForcedLOD: (() => 0 | 1 | null) | null = null;
+  private renderer: THREE.WebGLRenderer | null = null;
 
   private lastFrameTime = performance.now();
   private frameCount = 0;
@@ -72,8 +80,20 @@ export class DebugHUD {
 
     // Quest info
     this.questInfo = document.createElement('div');
-    this.questInfo.style.cssText = 'color: #ffcc80;';
+    this.questInfo.style.cssText = 'margin-bottom: 8px; color: #ffcc80;';
     this.container.appendChild(this.questInfo);
+
+    // Render stats
+    this.renderInfo = document.createElement('div');
+    this.renderInfo.style.cssText = 'color: #ff8080; font-size: 10px;';
+    this.container.appendChild(this.renderInfo);
+
+    // LOD stats (clickable to cycle force mode)
+    this.lodInfo = document.createElement('div');
+    this.lodInfo.style.cssText = 'margin-top: 8px; color: #80ffff; font-size: 10px; display: none; cursor: pointer; pointer-events: auto;';
+    this.lodInfo.title = 'Click to cycle: Auto → Force LOD0 → Force LOD1';
+    this.lodInfo.addEventListener('click', () => this.cycleForcedLOD());
+    this.container.appendChild(this.lodInfo);
 
     // Custom info slot
     this.customInfo = document.createElement('div');
@@ -101,6 +121,41 @@ export class DebugHUD {
   }
 
   /**
+   * Set function to get LOD stats
+   */
+  setLODStatsProvider(fn: () => LODStats): void {
+    this.getLODStats = fn;
+    this.lodInfo.style.display = 'block';
+  }
+
+  /**
+   * Set functions to control forced LOD level
+   */
+  setForcedLODControls(
+    setter: (level: 0 | 1 | null) => void,
+    getter: () => 0 | 1 | null
+  ): void {
+    this.setForcedLOD = setter;
+    this.getForcedLOD = getter;
+  }
+
+  /**
+   * Cycle through forced LOD modes: Auto → LOD0 → LOD1 → Auto
+   */
+  private cycleForcedLOD(): void {
+    if (!this.setForcedLOD || !this.getForcedLOD) return;
+
+    const current = this.getForcedLOD();
+    if (current === null) {
+      this.setForcedLOD(0);
+    } else if (current === 0) {
+      this.setForcedLOD(1);
+    } else {
+      this.setForcedLOD(null);
+    }
+  }
+
+  /**
    * Set custom debug info
    */
   setCustomInfo(text: string | null): void {
@@ -110,6 +165,15 @@ export class DebugHUD {
     } else {
       this.customInfo.style.display = 'none';
     }
+  }
+
+  /**
+   * Set renderer for render stats
+   */
+  setRenderer(renderer: THREE.WebGLRenderer): void {
+    this.renderer = renderer;
+    // Disable auto-reset so stats accumulate until we read them
+    this.renderer.info.autoReset = false;
   }
 
   private update = (): void => {
@@ -172,6 +236,33 @@ export class DebugHUD {
       this.questInfo.innerHTML = lines.join('<br>');
     } else {
       this.questInfo.textContent = 'Quests: none';
+    }
+
+    // Render stats - only update once per second (with FPS)
+    if (this.renderer && this.frameCount === 0) {
+      const info = this.renderer.info;
+      const triangles = info.render.triangles;
+      const calls = info.render.calls;
+      const geometries = info.memory.geometries;
+      // Show per-frame stats (divide by FPS)
+      const trisPerFrame = this.fps > 0 ? Math.round(triangles / this.fps) : triangles;
+      const callsPerFrame = this.fps > 0 ? Math.round(calls / this.fps) : calls;
+      this.renderInfo.textContent = `Tris: ${trisPerFrame.toLocaleString()} | Calls: ${callsPerFrame} | Geo: ${geometries.toLocaleString()}`;
+      // Reset for next second
+      info.reset();
+    }
+
+    // LOD stats
+    if (this.getLODStats) {
+      const stats = this.getLODStats();
+      const forcedMode = this.getForcedLOD ? this.getForcedLOD() : null;
+      const modeLabel = forcedMode === null ? '' : forcedMode === 0 ? ' [FORCE HI]' : ' [FORCE LO]';
+
+      if (stats.totalPatches > 0) {
+        this.lodInfo.textContent = `LOD: ${stats.lod0Count}/${stats.totalPatches} hi${modeLabel}`;
+      } else {
+        this.lodInfo.textContent = `LOD: no patches${modeLabel}`;
+      }
     }
 
     requestAnimationFrame(this.update);

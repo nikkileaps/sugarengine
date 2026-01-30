@@ -1,0 +1,54 @@
+{
+  "items": [
+    {
+      "id": "old-key",
+      "name": "Old Rusty Key",
+      "description": "A weathered key that looks like it might open something important. Wonder what it unlocks?",
+      "category": "key",
+      "stackable": false,
+      "giftable": false
+    },
+    {
+      "id": "fresh-bread",
+      "name": "Fresh Bread",
+      "description": "Warm bread from the village bakery. Smells absolutely delicious!",
+      "category": "gift",
+      "stackable": true,
+      "maxStack": 5,
+      "giftable": true
+    },
+    {
+      "id": "mysterious-letter",
+      "name": "Mysterious Letter",
+      "description": "A sealed letter addressed to someone in the village. The wax seal bears an unfamiliar crest.",
+      "category": "quest",
+      "stackable": false,
+      "giftable": true
+    },
+    {
+      "id": "wildflower-bouquet",
+      "name": "Wildflower Bouquet",
+      "description": "A lovely bunch of wildflowers picked from the meadow. Would make a nice gift!",
+      "category": "gift",
+      "stackable": false,
+      "giftable": true
+    },
+    {
+      "id": "ancient-coin",
+      "name": "Ancient Coin",
+      "description": "A tarnished coin from a bygone era. It might be valuable to a collector.",
+      "category": "misc",
+      "stackable": true,
+      "maxStack": 99,
+      "giftable": true
+    },
+    {
+      "id": "village-map",
+      "name": "Village Map",
+      "description": "A hand-drawn map of the village and surrounding areas. Very helpful for newcomers!",
+      "category": "quest",
+      "stackable": false,
+      "giftable": false
+    }
+  ]
+}

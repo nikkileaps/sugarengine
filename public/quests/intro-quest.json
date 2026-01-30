@@ -1,0 +1,44 @@
+{
+  "id": "intro-quest",
+  "name": "Welcome to the Village",
+  "description": "Get to know the village and meet the friendly locals. This is a great way to learn your way around!",
+  "startStage": "meet-villager",
+  "stages": [
+    {
+      "id": "meet-villager",
+      "description": "Talk to a friendly villager",
+      "objectives": [
+        {
+          "id": "talk-to-npc",
+          "type": "talk",
+          "description": "Speak with the Friendly NPC",
+          "target": "c8f4e9a2-3b7d-4c1e-9f5a-8d2b6e0c7a9f",
+          "dialogue": "greeting-01",
+          "completeOn": "dialogueEnd",
+          "completed": false
+        }
+      ],
+      "next": "explore"
+    },
+    {
+      "id": "explore",
+      "description": "Explore the area",
+      "objectives": [
+        {
+          "id": "explore-area",
+          "type": "trigger",
+          "description": "Explore the village surroundings",
+          "target": "explore-trigger",
+          "completed": false
+        }
+      ],
+      "onComplete": "intro-complete"
+    }
+  ],
+  "rewards": [
+    {
+      "type": "xp",
+      "amount": 25
+    }
+  ]
+}

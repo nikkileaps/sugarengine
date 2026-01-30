@@ -16,5 +16,8 @@ export type {
   LightDefinition,
   FogDefinition,
   PostProcessingDefinition,
-  BloomDefinition
+  BloomDefinition,
+  SurfacePatchDefinition,
+  SurfacePatchLODRules,
+  SurfacePatchLODs
 } from './RegionLoader';

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, WorldLabel } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem } from '../systems';
-import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3 } from '../loaders';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, WorldLabel, SurfacePatchLOD } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem } from '../systems';
+import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
@@ -42,11 +42,12 @@ export interface LoadedRegionState {
   npcEntities: number[];
   pickupEntities: number[];
   inspectableEntities: number[];
+  surfacePatchEntities: number[];
   lights: THREE.Light[];
 }
 
 export class SugarEngine {
-  private renderer: THREE.WebGLRenderer;
+  readonly renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: GameCamera;
   private input: InputManager;
@@ -66,10 +67,12 @@ export class SugarEngine {
   private npcEntities: number[] = [];
   private pickupEntities: number[] = [];
   private inspectableEntities: number[] = [];
+  private surfacePatchEntities: number[] = [];
 
   private triggerSystem: TriggerSystem;
   private interactionSystem: InteractionSystem;
   private movementSystem: MovementSystem;
+  private lodSystem: LODSystem;
   private raycaster: THREE.Raycaster;
   private onNPCClickHandler: ((npcId: string, dialogueId?: string) => void) | null = null;
   private onItemPickupHandler: ((pickupId: string, itemId: string, quantity: number) => void) | null = null;
@@ -136,6 +139,11 @@ export class SugarEngine {
     // World label system for floating NPC names (pure Three.js)
     this.worldLabelSystem = new WorldLabelSystem(this.scene, this.camera.getThreeCamera());
     this.world.addSystem(this.worldLabelSystem);
+
+    // LOD system for surface patch level-of-detail switching
+    this.lodSystem = new LODSystem();
+    this.lodSystem.setScene(this.scene);
+    this.world.addSystem(this.lodSystem);
 
     // Default trigger handler - handles built-in event types
     this.triggerSystem.setTriggerEnterHandler((event, triggerId) => {
@@ -275,6 +283,12 @@ export class SugarEngine {
       this.world.removeEntity(entityId);
     }
     this.inspectableEntities = [];
+
+    // Remove old surface patch LOD entities
+    for (const entityId of this.surfacePatchEntities) {
+      this.world.removeEntity(entityId);
+    }
+    this.surfacePatchEntities = [];
 
     // Load new region using RegionData
     this.currentRegion = await this.regions.load(regionData);
@@ -467,6 +481,12 @@ export class SugarEngine {
     // Add geometry to scene
     this.scene.add(this.currentRegion.geometry);
 
+    // Create surface patch LOD entities from map data
+    this.surfacePatchEntities = this.createSurfacePatchEntities(
+      this.currentRegion.geometry,
+      this.currentRegion.mapData.surfacePatches
+    );
+
     // Create/move player to spawn point (use override if provided)
     const spawn = spawnOverride ?? this.currentRegion.data.playerSpawn;
     if (this.playerEntity < 0) {
@@ -521,6 +541,7 @@ export class SugarEngine {
       npcEntities: [],
       pickupEntities: [],
       inspectableEntities: [],
+      surfacePatchEntities: [],
       lights: []
     };
 
@@ -669,6 +690,13 @@ export class SugarEngine {
       state.lights.push(light);
     }
 
+    // Create surface patch LOD entities (offset by world position)
+    state.surfacePatchEntities = this.createSurfacePatchEntities(
+      loadedRegion.geometry,
+      loadedRegion.mapData.surfacePatches,
+      worldOffset
+    );
+
     this.loadedRegions.set(regionId, state);
     console.log(`Loaded region: ${regionData.name} at grid (${regionData.gridPosition?.x ?? 0}, ${regionData.gridPosition?.z ?? 0})`);
   }
@@ -723,6 +751,11 @@ export class SugarEngine {
       if (renderable) {
         this.scene.remove(renderable.mesh);
       }
+      this.world.removeEntity(entityId);
+    }
+
+    // Remove surface patch LOD entities
+    for (const entityId of state.surfacePatchEntities) {
       this.world.removeEntity(entityId);
     }
 
@@ -815,6 +848,94 @@ export class SugarEngine {
     if (postProcessingConfig?.bloom) {
       this.postProcessing.setBloomConfig(postProcessingConfig.bloom);
     }
+  }
+
+  /**
+   * Create surface patch LOD entities from map data.
+   * Finds meshes by name in the geometry and sets up LOD components.
+   */
+  private createSurfacePatchEntities(
+    geometry: THREE.Group,
+    patches: SurfacePatchDefinition[] | undefined,
+    worldOffset: Vec3 = { x: 0, y: 0, z: 0 }
+  ): number[] {
+    const entities: number[] = [];
+
+    if (!patches || patches.length === 0) {
+      return entities;
+    }
+
+    console.log(`[LOD] Processing ${patches.length} surface patches`);
+
+    for (const patchDef of patches) {
+      // Find all LOD meshes by name in the loaded geometry
+      const lod0Names = patchDef.lods.LOD0.meshNames;
+      const lod1Names = patchDef.lods.LOD1.meshNames;
+
+      const lod0Meshes: THREE.Object3D[] = [];
+      const lod1Meshes: THREE.Object3D[] = [];
+
+      // Find LOD0 meshes
+      console.log(`[LOD]   LOD0 names: ${lod0Names.join(', ')}`);
+      for (const name of lod0Names) {
+        const mesh = geometry.getObjectByName(name);
+        if (mesh) {
+          lod0Meshes.push(mesh);
+        } else {
+          console.warn(`LOD0 mesh not found for patch "${patchDef.id}": ${name}`);
+        }
+      }
+
+      // Find LOD1 meshes
+      console.log(`[LOD]   LOD1 names: ${lod1Names.join(', ')}`);
+      for (const name of lod1Names) {
+        const mesh = geometry.getObjectByName(name);
+        if (mesh) {
+          lod1Meshes.push(mesh);
+        } else {
+          console.warn(`LOD1 mesh not found for patch "${patchDef.id}": ${name}`);
+        }
+      }
+
+      // Log patch info
+      console.log(`[LOD] Patch "${patchDef.id}" type="${patchDef.type}": LOD0=${lod0Meshes.length} meshes, LOD1=${lod1Meshes.length} meshes`);
+
+      // Skip patches with no meshes at all
+      if (lod0Meshes.length === 0 && lod1Meshes.length === 0) {
+        continue;
+      }
+
+      // Create entity with LOD component
+      const entity = this.world.createEntity();
+
+      this.world.addComponent(entity, new SurfacePatchLOD(
+        patchDef.id,
+        patchDef.type,
+        patchDef.center.x + worldOffset.x,
+        patchDef.center.y + worldOffset.y,
+        patchDef.center.z + worldOffset.z,
+        patchDef.lodRules.switchDistance,
+        patchDef.lodRules.hysteresis,
+        lod0Meshes,
+        lod1Meshes
+      ));
+
+      // Set initial visibility (LOD0 visible, LOD1 hidden)
+      for (const mesh of lod0Meshes) {
+        mesh.visible = true;
+      }
+      for (const mesh of lod1Meshes) {
+        mesh.visible = false;
+      }
+
+      entities.push(entity);
+    }
+
+    if (entities.length > 0) {
+      console.log(`Created ${entities.length} surface patch LOD entities`);
+    }
+
+    return entities;
   }
 
   private async createPlayer(x: number = 0, y: number = 0, z: number = 0): Promise<number> {
@@ -1006,7 +1127,7 @@ export class SugarEngine {
       // Always update camera (for smooth interpolation even when paused)
       this.camera.update(delta);
 
-      // Render with post-processing (always render so pause screen shows game behind)
+      // Render with post-processing
       this.postProcessing.render();
 
       // Clear "just pressed" input state AFTER rendering (at end of frame)
@@ -1276,6 +1397,54 @@ export class SugarEngine {
       }
     }
     return null;
+  }
+
+  // ============================================
+  // LOD System
+  // ============================================
+
+  /**
+   * Get current LOD system statistics.
+   */
+  getLODStats(): import('../systems').LODStats {
+    return this.lodSystem.getStats();
+  }
+
+  /**
+   * Enable or disable LOD debug visualization.
+   * Shows wireframe spheres at switch distances, colored by current LOD state.
+   */
+  setLODDebugEnabled(enabled: boolean): void {
+    this.lodSystem.setDebugEnabled(enabled);
+  }
+
+  /**
+   * Check if LOD debug visualization is enabled.
+   */
+  isLODDebugEnabled(): boolean {
+    return this.lodSystem.isDebugEnabled();
+  }
+
+  /**
+   * Reset LOD statistics counters.
+   */
+  resetLODStats(): void {
+    this.lodSystem.resetStats();
+  }
+
+  /**
+   * Force all LOD patches to a specific level, or null for automatic distance-based switching.
+   * Useful for debugging LOD textures.
+   */
+  setForcedLOD(level: 0 | 1 | null): void {
+    this.lodSystem.setForcedLOD(level);
+  }
+
+  /**
+   * Get the current forced LOD level (null = automatic).
+   */
+  getForcedLOD(): 0 | 1 | null {
+    return this.lodSystem.getForcedLOD();
   }
 
   // ============================================

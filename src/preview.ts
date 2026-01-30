@@ -105,6 +105,12 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   debugHUD.setPlayerPositionProvider(() => game.getPlayerPosition());
   debugHUD.setRegionInfoProvider(() => game.getRegionInfo());
+  debugHUD.setRenderer(game.engine.renderer);
+  debugHUD.setLODStatsProvider(() => game.engine.getLODStats());
+  debugHUD.setForcedLODControls(
+    (level) => game.engine.setForcedLOD(level),
+    () => game.engine.getForcedLOD()
+  );
 
   // ========================================
   // Game Event Handlers → UI Updates
@@ -289,7 +295,6 @@ if (isFromEditor) {
   // Listen for project data from editor
   window.addEventListener('message', async (event: MessageEvent<ProjectMessage>) => {
     if (event.data.type === 'LOAD_PROJECT') {
-      console.log('[Preview] Received project data from editor');
 
       const { project, episodeId } = event.data;
 

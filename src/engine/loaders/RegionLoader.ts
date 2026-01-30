@@ -93,6 +93,7 @@ export interface SugarbuilderMapData {
   version: number;
   lighting?: LightingDefinition;
   postProcessing?: PostProcessingDefinition;
+  surfacePatches?: SurfacePatchDefinition[];
 }
 
 export interface LightDefinition {
@@ -144,6 +145,34 @@ export interface PostProcessingDefinition {
 }
 
 /**
+ * LOD rules for surface patches (from SugarBuilder ADR-041/042)
+ */
+export interface SurfacePatchLODRules {
+  mode: 'distance_to_player';
+  switchDistance: number;  // Distance in meters to switch from LOD0 to LOD1
+  hysteresis: number;      // Buffer zone to prevent flip-flopping
+}
+
+/**
+ * LOD mesh references for a surface patch
+ */
+export interface SurfacePatchLODs {
+  LOD0: { meshNames: string[] };  // High-detail mesh names in GLB
+  LOD1: { meshNames: string[] };  // Low-detail mesh names in GLB
+}
+
+/**
+ * Surface patch definition from SugarBuilder export
+ */
+export interface SurfacePatchDefinition {
+  id: string;
+  type: string;  // e.g., 'wall_brick', 'ground_cobblestone'
+  center: Vec3;  // World-space center for distance calculations
+  lodRules: SurfacePatchLODRules;
+  lods: SurfacePatchLODs;
+}
+
+/**
  * Region data managed by Sugar Engine (stored in project file).
  * References Sugarbuilder geometry, defines game logic (spawns, player start).
  */
@@ -183,7 +212,7 @@ export class RegionLoader {
       this.modelLoader.load(`${basePath}geometry.glb`)
     ]);
 
-    // Set up geometry for receiving shadows, etc.
+    // Set up geometry for shadows
     geometry.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.receiveShadow = true;
@@ -306,6 +335,13 @@ export class RegionLoader {
         // Create point light at mesh position
         const light = new THREE.PointLight(emissive.getHex(), intensity, 8, 1);
         light.position.copy(worldPos);
+
+        // TODO: Remove this filter once Sugarbuilder export is fixed to not export
+        // stray emissive meshes under the ground
+        if (worldPos.y < 0.5) {
+          console.log(`Skipping underground emissive light from mesh "${child.name}" at y=${worldPos.y.toFixed(2)}`);
+          continue;
+        }
 
         lights.push(light);
 
