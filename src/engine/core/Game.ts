@@ -181,7 +181,6 @@ export class Game {
     // Register inspections
     if (project.inspections) {
       for (const insp of project.inspections) {
-        console.log(`[Game] Registering inspection: ${insp.id} - "${insp.title}"`);
         this.inspection.registerInspection(insp.id, insp);
       }
     }
@@ -345,19 +344,12 @@ export class Game {
     // Inspection System
     // ========================================
     this.inspection.setOnStart(() => {
-      console.log('[Game] Inspection started - disabling movement');
       this.engine.setMovementEnabled(false);
     });
 
     this.inspection.setOnEnd(() => {
-      try {
-        console.log('[Game] Inspection ended - enabling movement');
-        this.engine.setMovementEnabled(true);
-        this.engine.consumeInteract();
-        console.log('[Game] Movement re-enabled');
-      } catch (err) {
-        console.error('[Game] Error in inspection onEnd:', err);
-      }
+      this.engine.setMovementEnabled(true);
+      this.engine.consumeInteract();
     });
 
     // ========================================
@@ -433,12 +425,8 @@ export class Game {
     });
 
     // Inspectable interaction → inspection system
-    this.engine.onInspect((inspectableId, inspectionId) => {
-      console.log(`[Game] Inspect triggered: inspectable=${inspectableId}, inspection=${inspectionId}`);
-      if (this.isUIBlocking()) {
-        console.log('[Game] Inspection blocked - UI is blocking');
-        return;
-      }
+    this.engine.onInspect((_inspectableId, inspectionId) => {
+      if (this.isUIBlocking()) return;
       this.inspection.start(inspectionId);
     });
 

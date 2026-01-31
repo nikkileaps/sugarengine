@@ -7,14 +7,13 @@
  * - NPC database
  * - Item database
  * - Inspection content
+ * - Region spawns
  */
 
-// New React-based editor
+// React-based editor
 export { Editor } from './Editor';
 
-// Legacy vanilla editor (for reference during migration)
-export { EditorApp } from './EditorApp';
-export { Toolbar } from './Toolbar';
+// Preview manager
 export { PreviewManager } from './PreviewManager';
 
 // Components

@@ -38,18 +38,14 @@ export class InspectionManager {
    * Start an inspection by ID
    */
   async start(inspectionId: string): Promise<void> {
-    console.log(`[InspectionManager] Starting inspection: ${inspectionId}`);
-
     if (this.isActive) {
-      console.warn('Inspection already active, ending current before starting new');
       this.end();
     }
 
     try {
       this.currentInspection = await this.loader.load(inspectionId);
-      console.log(`[InspectionManager] Loaded inspection:`, this.currentInspection?.data?.title);
     } catch (error) {
-      console.error(`[InspectionManager] Failed to load inspection: ${inspectionId}`, error);
+      console.error(`Failed to load inspection: ${inspectionId}`, error);
       return;
     }
 
@@ -71,13 +67,11 @@ export class InspectionManager {
   end(): void {
     if (!this.isActive) return; // Prevent re-entry
 
-    console.log('[InspectionManager] Ending inspection');
     this.isActive = false;
     this.inspectionUI.hide();
     this.currentInspection = null;
 
     if (this.onInspectionEnd) {
-      console.log('[InspectionManager] Calling onInspectionEnd');
       this.onInspectionEnd();
     }
   }
