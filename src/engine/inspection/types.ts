@@ -2,8 +2,8 @@
  * A section within an inspection (for newspapers, magazines, etc.)
  */
 export interface InspectionSection {
-  headline?: string;
-  content: string;
+  heading?: string;
+  text: string;
   image?: string;
 }
 

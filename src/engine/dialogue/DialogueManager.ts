@@ -4,6 +4,7 @@ import { DialogueBox } from '../ui/DialogueBox';
 
 export type DialogueEventHandler = (eventName: string) => void;
 export type DialogueNodeHandler = (nodeId: string) => void;
+export type SpeakerNameResolver = (speakerId: string) => string | undefined;
 
 /**
  * Manages dialogue flow - loading, displaying, and handling choices
@@ -20,6 +21,7 @@ export class DialogueManager {
   private onDialogueEnd: (() => void) | null = null;
   private onEvent: DialogueEventHandler | null = null;
   private onNodeEnter: DialogueNodeHandler | null = null;
+  private speakerNameResolver: SpeakerNameResolver | null = null;
 
   constructor(container: HTMLElement) {
     this.loader = new DialogueLoader();
@@ -52,6 +54,13 @@ export class DialogueManager {
    */
   setOnNodeEnter(handler: DialogueNodeHandler): void {
     this.onNodeEnter = handler;
+  }
+
+  /**
+   * Set a resolver to convert speaker IDs (UUIDs) to display names
+   */
+  setSpeakerNameResolver(resolver: SpeakerNameResolver): void {
+    this.speakerNameResolver = resolver;
   }
 
   /**
@@ -102,9 +111,18 @@ export class DialogueManager {
       this.onEvent(node.onEnter);
     }
 
+    // Resolve speaker name if we have a resolver
+    let displayNode = node;
+    if (node.speaker && this.speakerNameResolver) {
+      const resolvedName = this.speakerNameResolver(node.speaker);
+      if (resolvedName) {
+        displayNode = { ...node, speaker: resolvedName };
+      }
+    }
+
     // Show in UI
     this.dialogueBox.show(
-      node,
+      displayNode,
       (selected?: DialogueNext) => {
         this.handleAdvance(selected);
       },

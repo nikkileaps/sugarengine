@@ -7,6 +7,7 @@ import { SaveManager, SaveManagerConfig } from '../save/SaveManager';
 import { SceneManager } from '../scenes/SceneManager';
 import { EpisodeManager } from '../episodes/EpisodeManager';
 import { ObjectiveType } from '../quests/types';
+import { PLAYER, NARRATOR } from '../dialogue/types';
 
 export interface GameConfig {
   container: HTMLElement;
@@ -49,7 +50,9 @@ export class Game {
   private config: GameConfig;
   private eventHandlers: GameEventHandlers = {};
   private nearbyNpcId: string | null = null;
+  private nearbyInteractable: import('../systems').NearbyInteractable | null = null;
   private projectData: unknown = null;
+  private onNearbyInteractionChangeHandler: ((interaction: { type: string; id: string; promptText?: string; available: boolean } | null) => void) | null = null;
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -123,9 +126,10 @@ export class Game {
     const project = projectData as {
       dialogues?: { id: string }[];
       quests?: { id: string }[];
-      npcs?: { id: string; name: string }[];
+      npcs?: { id: string; name: string; defaultDialogue?: string }[];
       items?: { id: string; name: string }[];
-      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[] }[];
+      inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
+      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[] }[];
     };
 
     // Pre-register regions (must happen before loadRegion)
@@ -139,7 +143,9 @@ export class Game {
           gridPosition: region.gridPosition ?? { x: 0, z: 0 },
           playerSpawn: region.playerSpawn ?? { x: 0, y: 0, z: 0 },
           npcs: region.npcs ?? [],
-          triggers: [],
+          pickups: region.pickups ?? [],
+          inspectables: region.inspectables ?? [],
+          triggers: region.triggers ?? [],
         });
       }
     }
@@ -172,11 +178,20 @@ export class Game {
       }
     }
 
+    // Register inspections
+    if (project.inspections) {
+      for (const insp of project.inspections) {
+        console.log(`[Game] Registering inspection: ${insp.id} - "${insp.title}"`);
+        this.inspection.registerInspection(insp.id, insp);
+      }
+    }
+
     console.log('[Game] Registered project content:', {
       regions: project.regions?.length || 0,
       dialogues: project.dialogues?.length || 0,
       quests: project.quests?.length || 0,
       npcs: project.npcs?.length || 0,
+      inspections: project.inspections?.length || 0,
       items: project.items?.length || 0,
     });
   }
@@ -216,6 +231,38 @@ export class Game {
    */
   getNearbyNpcId(): string | null {
     return this.nearbyNpcId;
+  }
+
+  /**
+   * Set handler for when nearby interaction changes (for showing/hiding prompts)
+   */
+  onNearbyInteractionChange(handler: (interaction: { type: string; id: string; promptText?: string; available: boolean } | null) => void): void {
+    this.onNearbyInteractionChangeHandler = handler;
+  }
+
+  /**
+   * Get info about the nearby interactable, including whether interaction is available.
+   * For NPCs, checks if there's dialogue (quest or default) before marking as available.
+   */
+  getNearbyInteraction(): { type: string; id: string; promptText?: string; available: boolean } | null {
+    if (!this.nearbyInteractable) return null;
+
+    const { type, id, promptText, dialogueId } = this.nearbyInteractable;
+
+    // For NPCs, only available if there's dialogue to trigger
+    if (type === 'npc') {
+      const hasQuestDialogue = this.quests.getQuestDialogueForNpc(id) !== null;
+      const hasDefaultDialogue = !!dialogueId;
+      return {
+        type,
+        id,
+        promptText,
+        available: hasQuestDialogue || hasDefaultDialogue,
+      };
+    }
+
+    // Other types (inspectables, etc.) are always available
+    return { type, id, promptText, available: true };
   }
 
   /**
@@ -269,6 +316,20 @@ export class Game {
       this.eventHandlers.onDialogueEvent?.(eventName);
     });
 
+    // Resolve speaker IDs to display names
+    this.dialogue.setSpeakerNameResolver((speakerId) => {
+      // Check for built-in speaker types
+      if (speakerId === PLAYER.id) {
+        return PLAYER.displayName;
+      }
+      if (speakerId === NARRATOR.id) {
+        return NARRATOR.displayName;
+      }
+      // Check if it's an NPC
+      const npcInfo = this.engine.getNPCInfo(speakerId);
+      return npcInfo?.name;
+    });
+
     // Track when specific dialogue nodes are visited (for completeOn: nodeId)
     this.dialogue.setOnNodeEnter((nodeId) => {
       if (this.activeQuestDialogue && this.activeQuestDialogue.completeOn === nodeId) {
@@ -284,12 +345,19 @@ export class Game {
     // Inspection System
     // ========================================
     this.inspection.setOnStart(() => {
+      console.log('[Game] Inspection started - disabling movement');
       this.engine.setMovementEnabled(false);
     });
 
     this.inspection.setOnEnd(() => {
-      this.engine.setMovementEnabled(true);
-      this.engine.consumeInteract();
+      try {
+        console.log('[Game] Inspection ended - enabling movement');
+        this.engine.setMovementEnabled(true);
+        this.engine.consumeInteract();
+        console.log('[Game] Movement re-enabled');
+      } catch (err) {
+        console.error('[Game] Error in inspection onEnd:', err);
+      }
     });
 
     // ========================================
@@ -325,9 +393,15 @@ export class Game {
     // Engine Events → System Triggers
     // ========================================
 
-    // Track nearby NPC for gift UI
+    // Track nearby NPC for gift UI and dialogue availability
     this.engine.onNearbyInteractableChange((nearby) => {
       this.nearbyNpcId = (nearby?.type === 'npc') ? nearby.id : null;
+      this.nearbyInteractable = nearby;
+
+      // Fire the interaction change event
+      if (this.onNearbyInteractionChangeHandler) {
+        this.onNearbyInteractionChangeHandler(this.getNearbyInteraction());
+      }
     });
 
     // NPC interaction → dialogue + quest trigger
@@ -359,8 +433,12 @@ export class Game {
     });
 
     // Inspectable interaction → inspection system
-    this.engine.onInspect((_inspectableId, inspectionId) => {
-      if (this.isUIBlocking()) return;
+    this.engine.onInspect((inspectableId, inspectionId) => {
+      console.log(`[Game] Inspect triggered: inspectable=${inspectableId}, inspection=${inspectionId}`);
+      if (this.isUIBlocking()) {
+        console.log('[Game] Inspection blocked - UI is blocking');
+        return;
+      }
       this.inspection.start(inspectionId);
     });
 
@@ -395,8 +473,16 @@ export class Game {
       }
       await this.engine.loadRegion(this.config.startRegion);
 
-      // Start initial quest if configured
-      if (this.config.startQuest) {
+      // Start all quests for this episode
+      const episodeQuestIds = this.getEpisodeQuests();
+      console.log('[Game] Episode quests to start:', episodeQuestIds);
+      for (const questId of episodeQuestIds) {
+        const started = await this.quests.startQuest(questId);
+        console.log('[Game] Started quest:', questId, 'result:', started);
+      }
+
+      // Fallback to config.startQuest if no episode quests (production mode)
+      if (episodeQuestIds.length === 0 && this.config.startQuest) {
         await this.quests.startQuest(this.config.startQuest);
       }
 
@@ -481,6 +567,46 @@ export class Game {
    */
   async showTitle(): Promise<void> {
     await this.sceneManager.showTitle();
+  }
+
+  /**
+   * Get all quest IDs for the current episode
+   */
+  private getEpisodeQuests(): string[] {
+    if (!this.config.currentEpisode) return [];
+
+    // In development mode, quests are in projectData
+    if (this.config.mode === 'development' && this.projectData) {
+      const project = this.projectData as {
+        quests?: { id: string; episodeId?: string }[];
+      };
+      const episodeQuests = (project.quests || [])
+        .filter(q => q.episodeId === this.config.currentEpisode)
+        .map(q => q.id);
+      console.log('[Game] Found episode quests from projectData:', episodeQuests);
+      return episodeQuests;
+    }
+
+    // In production mode, get from episode content
+    // TODO: implement production mode quest loading
+    return [];
+  }
+
+  /**
+   * Get the main quest ID from the current episode's completionCondition
+   */
+  private getEpisodeMainQuest(): string | null {
+    if (!this.config.currentEpisode) return null;
+
+    const episode = this.episodes.getEpisode(this.config.currentEpisode);
+    if (!episode) return null;
+
+    // Check if episode has a quest-based completion condition
+    if (episode.completionCondition?.type === 'quest') {
+      return episode.completionCondition.questId;
+    }
+
+    return null;
   }
 
   /**

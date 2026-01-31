@@ -78,9 +78,9 @@ export class DebugHUD {
     this.regionInfo.style.cssText = 'margin-bottom: 8px; color: #c080ff;';
     this.container.appendChild(this.regionInfo);
 
-    // Quest info
+    // Quest info (with hover tooltip)
     this.questInfo = document.createElement('div');
-    this.questInfo.style.cssText = 'margin-bottom: 8px; color: #ffcc80;';
+    this.questInfo.style.cssText = 'margin-bottom: 8px; color: #ffcc80; pointer-events: auto; cursor: default;';
     this.container.appendChild(this.questInfo);
 
     // Render stats
@@ -212,30 +212,25 @@ export class DebugHUD {
       this.regionInfo.textContent = 'Region: --';
     }
 
-    // Quest info
+    // Quest info - show count, hover for details
     const activeQuests = this.quests.getActiveQuests();
-    if (activeQuests.length > 0) {
-      const lines: string[] = ['Quests:'];
+    const count = activeQuests.length;
+    if (count > 0) {
+      // Build tooltip with quest names
+      const questNames: string[] = [];
       for (const questState of activeQuests) {
         const loaded = this.quests.getQuestDefinition(questState.questId);
-        if (!loaded) continue;
-
-        const questName = loaded.definition.name;
-        const stage = loaded.stageMap.get(questState.currentStageId);
-        const stageDesc = stage?.description || questState.currentStageId;
-
-        lines.push(`  ${questName}`);
-        lines.push(`    Stage: ${stageDesc}`);
-
-        // Show objectives from progress map
-        for (const [, obj] of questState.objectiveProgress) {
-          const check = obj.completed ? '[x]' : '[ ]';
-          lines.push(`    ${check} ${obj.description}`);
+        if (loaded) {
+          questNames.push(loaded.definition.name);
+        } else {
+          questNames.push(`(${questState.questId.slice(0, 8)}...)`);
         }
       }
-      this.questInfo.innerHTML = lines.join('<br>');
+      this.questInfo.textContent = `Quests: ${count}`;
+      this.questInfo.title = questNames.join('\n');
     } else {
-      this.questInfo.textContent = 'Quests: none';
+      this.questInfo.textContent = `Quests: 0`;
+      this.questInfo.title = '';
     }
 
     // Render stats - only update once per second (with FPS)

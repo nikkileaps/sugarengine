@@ -9,6 +9,10 @@
  * - Inspection content
  */
 
+// New React-based editor
+export { Editor } from './Editor';
+
+// Legacy vanilla editor (for reference during migration)
 export { EditorApp } from './EditorApp';
 export { Toolbar } from './Toolbar';
 export { PreviewManager } from './PreviewManager';

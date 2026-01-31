@@ -264,17 +264,17 @@ export class InspectionUI {
         const sectionEl = document.createElement('div');
         sectionEl.className = 'inspection-section';
 
-        if (section.headline) {
-          const headlineEl = document.createElement('div');
-          headlineEl.className = 'inspection-section-headline';
-          headlineEl.textContent = section.headline;
-          sectionEl.appendChild(headlineEl);
+        if (section.heading) {
+          const headingEl = document.createElement('div');
+          headingEl.className = 'inspection-section-headline';
+          headingEl.textContent = section.heading;
+          sectionEl.appendChild(headingEl);
         }
 
-        const contentEl = document.createElement('div');
-        contentEl.className = 'inspection-section-content';
-        contentEl.textContent = section.content;
-        sectionEl.appendChild(contentEl);
+        const textEl = document.createElement('div');
+        textEl.className = 'inspection-section-content';
+        textEl.textContent = section.text;
+        sectionEl.appendChild(textEl);
 
         if (section.image) {
           const imageEl = document.createElement('img');

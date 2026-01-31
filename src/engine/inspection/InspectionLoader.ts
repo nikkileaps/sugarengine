@@ -43,6 +43,13 @@ export class InspectionLoader {
   }
 
   /**
+   * Register an inspection directly (for development mode)
+   */
+  register(inspectionId: string, data: InspectionData): void {
+    this.cache.set(inspectionId, { data });
+  }
+
+  /**
    * Clear the cache
    */
   clearCache(): void {

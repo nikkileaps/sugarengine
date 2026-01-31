@@ -36,7 +36,10 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   if (isDevelopmentMode && projectData) {
     const project = projectData as {
-      episodes?: { id: string; startRegion?: string }[];
+      episodes?: {
+        id: string;
+        startRegion?: string;
+      }[];
       regions?: { id: string; name?: string; geometry?: { path: string } }[];
     };
 
@@ -77,6 +80,8 @@ async function runGame(projectData?: unknown, episodeId?: string) {
       autoSaveDebounceMs: 10000
     },
     startRegion: startRegionPath,
+    // In dev mode, Game reads main quest from episode's completionCondition
+    // In production, fall back to hardcoded quest
     startQuest: isDevelopmentMode ? undefined : 'intro-quest',
     startItems: isDevelopmentMode ? [] : [
       { itemId: 'fresh-bread', quantity: 2 },
@@ -166,14 +171,14 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   // Show/hide interaction prompt
   let nearbyPickupId: string | null = null;
 
-  game.engine.onNearbyInteractableChange((nearby) => {
+  game.onNearbyInteractionChange((interaction) => {
     if (isUIBlocking()) {
       interactionPrompt.hide();
       return;
     }
 
-    if (nearby) {
-      interactionPrompt.show(nearby.promptText || 'Interact');
+    if (interaction?.available) {
+      interactionPrompt.show(interaction.promptText || 'Interact');
       nearbyPickupId = null;
     } else if (!nearbyPickupId) {
       interactionPrompt.hide();

@@ -38,6 +38,8 @@ export class InspectionManager {
    * Start an inspection by ID
    */
   async start(inspectionId: string): Promise<void> {
+    console.log(`[InspectionManager] Starting inspection: ${inspectionId}`);
+
     if (this.isActive) {
       console.warn('Inspection already active, ending current before starting new');
       this.end();
@@ -45,8 +47,9 @@ export class InspectionManager {
 
     try {
       this.currentInspection = await this.loader.load(inspectionId);
+      console.log(`[InspectionManager] Loaded inspection:`, this.currentInspection?.data?.title);
     } catch (error) {
-      console.error(`Failed to load inspection: ${inspectionId}`, error);
+      console.error(`[InspectionManager] Failed to load inspection: ${inspectionId}`, error);
       return;
     }
 
@@ -66,11 +69,15 @@ export class InspectionManager {
    * End the current inspection
    */
   end(): void {
+    if (!this.isActive) return; // Prevent re-entry
+
+    console.log('[InspectionManager] Ending inspection');
+    this.isActive = false;
     this.inspectionUI.hide();
     this.currentInspection = null;
-    this.isActive = false;
 
     if (this.onInspectionEnd) {
+      console.log('[InspectionManager] Calling onInspectionEnd');
       this.onInspectionEnd();
     }
   }
@@ -94,6 +101,13 @@ export class InspectionManager {
    */
   async preload(inspectionIds: string[]): Promise<void> {
     await this.loader.preloadAll(inspectionIds);
+  }
+
+  /**
+   * Register an inspection directly (for development mode)
+   */
+  registerInspection(inspectionId: string, data: InspectionData): void {
+    this.loader.register(inspectionId, data);
   }
 
   /**

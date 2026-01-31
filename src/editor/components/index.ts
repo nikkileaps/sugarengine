@@ -26,8 +26,13 @@ export type { EpisodeSelectorConfig, RegionOption } from './EpisodeSelector';
 export { ProjectManagerDialog } from './ProjectManagerDialog';
 export type { ProjectManagerConfig } from './ProjectManagerDialog';
 
+// Legacy vanilla selectors (for migration)
 export { createNPCSelector } from './NPCSelector';
 export type { NPCOption, NPCSelectorConfig } from './NPCSelector';
 
 export { showNPCSelectDialog } from './NPCSelectDialog';
 export type { NPCSelectDialogConfig } from './NPCSelectDialog';
+
+// New React/Mantine selectors
+export { NPCSelector, ItemSelector } from './selectors';
+export type { ItemOption } from './selectors';

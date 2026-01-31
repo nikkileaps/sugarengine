@@ -407,18 +407,18 @@ export class SugarEngine {
         pickupDef.quantity ?? 1
       ));
 
-      // Glowing pickup mesh (small glowing sphere)
-      const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+      // Pickup placeholder (orange glowing sphere)
+      const geometry = new THREE.SphereGeometry(0.25, 16, 16);
       const material = new THREE.MeshStandardMaterial({
-        color: 0xffdd44,
-        emissive: 0xffaa00,
-        emissiveIntensity: 0.5
+        color: 0xff8833,
+        emissive: 0xff6600,
+        emissiveIntensity: 0.6
       });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.position.set(
         pickupDef.position.x,
-        pickupDef.position.y + 0.3, // Hover slightly above ground
+        pickupDef.position.y + 0.4, // Hover above ground
         pickupDef.position.z
       );
       mesh.name = `pickup-${pickupDef.id}`;
@@ -627,15 +627,15 @@ export class SugarEngine {
         pickupDef.quantity ?? 1
       ));
 
-      const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+      const geometry = new THREE.SphereGeometry(0.25, 16, 16);
       const material = new THREE.MeshStandardMaterial({
-        color: 0xffdd44,
-        emissive: 0xffaa00,
-        emissiveIntensity: 0.5
+        color: 0xff8833,
+        emissive: 0xff6600,
+        emissiveIntensity: 0.6
       });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
-      mesh.position.set(worldX, worldY + 0.3, worldZ);
+      mesh.position.set(worldX, worldY + 0.4, worldZ);
       mesh.name = `pickup-${pickupDef.id}`;
       mesh.userData.pickupId = pickupDef.id;
       mesh.userData.entityId = entity;
