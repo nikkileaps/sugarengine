@@ -20,6 +20,7 @@ import {
   Collapse,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
+import { EnvironmentAnimationsDialog } from '../../components/EnvironmentAnimationsDialog';
 import {
   RegionEntry,
   Vec3,
@@ -71,6 +72,8 @@ export function RegionDetail({
 }: RegionDetailProps) {
   const [addSpawnModalOpen, setAddSpawnModalOpen] = useState(false);
   const [settingsOpen, { toggle: toggleSettings }] = useDisclosure(false);
+  const [animationsModalOpen, setAnimationsModalOpen] = useState(false);
+
 
   const handleChange = <K extends keyof RegionEntry>(field: K, value: RegionEntry[K]) => {
     onChange({ ...region, [field]: value });
@@ -273,6 +276,29 @@ export function RegionDetail({
               <Select label="From Episode" data={episodeOptions} value={region.availability?.fromEpisode || ''} onChange={(val) => handleChange('availability', { ...region.availability, fromEpisode: val || undefined })} clearable size="sm" />
               <Select label="Until Episode" data={episodeOptions} value={region.availability?.untilEpisode || ''} onChange={(val) => handleChange('availability', { ...region.availability, untilEpisode: val || undefined })} clearable size="sm" />
             </Group>
+
+            {/* Environment Animations */}
+            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mt="md" mb="xs">
+              Environment Animations
+            </Text>
+            <Group gap="xs">
+              <Button
+                variant="subtle"
+                size="xs"
+                onClick={() => setAnimationsModalOpen(true)}
+                disabled={!region.geometry?.path}
+              >
+                Edit Animations
+              </Button>
+              {(region.environmentAnimations || []).length > 0 && (
+                <Badge size="sm" variant="light">
+                  {(region.environmentAnimations || []).length} configured
+                </Badge>
+              )}
+            </Group>
+            {!region.geometry?.path && (
+              <Text size="xs" c="dimmed" mt="xs">Set a geometry path first</Text>
+            )}
           </Paper>
         </Collapse>
       </Paper>
@@ -341,6 +367,17 @@ export function RegionDetail({
           ))}
         </Stack>
       </Modal>
+
+      {/* Environment Animations Dialog */}
+      {region.geometry?.path && (
+        <EnvironmentAnimationsDialog
+          opened={animationsModalOpen}
+          onClose={() => setAnimationsModalOpen(false)}
+          geometryPath={region.geometry.path}
+          animations={region.environmentAnimations || []}
+          onAnimationsChange={(animations) => handleChange('environmentAnimations', animations)}
+        />
+      )}
 
     </Stack>
   );

@@ -14,7 +14,7 @@ interface WelcomeDialogProps {
 
 export function WelcomeDialog({
   opened,
-  onClose,
+  onClose: _onClose,
   onCreateProject,
   onOpenProject,
 }: WelcomeDialogProps) {

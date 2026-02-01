@@ -56,6 +56,15 @@ export interface TriggerDefinition {
   };
 }
 
+export type EnvironmentAnimationType = 'lamp_glow' | 'candle_flicker' | 'wind_sway';
+
+export interface EnvironmentAnimationEntry {
+  meshName: string;
+  animationType: EnvironmentAnimationType;
+  intensity?: number;  // 0-1, default varies by type
+  speed?: number;      // multiplier, default 1
+}
+
 export interface RegionEntry {
   id: string;
   name: string;
@@ -66,6 +75,7 @@ export interface RegionEntry {
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
   triggers?: TriggerDefinition[];
+  environmentAnimations?: EnvironmentAnimationEntry[];
   availability?: { fromEpisode?: string; untilEpisode?: string };
 }
 

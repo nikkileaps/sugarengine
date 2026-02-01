@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ModelLoader } from './ModelLoader';
+import type { EnvironmentAnimationEntry } from '../shaders';
 
 export interface Vec3 {
   x: number;
@@ -186,6 +187,7 @@ export interface RegionData {
   triggers: TriggerDefinition[];
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
+  environmentAnimations?: EnvironmentAnimationEntry[];
   availability?: RegionAvailability;
 }
 
@@ -335,6 +337,10 @@ export class RegionLoader {
         // Create point light at mesh position
         const light = new THREE.PointLight(emissive.getHex(), intensity, 8, 1);
         light.position.copy(worldPos);
+
+        // Tag light with source mesh name for animation system
+        light.userData.sourceMeshName = child.name;
+        light.userData.baseIntensity = intensity;
 
         // TODO: Remove this filter once Sugarbuilder export is fixed to not export
         // stray emissive meshes under the ground

@@ -7,6 +7,7 @@ import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
 import { getRegionWorldOffset, gridKey } from '../streaming';
+import { EnvironmentAnimation } from '../shaders';
 
 export interface CameraConfig {
   style: 'isometric' | 'perspective';
@@ -83,6 +84,7 @@ export class SugarEngine {
   private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
   private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
   private worldLabelSystem: WorldLabelSystem;
+  private environmentAnimation: EnvironmentAnimation;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -159,6 +161,9 @@ export class SugarEngine {
 
     // Clock for delta time
     this.clock = new THREE.Clock();
+
+    // Environment animation (shader-based procedural effects)
+    this.environmentAnimation = new EnvironmentAnimation();
 
     // Default lighting (will be replaced by region lighting)
     this.setupDefaultLighting();
@@ -481,6 +486,13 @@ export class SugarEngine {
     // Add geometry to scene
     this.scene.add(this.currentRegion.geometry);
 
+    // Process scene for environmental animations (lamp glow, etc.)
+    this.environmentAnimation.processScene(
+      this.currentRegion.geometry,
+      regionData.environmentAnimations,
+      this.currentRegion.lights
+    );
+
     // Create surface patch LOD entities from map data
     this.surfacePatchEntities = this.createSurfacePatchEntities(
       this.currentRegion.geometry,
@@ -532,6 +544,13 @@ export class SugarEngine {
     // Position geometry at world offset
     loadedRegion.geometry.position.set(worldOffset.x, worldOffset.y, worldOffset.z);
     this.scene.add(loadedRegion.geometry);
+
+    // Process scene for environmental animations (lamp glow, etc.)
+    this.environmentAnimation.processScene(
+      loadedRegion.geometry,
+      regionData.environmentAnimations,
+      loadedRegion.lights
+    );
 
     // Track state for this region
     const state: LoadedRegionState = {
@@ -1114,6 +1133,9 @@ export class SugarEngine {
       if (!this.isPaused) {
         // Update ECS world
         this.world.update(delta);
+
+        // Update environmental animations (lamp glow, etc.)
+        this.environmentAnimation.update();
 
         // Update camera target to follow player
         if (this.playerEntity >= 0) {

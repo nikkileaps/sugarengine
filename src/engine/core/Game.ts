@@ -129,7 +129,7 @@ export class Game {
       npcs?: { id: string; name: string; defaultDialogue?: string }[];
       items?: { id: string; name: string }[];
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
-      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[] }[];
+      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
     };
 
     // Pre-register regions (must happen before loadRegion)
@@ -146,6 +146,7 @@ export class Game {
           pickups: region.pickups ?? [],
           inspectables: region.inspectables ?? [],
           triggers: region.triggers ?? [],
+          environmentAnimations: region.environmentAnimations,
         });
       }
     }
@@ -580,22 +581,17 @@ export class Game {
     return [];
   }
 
-  /**
-   * Get the main quest ID from the current episode's completionCondition
-   */
-  private getEpisodeMainQuest(): string | null {
-    if (!this.config.currentEpisode) return null;
-
-    const episode = this.episodes.getEpisode(this.config.currentEpisode);
-    if (!episode) return null;
-
-    // Check if episode has a quest-based completion condition
-    if (episode.completionCondition?.type === 'quest') {
-      return episode.completionCondition.questId;
-    }
-
-    return null;
-  }
+  // TODO: Implement episode main quest auto-start
+  // See docs/dev/quest-episode-integration.md for planned usage
+  // private getEpisodeMainQuest(): string | null {
+  //   if (!this.config.currentEpisode) return null;
+  //   const episode = this.episodes.getEpisode(this.config.currentEpisode);
+  //   if (!episode) return null;
+  //   if (episode.completionCondition?.type === 'quest') {
+  //     return episode.completionCondition.questId;
+  //   }
+  //   return null;
+  // }
 
   /**
    * Dispose all systems

@@ -3,6 +3,7 @@
  */
 
 import { create } from 'zustand';
+import type { EnvironmentAnimationEntry } from '../../engine/shaders';
 
 export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions';
 
@@ -71,6 +72,7 @@ export interface RegionData {
   inspectables?: { id: string; position: { x: number; y: number; z: number }; inspectionId: string; promptText?: string }[];
   triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[];
   availability?: { fromEpisode?: string; untilEpisode?: string };
+  environmentAnimations?: EnvironmentAnimationEntry[];
 }
 
 export interface SeasonData {
