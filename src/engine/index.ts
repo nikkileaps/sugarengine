@@ -90,6 +90,10 @@ export { TitleScreen } from './scenes/TitleScreen';
 export { PauseScreen } from './scenes/PauseScreen';
 export { SaveLoadScreen } from './scenes/SaveLoadScreen';
 
+// Audio
+export { AudioManager } from './audio';
+export type { AudioConfig, AudioState, SoundCategory, SoundOptions } from './audio';
+
 // UI
 export {
   DialogueBox,

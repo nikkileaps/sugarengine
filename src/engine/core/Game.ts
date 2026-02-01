@@ -6,6 +6,7 @@ import { InventoryManager } from '../inventory/InventoryManager';
 import { SaveManager, SaveManagerConfig } from '../save/SaveManager';
 import { SceneManager } from '../scenes/SceneManager';
 import { EpisodeManager } from '../episodes/EpisodeManager';
+import { AudioManager, AudioConfig } from '../audio';
 import { ObjectiveType } from '../quests/types';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 
@@ -13,6 +14,7 @@ export interface GameConfig {
   container: HTMLElement;
   engine?: Partial<EngineConfig>;
   save?: Partial<SaveManagerConfig>;
+  audio?: Partial<AudioConfig>;
   startRegion?: string;
   startQuest?: string;
   startItems?: { itemId: string; quantity?: number }[];
@@ -46,6 +48,7 @@ export class Game {
   readonly saveManager: SaveManager;
   readonly sceneManager: SceneManager;
   readonly episodes: EpisodeManager;
+  readonly audio: AudioManager;
 
   private config: GameConfig;
   private eventHandlers: GameEventHandlers = {};
@@ -89,6 +92,7 @@ export class Game {
       autoSaveDebounceMs: config.save?.autoSaveDebounceMs ?? 10000
     });
     this.sceneManager = new SceneManager(container);
+    this.audio = new AudioManager(config.audio);
 
     // Create episode manager
     this.episodes = new EpisodeManager({
@@ -107,6 +111,13 @@ export class Game {
     await this.inventory.init();
     await this.saveManager.init();
     await this.engine.loadNPCDatabase();
+
+    // Load menu music (fail silently if not present)
+    try {
+      await this.audio.load('menu-music', '/audio/music/menu.mp3', 'music', { loop: true });
+    } catch {
+      console.warn('[Game] Menu music not found at /audio/music/menu.mp3');
+    }
     await this.episodes.initialize();
 
     // If in development mode, register content from project data
@@ -451,6 +462,9 @@ export class Game {
     // Scene Manager Events
     // ========================================
     this.sceneManager.onNewGame(async () => {
+      // Fade out menu music
+      this.audio.transitionToGame();
+
       // Reset all state
       this.inventory.clear();
       this.quests.clearAllQuests();
@@ -496,6 +510,9 @@ export class Game {
     });
 
     this.sceneManager.onLoad(async (slotId) => {
+      // Fade out menu music
+      this.audio.transitionToGame();
+
       const result = await this.saveManager.load(slotId);
       if (result.success) {
         console.log(`Game loaded from ${slotId}`);
@@ -555,6 +572,10 @@ export class Game {
    * Show title screen
    */
   async showTitle(): Promise<void> {
+    // Start menu music if loaded
+    if (!this.audio.isPlaying('menu-music')) {
+      this.audio.play('menu-music');
+    }
     await this.sceneManager.showTitle();
   }
 
