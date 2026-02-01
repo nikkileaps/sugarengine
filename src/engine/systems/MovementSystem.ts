@@ -9,6 +9,11 @@ export class MovementSystem extends System {
   private playerHeight = 1.0; // Ray origin height (above ground cubes)
   private getCameraYaw: (() => number) | null = null;
 
+  // Footstep sound support
+  private onFootstep: (() => void) | null = null;
+  private onFootstepStop: (() => void) | null = null;
+  private wasMoving = false;
+
   constructor(
     private input: InputManager,
     private scene: THREE.Scene
@@ -17,12 +22,21 @@ export class MovementSystem extends System {
     this.raycaster = new THREE.Raycaster();
   }
 
+  /**
+   * Set callback for footstep sounds
+   */
+  setOnFootstep(callback: () => void, stopCallback?: () => void): void {
+    this.onFootstep = callback;
+    this.onFootstepStop = stopCallback ?? null;
+  }
+
   setCameraYawProvider(provider: () => number): void {
     this.getCameraYaw = provider;
   }
 
   update(world: World, delta: number): void {
     // Handle player input -> velocity
+    let isPlayerMoving = false;
     const playerEntities = world.query<[PlayerControlled, Velocity]>(PlayerControlled, Velocity);
     for (const { components: [playerControlled, velocity] } of playerEntities) {
       const { moveX, moveY } = this.input.getInput();
@@ -35,6 +49,22 @@ export class MovementSystem extends System {
       // W (moveY=-1) should move away from camera, A (moveX=-1) should move left relative to camera
       velocity.x = (moveX * Math.cos(cameraYaw) + moveY * Math.sin(cameraYaw)) * playerControlled.speed;
       velocity.z = (-moveX * Math.sin(cameraYaw) + moveY * Math.cos(cameraYaw)) * playerControlled.speed;
+
+      isPlayerMoving = velocity.x !== 0 || velocity.z !== 0;
+    }
+
+    // Footstep sounds - play continuously while moving
+    if (this.onFootstep) {
+      if (isPlayerMoving && !this.wasMoving) {
+        // Started moving - start the sound
+        this.onFootstep();
+      } else if (!isPlayerMoving && this.wasMoving) {
+        // Stopped moving - stop the sound
+        if (this.onFootstepStop) {
+          this.onFootstepStop();
+        }
+      }
+      this.wasMoving = isPlayerMoving;
     }
 
     // Apply velocity to position with collision detection

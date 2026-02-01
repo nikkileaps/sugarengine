@@ -112,12 +112,9 @@ export class Game {
     await this.saveManager.init();
     await this.engine.loadNPCDatabase();
 
-    // Load menu music (fail silently if not present)
-    try {
-      await this.audio.load('menu-music', '/audio/music/menu.mp3', 'music', { loop: true });
-    } catch {
-      console.warn('[Game] Menu music not found at /audio/music/menu.mp3');
-    }
+    // Load audio assets (fail silently if not present)
+    await this.loadAudioAssets();
+
     await this.episodes.initialize();
 
     // If in development mode, register content from project data
@@ -411,6 +408,7 @@ export class Game {
     // NPC interaction → dialogue + quest trigger
     this.engine.onInteract((npcId, npcDefaultDialogue) => {
       if (this.isUIBlocking()) return;
+      this.audio.play('interact');
 
       // Check if any active quest has a specific dialogue for this NPC
       const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
@@ -439,6 +437,7 @@ export class Game {
     // Inspectable interaction → inspection system
     this.engine.onInspect((_inspectableId, inspectionId) => {
       if (this.isUIBlocking()) return;
+      this.audio.play('interact');
       this.inspection.start(inspectionId);
     });
 
@@ -456,6 +455,7 @@ export class Game {
     this.engine.onItemPickup((pickupId, itemId, quantity) => {
       this.inventory.addItem(itemId, quantity);
       this.saveManager.markPickupCollected(this.engine.getCurrentRegion(), pickupId);
+      this.audio.play('pickup');
     });
 
     // ========================================
@@ -577,6 +577,42 @@ export class Game {
       this.audio.play('menu-music');
     }
     await this.sceneManager.showTitle();
+  }
+
+  /**
+   * Load audio assets and wire up sound handlers
+   */
+  private async loadAudioAssets(): Promise<void> {
+    // Load menu music
+    try {
+      await this.audio.load('menu-music', '/audio/music/menu.mp3', 'music', { loop: true });
+    } catch {
+      console.warn('[Game] Menu music not found at /audio/music/menu.mp3');
+    }
+
+    // Load SFX
+    try {
+      await this.audio.load('footstep', '/audio/sfx/footstep.mp3', 'sfx', { loop: true });
+      // Wire up footstep handler - loops while walking, stops when stopped
+      this.engine.onFootstep(
+        () => this.audio.play('footstep'),
+        () => this.audio.stop('footstep')
+      );
+    } catch {
+      console.warn('[Game] Footstep sound not found at /audio/sfx/footstep.mp3');
+    }
+
+    try {
+      await this.audio.load('interact', '/audio/sfx/interact.mp3', 'sfx');
+    } catch {
+      console.warn('[Game] Interact sound not found at /audio/sfx/interact.mp3');
+    }
+
+    try {
+      await this.audio.load('pickup', '/audio/sfx/pickup.mp3', 'sfx');
+    } catch {
+      console.warn('[Game] Pickup sound not found at /audio/sfx/pickup.mp3');
+    }
   }
 
   /**

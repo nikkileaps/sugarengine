@@ -1077,6 +1077,10 @@ export class SugarEngine {
     this.onNPCClickHandler = handler;
   }
 
+  onFootstep(handler: () => void, stopHandler?: () => void): void {
+    this.movementSystem.setOnFootstep(handler, stopHandler);
+  }
+
   private handleClick(event: MouseEvent): void {
     // Convert mouse position to normalized device coordinates (-1 to +1)
     const rect = this.renderer.domElement.getBoundingClientRect();
