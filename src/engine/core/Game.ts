@@ -6,7 +6,7 @@ import { InventoryManager } from '../inventory/InventoryManager';
 import { SaveManager, SaveManagerConfig } from '../save/SaveManager';
 import { SceneManager } from '../scenes/SceneManager';
 import { EpisodeManager } from '../episodes/EpisodeManager';
-import { AudioManager, AudioConfig } from '../audio';
+import { AudioManager, AudioConfig, AmbientController } from '../audio';
 import { ObjectiveType } from '../quests/types';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 
@@ -49,6 +49,7 @@ export class Game {
   readonly sceneManager: SceneManager;
   readonly episodes: EpisodeManager;
   readonly audio: AudioManager;
+  readonly ambient: AmbientController;
 
   private config: GameConfig;
   private eventHandlers: GameEventHandlers = {};
@@ -93,6 +94,7 @@ export class Game {
     });
     this.sceneManager = new SceneManager(container);
     this.audio = new AudioManager(config.audio);
+    this.ambient = new AmbientController(this.audio);
 
     // Create episode manager
     this.episodes = new EpisodeManager({
@@ -462,8 +464,9 @@ export class Game {
     // Scene Manager Events
     // ========================================
     this.sceneManager.onNewGame(async () => {
-      // Fade out menu music
+      // Fade out menu music, start ambient sounds
       this.audio.transitionToGame();
+      this.ambient.start();
 
       // Reset all state
       this.inventory.clear();
@@ -510,8 +513,9 @@ export class Game {
     });
 
     this.sceneManager.onLoad(async (slotId) => {
-      // Fade out menu music
+      // Fade out menu music, start ambient sounds
       this.audio.transitionToGame();
+      this.ambient.start();
 
       const result = await this.saveManager.load(slotId);
       if (result.success) {
@@ -572,6 +576,9 @@ export class Game {
    * Show title screen
    */
   async showTitle(): Promise<void> {
+    // Stop ambient sounds
+    this.ambient.stop();
+
     // Start menu music if loaded
     if (!this.audio.isPlaying('menu-music')) {
       this.audio.play('menu-music');
@@ -612,6 +619,27 @@ export class Game {
       await this.audio.load('pickup', '/audio/sfx/pickup.mp3', 'sfx');
     } catch {
       console.warn('[Game] Pickup sound not found at /audio/sfx/pickup.mp3');
+    }
+
+    // Load ambient sounds
+    try {
+      await this.audio.load('wind', '/audio/ambient/wind.mp3', 'ambient', { loop: true });
+      this.ambient.add({
+        id: 'wind',
+        minInterval: 20,
+        maxInterval: 60,
+        minDuration: 5,
+        maxDuration: 15,
+      });
+    } catch {
+      console.warn('[Game] Wind sound not found at /audio/ambient/wind.mp3');
+    }
+
+    try {
+      await this.audio.load('owl', '/audio/ambient/owl.mp3', 'ambient');
+      this.ambient.add({ id: 'owl', minInterval: 30, maxInterval: 90 });
+    } catch {
+      console.warn('[Game] Owl sound not found at /audio/ambient/owl.mp3');
     }
   }
 
@@ -654,6 +682,8 @@ export class Game {
    * Dispose all systems
    */
   dispose(): void {
+    this.ambient.dispose();
+    this.audio.dispose();
     this.dialogue.dispose();
     this.inspection.dispose();
   }
