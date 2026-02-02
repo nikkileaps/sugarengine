@@ -246,6 +246,10 @@ async function runGame(gameData: GameData) {
   // ========================================
 
   await game.loadRegion(startRegionPath);
+
+  // Remove loading indicator
+  document.getElementById('loading')?.remove();
+
   game.run();
   game.pause();
   await game.showTitle();
