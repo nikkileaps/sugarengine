@@ -11,7 +11,10 @@
     "test:run": "vitest run",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "game:build": "vite build --config vite.config.game.ts && mv dist-game/game.html dist-game/index.html",
+    "publish:local": "npm run game:build && vite preview --outDir dist-game --port 4173",
+    "publish:deploy": "./scripts/deploy-to-rackwick.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.6",

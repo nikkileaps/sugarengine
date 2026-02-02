@@ -206,7 +206,7 @@ export class RegionLoader {
    * Loads geometry and map.json from the path specified in RegionData.geometry.
    */
   async load(regionData: RegionData): Promise<LoadedRegion> {
-    const basePath = `/regions/${regionData.geometry.path}/`;
+    const basePath = `${import.meta.env.BASE_URL}regions/${regionData.geometry.path}/`;
 
     // Load map.json and geometry.glb in parallel
     const [mapData, geometry] = await Promise.all([

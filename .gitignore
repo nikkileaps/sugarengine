@@ -3,7 +3,11 @@ node_modules/
 
 # Build outputs
 dist/
+dist-game/
 src-tauri/target/
+
+# Netlify
+.netlify/
 
 # IDE
 .vscode/

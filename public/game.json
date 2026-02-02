@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "defaultEpisode": "7e581708-4c66-44b7-8e6f-e6ebc45f92b2",
+  "seasons": [
+    {
+      "id": "bedf72ba-e0db-4dbb-a92f-46d6f0dad29b",
+      "name": "Season 1",
+      "order": 1
+    }
+  ],
+  "episodes": [
+    {
+      "id": "7e581708-4c66-44b7-8e6f-e6ebc45f92b2",
+      "seasonId": "bedf72ba-e0db-4dbb-a92f-46d6f0dad29b",
+      "name": "Episode 1",
+      "order": 1,
+      "startRegion": "b1ede603-c4ab-4e5d-a3c8-5023861bc216"
+    }
+  ],
+  "dialogues": [
+    {
+      "id": "ea0de694-456a-47de-b6b1-6a50b00fb888",
+      "displayName": "Long Time",
+      "startNode": "e38d7da7-3577-477a-b717-02ca7d120ca4",
+      "nodes": [
+        {
+          "id": "e38d7da7-3577-477a-b717-02ca7d120ca4",
+          "displayName": "Start",
+          "text": "Hello again, Holly.",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "478f6382-a184-4106-8cd1-23bf5e837761"
+            }
+          ]
+        },
+        {
+          "id": "478f6382-a184-4106-8cd1-23bf5e837761",
+          "displayName": "Node 2",
+          "text": "Hello, Ethan.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        }
+      ]
+    }
+  ],
+  "quests": [
+    {
+      "id": "338dcbbe-6b75-4ba3-82d4-de2c018f8d03",
+      "name": "A Long Time Ago",
+      "description": "Quest description...",
+      "startStage": "start",
+      "stages": [
+        {
+          "id": "start",
+          "description": "First stage",
+          "objectives": [
+            {
+              "id": "obj-1",
+              "type": "talk",
+              "target": "7319fa48-11aa-4abe-b086-850fd51f8334",
+              "description": "Talk to Ethan",
+              "dialogue": "ea0de694-456a-47de-b6b1-6a50b00fb888"
+            },
+            {
+              "id": "a9c2fce1-c2a5-45c5-a26f-8847826d91be",
+              "type": "collect",
+              "target": "e9dfa09a-430f-4d85-93dc-12827a80e756",
+              "description": "Collect Newspaper from Stand"
+            }
+          ]
+        }
+      ],
+      "episodeId": "7e581708-4c66-44b7-8e6f-e6ebc45f92b2"
+    }
+  ],
+  "npcs": [
+    {
+      "id": "7319fa48-11aa-4abe-b086-850fd51f8334",
+      "name": "Ethan",
+      "description": ""
+    }
+  ],
+  "items": [
+    {
+      "id": "e9dfa09a-430f-4d85-93dc-12827a80e756",
+      "name": "Rackwick City Gazette Post",
+      "description": "Rackwick City Gazette Post, Vol 1, Issue 1",
+      "category": "quest",
+      "stackable": false,
+      "maxStack": 99,
+      "giftable": false
+    }
+  ],
+  "inspections": [
+    {
+      "id": "f97f1df3-5b14-422f-a846-617207aac5e2",
+      "title": "Fountain",
+      "subtitle": "Subtitle",
+      "content": "Founder's Fountain.\nThe inscription on the fountain reads - for those who so bravely founded the city of Rackwick after the Fall."
+    }
+  ],
+  "regions": [
+    {
+      "id": "b1ede603-c4ab-4e5d-a3c8-5023861bc216",
+      "name": "Cafe Nollie",
+      "geometry": {
+        "path": "cafe-nollie"
+      },
+      "gridPosition": {
+        "x": 0,
+        "z": 0
+      },
+      "playerSpawn": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "npcs": [
+        {
+          "id": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "position": {
+            "x": 6,
+            "y": 1,
+            "z": -13
+          }
+        }
+      ],
+      "triggers": [],
+      "pickups": [
+        {
+          "id": "c6d5c390-3075-4720-a3c8-681154260813",
+          "itemId": "e9dfa09a-430f-4d85-93dc-12827a80e756",
+          "position": {
+            "x": 17,
+            "y": 1,
+            "z": -9
+          },
+          "quantity": 1
+        }
+      ],
+      "inspectables": [
+        {
+          "id": "ce81a6d4-73e1-492e-b2de-34e5127b5175",
+          "inspectionId": "f97f1df3-5b14-422f-a846-617207aac5e2",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          }
+        }
+      ]
+    }
+  ]
+}

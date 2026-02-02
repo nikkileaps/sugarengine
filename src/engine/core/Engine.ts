@@ -1025,7 +1025,7 @@ export class SugarEngine {
    */
   async loadNPCDatabase(): Promise<void> {
     try {
-      const response = await fetch('/npcs/npcs.json');
+      const response = await fetch(import.meta.env.BASE_URL + 'npcs/npcs.json');
       if (response.ok) {
         const data = await response.json() as { npcs: NPCDatabaseEntry[] };
         this.npcDatabase.clear();

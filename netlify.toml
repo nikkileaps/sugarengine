@@ -1,0 +1,17 @@
+[build]
+  command = "npm run game:build"
+  publish = "dist-game"
+
+# Production context (main branch)
+[context.production]
+  command = "npm run game:build"
+
+# Staging context
+[context.staging]
+  command = "npm run game:build"
+
+# SPA routing - all routes serve index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

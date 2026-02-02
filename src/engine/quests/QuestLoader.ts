@@ -40,7 +40,7 @@ export class QuestLoader {
    * Fetch and parse a quest JSON file
    */
   private async fetchQuest(questId: string): Promise<LoadedQuest> {
-    const response = await fetch(`/quests/${questId}.json`);
+    const response = await fetch(`${import.meta.env.BASE_URL}quests/${questId}.json`);
     if (!response.ok) {
       throw new Error(`Failed to load quest: ${questId} (${response.status})`);
     }

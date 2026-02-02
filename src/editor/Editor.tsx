@@ -264,6 +264,60 @@ export function Editor() {
     }
   };
 
+  const handlePublish = async () => {
+    // Build game data for publishing
+    const gameData = {
+      version: 1,
+      defaultEpisode: currentEpisodeId,
+      seasons,
+      episodes,
+      dialogues,
+      quests,
+      npcs,
+      items,
+      inspections,
+      regions,
+    };
+
+    const jsonContent = JSON.stringify(gameData, null, 2);
+
+    try {
+      // Use File System Access API to save to public/game.json
+      if ('showSaveFilePicker' in window) {
+        const handle = await (window as Window & {
+          showSaveFilePicker: (options: {
+            suggestedName?: string;
+            types: { description: string; accept: Record<string, string[]> }[];
+          }) => Promise<FileSystemFileHandle>;
+        }).showSaveFilePicker({
+          suggestedName: 'game.json',
+          types: [{
+            description: 'Game Data',
+            accept: { 'application/json': ['.json'] },
+          }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(jsonContent);
+        await writable.close();
+        console.log('[Editor] Published game.json');
+        alert('Published! Save to the public/ folder, then run:\n\nnpm run publish:local\n\nto preview the build.');
+      } else {
+        // Fallback to download
+        const blob = new Blob([jsonContent], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'game.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        alert('Downloaded game.json!\n\nMove it to the public/ folder, then run:\n\nnpm run publish:local');
+      }
+    } catch (err) {
+      // User cancelled or error
+      console.error('Publish failed:', err);
+    }
+  };
+
   const handleOpenProject = async () => {
     try {
       let fileText: string;
@@ -543,6 +597,23 @@ export function Editor() {
                                         }}
                                       >
                                         ▶ Preview
+                                      </Button>
+
+                                      {/* Publish button */}
+                                      <Button
+                                        variant="subtle"
+                                        disabled={!isEditorEnabled}
+                                        onClick={handlePublish}
+                                        styles={{
+                                          root: {
+                                            background: '#cba6f722',
+                                            color: '#cba6f7',
+                                            '&:hover': { background: '#cba6f744' },
+                                            '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
+                                          },
+                                        }}
+                                      >
+                                        🚀 Publish
                                       </Button>
                                     </Group>
                                   </AppShell.Header>

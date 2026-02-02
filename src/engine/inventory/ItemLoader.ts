@@ -25,7 +25,7 @@ export class ItemLoader {
 
   private async fetchItems(): Promise<void> {
     try {
-      const response = await fetch('/items/items.json');
+      const response = await fetch(import.meta.env.BASE_URL + 'items/items.json');
       if (!response.ok) {
         throw new Error(`Failed to load items: ${response.status}`);
       }

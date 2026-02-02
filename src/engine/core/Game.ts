@@ -592,38 +592,38 @@ export class Game {
   private async loadAudioAssets(): Promise<void> {
     // Load menu music
     try {
-      await this.audio.load('menu-music', '/audio/music/menu.mp3', 'music', { loop: true });
+      await this.audio.load('menu-music', import.meta.env.BASE_URL + 'audio/music/menu.mp3', 'music', { loop: true });
     } catch {
-      console.warn('[Game] Menu music not found at /audio/music/menu.mp3');
+      console.warn('[Game] Menu music not found');
     }
 
     // Load SFX
     try {
-      await this.audio.load('footstep', '/audio/sfx/footstep.mp3', 'sfx', { loop: true });
+      await this.audio.load('footstep', import.meta.env.BASE_URL + 'audio/sfx/footstep.mp3', 'sfx', { loop: true });
       // Wire up footstep handler - loops while walking, stops when stopped
       this.engine.onFootstep(
         () => this.audio.play('footstep'),
         () => this.audio.stop('footstep')
       );
     } catch {
-      console.warn('[Game] Footstep sound not found at /audio/sfx/footstep.mp3');
+      console.warn('[Game] Footstep sound not found');
     }
 
     try {
-      await this.audio.load('interact', '/audio/sfx/interact.mp3', 'sfx');
+      await this.audio.load('interact', import.meta.env.BASE_URL + 'audio/sfx/interact.mp3', 'sfx');
     } catch {
-      console.warn('[Game] Interact sound not found at /audio/sfx/interact.mp3');
+      console.warn('[Game] Interact sound not found');
     }
 
     try {
-      await this.audio.load('pickup', '/audio/sfx/pickup.mp3', 'sfx');
+      await this.audio.load('pickup', import.meta.env.BASE_URL + 'audio/sfx/pickup.mp3', 'sfx');
     } catch {
-      console.warn('[Game] Pickup sound not found at /audio/sfx/pickup.mp3');
+      console.warn('[Game] Pickup sound not found');
     }
 
     // Load ambient sounds
     try {
-      await this.audio.load('wind', '/audio/ambient/wind.mp3', 'ambient', { loop: true });
+      await this.audio.load('wind', import.meta.env.BASE_URL + 'audio/ambient/wind.mp3', 'ambient', { loop: true });
       this.ambient.add({
         id: 'wind',
         minInterval: 20,
@@ -632,14 +632,14 @@ export class Game {
         maxDuration: 15,
       });
     } catch {
-      console.warn('[Game] Wind sound not found at /audio/ambient/wind.mp3');
+      console.warn('[Game] Wind sound not found');
     }
 
     try {
-      await this.audio.load('owl', '/audio/ambient/owl.mp3', 'ambient');
+      await this.audio.load('owl', import.meta.env.BASE_URL + 'audio/ambient/owl.mp3', 'ambient');
       this.ambient.add({ id: 'owl', minInterval: 30, maxInterval: 90 });
     } catch {
-      console.warn('[Game] Owl sound not found at /audio/ambient/owl.mp3');
+      console.warn('[Game] Owl sound not found');
     }
   }
 
