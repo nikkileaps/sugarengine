@@ -1,49 +1,17 @@
-import { ItemDefinition, ItemsDatabase } from './types';
+import { ItemDefinition } from './types';
 
 /**
- * Loads and caches item definitions from items.json
+ * Manages item definitions.
+ * Items are registered via registerItem() from project data.
  */
 export class ItemLoader {
   private items: Map<string, ItemDefinition> = new Map();
-  private loaded = false;
-  private loading: Promise<void> | null = null;
 
   /**
-   * Load all item definitions
+   * Initialize (no-op, items are registered via registerItem)
    */
   async load(): Promise<void> {
-    if (this.loaded) return;
-
-    if (this.loading) {
-      return this.loading;
-    }
-
-    this.loading = this.fetchItems();
-    await this.loading;
-    this.loading = null;
-  }
-
-  private async fetchItems(): Promise<void> {
-    try {
-      const response = await fetch(import.meta.env.BASE_URL + 'items/items.json');
-      if (!response.ok) {
-        throw new Error(`Failed to load items: ${response.status}`);
-      }
-
-      const data: ItemsDatabase = await response.json();
-
-      // Build lookup map
-      for (const item of data.items) {
-        this.items.set(item.id, item);
-      }
-
-      this.loaded = true;
-      console.log(`Loaded ${this.items.size} item definitions`);
-    } catch (error) {
-      console.error('Failed to load items:', error);
-      // Don't throw - allow game to continue without items
-      this.loaded = true;
-    }
+    // Items are registered directly via registerItem() from project data
   }
 
   /**
@@ -71,14 +39,13 @@ export class ItemLoader {
    * Check if items are loaded
    */
   isLoaded(): boolean {
-    return this.loaded;
+    return this.items.size > 0;
   }
 
   /**
-   * Register an item directly (for development mode)
+   * Register an item definition
    */
   registerItem(item: ItemDefinition): void {
     this.items.set(item.id, item);
-    this.loaded = true;
   }
 }

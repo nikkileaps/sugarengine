@@ -112,7 +112,6 @@ export class Game {
   async init(): Promise<void> {
     await this.inventory.init();
     await this.saveManager.init();
-    await this.engine.loadNPCDatabase();
 
     // Load audio assets (fail silently if not present)
     await this.loadAudioAssets();

@@ -972,7 +972,7 @@ export class SugarEngine {
     // Try to load a model, fall back to cube
     let mesh: THREE.Object3D;
     try {
-      mesh = await this.models.load('/models/player.glb');
+      mesh = await this.models.load(import.meta.env.BASE_URL + 'models/player.glb');
       mesh.name = 'player';
       mesh.castShadow = true;
       mesh.traverse((child) => {
@@ -1017,26 +1017,6 @@ export class SugarEngine {
     this.world.addComponent(entity, new Renderable(mesh));
 
     return entity;
-  }
-
-  /**
-   * Load the NPC database from npcs.json
-   * This provides display names and metadata for NPCs referenced by UUID in maps
-   */
-  async loadNPCDatabase(): Promise<void> {
-    try {
-      const response = await fetch(import.meta.env.BASE_URL + 'npcs/npcs.json');
-      if (response.ok) {
-        const data = await response.json() as { npcs: NPCDatabaseEntry[] };
-        this.npcDatabase.clear();
-        for (const npc of data.npcs) {
-          this.npcDatabase.set(npc.id, npc);
-        }
-        console.log(`Loaded NPC database: ${data.npcs.length} entries`);
-      }
-    } catch {
-      // No NPC database to load, will use IDs as names
-    }
   }
 
   /**
