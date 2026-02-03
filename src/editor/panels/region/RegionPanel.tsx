@@ -42,6 +42,13 @@ export interface InspectableDefinition {
   promptText?: string;
 }
 
+export interface ResonancePointDefinition {
+  id: string;
+  resonancePointId: string;         // References ResonancePointData.id
+  position: Vec3;
+  promptText?: string;              // Custom "Press E to..." text
+}
+
 export interface TriggerDefinition {
   id: string;
   type: 'box';
@@ -74,6 +81,7 @@ export interface RegionEntry {
   npcs?: NPCDefinition[];
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
+  resonancePoints?: ResonancePointDefinition[];
   triggers?: TriggerDefinition[];
   environmentAnimations?: EnvironmentAnimationEntry[];
   availability?: { fromEpisode?: string; untilEpisode?: string };
@@ -91,6 +99,7 @@ interface RegionPanelProps {
   npcs?: { id: string; name: string }[];
   items?: { id: string; name: string }[];
   inspections?: { id: string; displayName?: string }[];
+  resonancePointDefs?: { id: string; name: string }[];
   episodes?: { id: string; name: string }[];
   children: (result: RegionPanelResult) => ReactNode;
 }
@@ -101,6 +110,7 @@ export function RegionPanel({
   npcs = [],
   items = [],
   inspections = [],
+  resonancePointDefs = [],
   episodes = [],
   children,
 }: RegionPanelProps) {
@@ -122,6 +132,7 @@ export function RegionPanel({
       (region.npcs?.length || 0) +
       (region.pickups?.length || 0) +
       (region.inspectables?.length || 0) +
+      (region.resonancePoints?.length || 0) +
       (region.triggers?.length || 0)
     );
   };
@@ -174,6 +185,11 @@ export function RegionPanel({
         return { id: inspectable.id, type: 'inspectable', position: inspectable.position, data: inspectable };
       }
     }
+    for (const resonancePoint of selectedRegion.resonancePoints || []) {
+      if (resonancePoint.id === selectedSpawnId) {
+        return { id: resonancePoint.id, type: 'resonancePoint', position: resonancePoint.position, data: resonancePoint };
+      }
+    }
     for (const trigger of selectedRegion.triggers || []) {
       if (trigger.id === selectedSpawnId) {
         const center: Vec3 = {
@@ -207,6 +223,11 @@ export function RegionPanel({
           i.id === spawn.id ? { ...(spawn.data as InspectableDefinition), position: spawn.position } : i
         );
         break;
+      case 'resonancePoint':
+        updated.resonancePoints = (selectedRegion.resonancePoints || []).map((r) =>
+          r.id === spawn.id ? { ...(spawn.data as ResonancePointDefinition), position: spawn.position } : r
+        );
+        break;
       case 'trigger': {
         const triggerData = spawn.data as TriggerDefinition;
         const halfSize = {
@@ -237,6 +258,7 @@ export function RegionPanel({
       case 'npc': updated.npcs = (selectedRegion.npcs || []).filter((n) => n.id !== selectedSpawnId); break;
       case 'pickup': updated.pickups = (selectedRegion.pickups || []).filter((p) => p.id !== selectedSpawnId); break;
       case 'inspectable': updated.inspectables = (selectedRegion.inspectables || []).filter((i) => i.id !== selectedSpawnId); break;
+      case 'resonancePoint': updated.resonancePoints = (selectedRegion.resonancePoints || []).filter((r) => r.id !== selectedSpawnId); break;
       case 'trigger': updated.triggers = (selectedRegion.triggers || []).filter((t) => t.id !== selectedSpawnId); break;
     }
     handleUpdate(updated);
@@ -305,6 +327,7 @@ export function RegionPanel({
         npcs={npcs}
         items={items}
         inspections={inspections}
+        resonancePointDefs={resonancePointDefs}
         episodes={episodes}
         selectedSpawnId={selectedSpawnId}
         onSelectSpawn={setSelectedSpawnId}
@@ -328,6 +351,7 @@ export function RegionPanel({
         npcs={npcs}
         items={items}
         inspections={inspections}
+        resonancePointDefs={resonancePointDefs}
         onChange={handleSpawnUpdate}
         onDelete={handleSpawnDelete}
       />

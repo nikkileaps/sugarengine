@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, WorldLabel, SurfacePatchLOD } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem } from '../systems';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, ResonancePoint, WorldLabel, SurfacePatchLOD } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
@@ -43,6 +43,7 @@ export interface LoadedRegionState {
   npcEntities: number[];
   pickupEntities: number[];
   inspectableEntities: number[];
+  resonancePointEntities: number[];
   surfacePatchEntities: number[];
   lights: THREE.Light[];
 }
@@ -68,6 +69,7 @@ export class SugarEngine {
   private npcEntities: number[] = [];
   private pickupEntities: number[] = [];
   private inspectableEntities: number[] = [];
+  private resonancePointEntities: number[] = [];
   private surfacePatchEntities: number[] = [];
 
   private triggerSystem: TriggerSystem;
@@ -289,6 +291,16 @@ export class SugarEngine {
     }
     this.inspectableEntities = [];
 
+    // Remove old resonance point entities (and their meshes)
+    for (const entityId of this.resonancePointEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
+      this.world.removeEntity(entityId);
+    }
+    this.resonancePointEntities = [];
+
     // Remove old surface patch LOD entities
     for (const entityId of this.surfacePatchEntities) {
       this.world.removeEntity(entityId);
@@ -483,6 +495,51 @@ export class SugarEngine {
       console.log(`Loaded ${inspectables.length} inspectable objects`);
     }
 
+    // Create resonance point entities from region data
+    const resonancePoints = this.currentRegion.data.resonancePoints ?? [];
+    for (const resonancePointDef of resonancePoints) {
+      const entity = this.world.createEntity();
+
+      // Position
+      this.world.addComponent(entity, new Position(
+        resonancePointDef.position.x,
+        resonancePointDef.position.y,
+        resonancePointDef.position.z
+      ));
+
+      // ResonancePoint data
+      this.world.addComponent(entity, new ResonancePoint(
+        resonancePointDef.id,
+        resonancePointDef.resonancePointId,
+        resonancePointDef.promptText
+      ));
+
+      // Placeholder mesh (glowing crystal-like shape)
+      const geometry = new THREE.OctahedronGeometry(0.35, 0);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x7b68ee,
+        emissive: 0x5548c8,
+        emissiveIntensity: 0.5
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(
+        resonancePointDef.position.x,
+        resonancePointDef.position.y + 0.5,
+        resonancePointDef.position.z
+      );
+      mesh.name = `resonancePoint-${resonancePointDef.id}`;
+      mesh.userData.resonancePointId = resonancePointDef.id;
+      mesh.userData.entityId = entity;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      this.resonancePointEntities.push(entity);
+    }
+    if (resonancePoints.length > 0) {
+      console.log(`Loaded ${resonancePoints.length} resonance points`);
+    }
+
     // Add geometry to scene
     this.scene.add(this.currentRegion.geometry);
 
@@ -560,6 +617,7 @@ export class SugarEngine {
       npcEntities: [],
       pickupEntities: [],
       inspectableEntities: [],
+      resonancePointEntities: [],
       surfacePatchEntities: [],
       lights: []
     };
@@ -699,6 +757,40 @@ export class SugarEngine {
       state.inspectableEntities.push(entity);
     }
 
+    // Create resonance point entities (offset by world position)
+    const resonancePoints = regionData.resonancePoints ?? [];
+    for (const resonancePointDef of resonancePoints) {
+      const entity = this.world.createEntity();
+      const worldX = resonancePointDef.position.x + worldOffset.x;
+      const worldY = resonancePointDef.position.y + worldOffset.y;
+      const worldZ = resonancePointDef.position.z + worldOffset.z;
+
+      this.world.addComponent(entity, new Position(worldX, worldY, worldZ));
+      this.world.addComponent(entity, new ResonancePoint(
+        resonancePointDef.id,
+        resonancePointDef.resonancePointId,
+        resonancePointDef.promptText
+      ));
+
+      const geometry = new THREE.OctahedronGeometry(0.35, 0);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x7b68ee,
+        emissive: 0x5548c8,
+        emissiveIntensity: 0.5
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(worldX, worldY + 0.5, worldZ);
+      mesh.name = `resonancePoint-${resonancePointDef.id}`;
+      mesh.userData.resonancePointId = resonancePointDef.id;
+      mesh.userData.entityId = entity;
+      mesh.userData.regionId = regionId;
+      this.scene.add(mesh);
+
+      this.world.addComponent(entity, new Renderable(mesh));
+      state.resonancePointEntities.push(entity);
+    }
+
     // Add lights from region (offset by world position)
     for (const light of loadedRegion.lights) {
       if (light.position) {
@@ -766,6 +858,15 @@ export class SugarEngine {
 
     // Remove inspectable entities and their meshes
     for (const entityId of state.inspectableEntities) {
+      const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+      }
+      this.world.removeEntity(entityId);
+    }
+
+    // Remove resonance point entities and their meshes
+    for (const entityId of state.resonancePointEntities) {
       const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
       if (renderable) {
         this.scene.remove(renderable.mesh);
@@ -1173,6 +1274,10 @@ export class SugarEngine {
 
   onInspect(handler: InspectionHandler): void {
     this.interactionSystem.setInspectHandler(handler);
+  }
+
+  onResonanceInteract(handler: ResonanceHandler): void {
+    this.interactionSystem.setResonanceHandler(handler);
   }
 
   onNearbyNPCChange(handler: (nearby: { id: string; dialogueId?: string } | null) => void): void {

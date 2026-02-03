@@ -18,6 +18,7 @@ import { RegionPanel } from './panels/region';
 import { DialoguePanel } from './panels/dialogue';
 import { MagicPanel } from './panels/magic';
 import { PlayerPanel } from './panels/player';
+import { ResonancePanel } from './panels/resonance';
 import { WelcomeDialog } from './components/WelcomeDialog';
 import { ProjectMenu } from './components/ProjectMenu';
 import { ProjectExplorer } from './components/ProjectExplorer';
@@ -31,6 +32,7 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'npcs', label: 'NPCs', icon: '👤' },
   { value: 'items', label: 'Items', icon: '🎒' },
   { value: 'spells', label: 'Spells', icon: '✨' },
+  { value: 'resonance', label: 'Resonance', icon: '🦋' },
   { value: 'player', label: 'Player', icon: '🧙' },
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
@@ -83,6 +85,8 @@ export function Editor() {
   const setPlayerCaster = useEditorStore((s) => s.setPlayerCaster);
   const spells = useEditorStore((s) => s.spells);
   const setSpells = useEditorStore((s) => s.setSpells);
+  const resonancePoints = useEditorStore((s) => s.resonancePoints);
+  const setResonancePoints = useEditorStore((s) => s.setResonancePoints);
   const currentSeasonId = useEditorStore((s) => s.currentSeasonId);
   const currentEpisodeId = useEditorStore((s) => s.currentEpisodeId);
   const setCurrentSeason = useEditorStore((s) => s.setCurrentSeason);
@@ -136,6 +140,7 @@ export function Editor() {
       regions,
       playerCaster,
       spells,
+      resonancePoints,
     };
 
     console.log('[Editor] handlePreview: playerCaster =', playerCaster);
@@ -184,6 +189,7 @@ export function Editor() {
     setRegions([]);
     setPlayerCaster(null);
     setSpells([]);
+    setResonancePoints([]);
     setCurrentSeason(seasonId);
     setCurrentEpisode(episodeId);
     setProjectLoaded(true, name);
@@ -239,6 +245,7 @@ export function Editor() {
       regions,
       playerCaster,
       spells,
+      resonancePoints,
     };
 
     const jsonContent = JSON.stringify(projectData, null, 2);
@@ -294,6 +301,7 @@ export function Editor() {
       regions,
       playerCaster,
       spells,
+      resonancePoints,
     };
 
     const jsonContent = JSON.stringify(gameData, null, 2);
@@ -418,6 +426,7 @@ export function Editor() {
       setRegions(data.regions || []);
       setPlayerCaster(data.playerCaster || null);
       setSpells(data.spells || []);
+      setResonancePoints(data.resonancePoints || []);
 
       // Set current season/episode to first available
       const firstSeason = loadedSeasons.sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
@@ -490,31 +499,38 @@ export function Editor() {
                             dialogues={dialogues.map((d) => ({ id: d.id, name: d.displayName || d.id }))}
                           >
                             {(magicPanel) => (
-                              <PlayerPanel
-                                playerCaster={playerCaster}
-                                onPlayerCasterChange={setPlayerCaster}
+                              <ResonancePanel
+                                resonancePoints={resonancePoints}
+                                onResonancePointsChange={setResonancePoints}
                               >
-                                {(playerPanel) => (
-                                  <RegionPanel
+                                {(resonancePanel) => (
+                                  <PlayerPanel
+                                    playerCaster={playerCaster}
+                                    onPlayerCasterChange={setPlayerCaster}
+                                  >
+                                    {(playerPanel) => (
+                                      <RegionPanel
                                 regions={regions as any}
                                 onRegionsChange={setRegions as any}
                                 npcs={npcList}
                                 items={itemList}
                                 inspections={inspectionList}
+                                resonancePointDefs={resonancePoints.map((r) => ({ id: r.id, name: r.name }))}
                                 episodes={episodeList}
                               >
                                   {(regionPanel) => {
-                                    // Select the panel based on active tab
-                                    const panelContent =
-                                      activeTab === 'dialogues' ? dialoguePanel :
-                                      activeTab === 'quests' ? questPanel :
-                                      activeTab === 'npcs' ? npcPanel :
-                                      activeTab === 'items' ? itemPanel :
-                                      activeTab === 'spells' ? magicPanel :
-                                      activeTab === 'player' ? playerPanel :
-                                      activeTab === 'inspections' ? inspectionPanel :
-                                      activeTab === 'regions' ? regionPanel :
-                                      npcPanel;
+                                        // Select the panel based on active tab
+                                        const panelContent =
+                                          activeTab === 'dialogues' ? dialoguePanel :
+                                          activeTab === 'quests' ? questPanel :
+                                          activeTab === 'npcs' ? npcPanel :
+                                          activeTab === 'items' ? itemPanel :
+                                          activeTab === 'spells' ? magicPanel :
+                                          activeTab === 'resonance' ? resonancePanel :
+                                          activeTab === 'player' ? playerPanel :
+                                          activeTab === 'inspections' ? inspectionPanel :
+                                          activeTab === 'regions' ? regionPanel :
+                                          npcPanel;
 
                               return (
                                 <AppShell
@@ -663,14 +679,16 @@ export function Editor() {
                                       {panelContent.inspector}
                                     </AppShell.Aside>
                                   )}
-                                </AppShell>
-                              );
-                                  }}
-                                </RegionPanel>
-                              )}
-                            </PlayerPanel>
-                          )}
-                        </MagicPanel>
+                                        </AppShell>
+                                      );
+                                    }}
+                                  </RegionPanel>
+                                )}
+                              </PlayerPanel>
+                            )}
+                          </ResonancePanel>
+                        )}
+                      </MagicPanel>
                         )}
                       </InspectionPanel>
                     )}

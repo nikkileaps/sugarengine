@@ -12,6 +12,8 @@ import { CasterSystem } from '../systems/CasterSystem';
 import { Caster } from '../components/Caster';
 import { ObjectiveType } from '../quests/types';
 import { PLAYER, NARRATOR } from '../dialogue/types';
+import type { ResonancePointConfig } from '../resonance';
+import { ResonancePointLoader } from '../resonance';
 
 export interface GameConfig {
   container: HTMLElement;
@@ -65,6 +67,7 @@ export class Game {
   private onNearbyInteractionChangeHandler: ((interaction: { type: string; id: string; promptText?: string; available: boolean } | null) => void) | null = null;
   private playerCasterConfig: PlayerCasterConfig | null = null;
   private casterSystem: CasterSystem;
+  private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -154,7 +157,7 @@ export class Game {
       npcs?: { id: string; name: string; defaultDialogue?: string }[];
       items?: { id: string; name: string }[];
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
-      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
+      regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; resonancePoints?: { id: string; resonancePointId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
       playerCaster?: unknown;
       spells?: unknown[];
     };
@@ -173,6 +176,7 @@ export class Game {
           pickups: region.pickups ?? [],
           inspectables: region.inspectables ?? [],
           triggers: region.triggers ?? [],
+          resonancePoints: region.resonancePoints ?? [],
           environmentAnimations: region.environmentAnimations,
         });
       }
@@ -222,6 +226,13 @@ export class Game {
       this.caster.registerSpell(spell);
     }
 
+    // Register resonance points
+    const resonancePoints = ResonancePointLoader.parseResonancePoints(projectData);
+    this.resonancePointDefinitions.clear();
+    for (const rp of resonancePoints) {
+      this.resonancePointDefinitions.set(rp.id, rp);
+    }
+
     console.log('[Game] Registered project content:', {
       regions: project.regions?.length || 0,
       dialogues: project.dialogues?.length || 0,
@@ -231,6 +242,7 @@ export class Game {
       items: project.items?.length || 0,
       playerCaster: this.playerCasterConfig,
       spells: spells.length,
+      resonancePoints: resonancePoints.length,
     });
   }
 
@@ -508,6 +520,20 @@ export class Game {
       this.audio.play('pickup');
     });
 
+    // Resonance points → resonance game
+    this.engine.onResonanceInteract((_resonancePointId, resonanceDefId) => {
+      if (this.isUIBlocking()) return;
+
+      // Get resonance point definition
+      const config = this.resonancePointDefinitions.get(resonanceDefId);
+      if (!config) {
+        console.warn(`[Game] Unknown resonance point definition: ${resonanceDefId}`);
+        return;
+      }
+
+      this.handleResonanceInteraction(config);
+    });
+
     // ========================================
     // Scene Manager Events
     // ========================================
@@ -671,6 +697,50 @@ export class Game {
         console.log(`[Spell Effect] ${effect.type}: ${effect.amount}`);
         // Health effects would be handled by a health system (future feature)
         break;
+    }
+  }
+
+  /**
+   * Handle resonance point interaction - starts mini-game
+   * Note: The actual UI is created and managed externally (in preview.ts)
+   */
+  private resonanceGameStartHandler: ((config: ResonancePointConfig) => void) | null = null;
+
+  /**
+   * Set the resonance game start handler (called by preview.ts to wire up UI)
+   */
+  setResonanceGameHandler(handler: (config: ResonancePointConfig) => void): void {
+    this.resonanceGameStartHandler = handler;
+  }
+
+  /**
+   * Handle resonance interaction - called when player presses E on a resonance point
+   */
+  private handleResonanceInteraction(config: ResonancePointConfig): void {
+    if (!this.resonanceGameStartHandler) {
+      console.warn('[Game] No resonance game handler set');
+      return;
+    }
+
+    // Disable movement during mini-game
+    this.engine.setMovementEnabled(false);
+
+    // Start the resonance game UI
+    this.resonanceGameStartHandler(config);
+  }
+
+  /**
+   * Called by preview.ts when resonance game completes
+   */
+  handleResonanceGameComplete(success: boolean, resonanceGained: number): void {
+    // Re-enable movement
+    this.engine.setMovementEnabled(true);
+    this.engine.consumeInteract();
+
+    // Add resonance if successful
+    if (success && resonanceGained > 0) {
+      this.caster.addResonance(resonanceGained);
+      console.log(`[Game] Resonance increased by ${resonanceGained}`);
     }
   }
 

@@ -1,20 +1,22 @@
 import { System, World } from '../ecs';
-import { Position, PlayerControlled, NPC, Inspectable } from '../components';
+import { Position, PlayerControlled, NPC, Inspectable, ResonancePoint } from '../components';
 import { InputManager } from '../core/InputManager';
 
 export type InteractionHandler = (npcId: string, dialogueId?: string) => void;
 export type InspectionHandler = (inspectableId: string, inspectionId: string, promptText: string) => void;
+export type ResonanceHandler = (resonancePointId: string, resonanceDefId: string, promptText: string) => void;
 
 /** Type of interactable entity */
-export type InteractableType = 'npc' | 'inspectable';
+export type InteractableType = 'npc' | 'inspectable' | 'resonancePoint';
 
 /** Nearby interactable info */
 export interface NearbyInteractable {
   type: InteractableType;
   id: string;
-  dialogueId?: string;      // For NPCs
-  inspectionId?: string;    // For Inspectables
-  promptText?: string;      // Custom prompt text
+  dialogueId?: string;       // For NPCs
+  inspectionId?: string;     // For Inspectables
+  resonanceDefId?: string;   // For ResonancePoints (references ResonancePointData.id)
+  promptText?: string;       // Custom prompt text
 }
 
 export class InteractionSystem extends System {
@@ -23,6 +25,7 @@ export class InteractionSystem extends System {
   private nearestInteractable: NearbyInteractable | null = null;
   private onInteract: InteractionHandler | null = null;
   private onInspect: InspectionHandler | null = null;
+  private onResonance: ResonanceHandler | null = null;
   private onNearbyChange: ((nearby: { id: string; dialogueId?: string } | null) => void) | null = null;
   private onNearbyInteractableChange: ((nearby: NearbyInteractable | null) => void) | null = null;
 
@@ -36,6 +39,10 @@ export class InteractionSystem extends System {
 
   setInspectHandler(handler: InspectionHandler): void {
     this.onInspect = handler;
+  }
+
+  setResonanceHandler(handler: ResonanceHandler): void {
+    this.onResonance = handler;
   }
 
   setNearbyChangeHandler(handler: (nearby: { id: string; dialogueId?: string } | null) => void): void {
@@ -114,6 +121,26 @@ export class InteractionSystem extends System {
       }
     }
 
+    // Find nearest ResonancePoint within interaction radius
+    const resonancePoints = world.query<[ResonancePoint, Position]>(ResonancePoint, Position);
+    for (const { components: [resonancePoint, resonancePos] } of resonancePoints) {
+      const dx = playerPos.x - resonancePos.x;
+      const dz = playerPos.z - resonancePos.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      if (distance <= this.interactionRadius) {
+        if (!nearestInteractable || distance < nearestInteractable.distance) {
+          nearestInteractable = {
+            type: 'resonancePoint',
+            id: resonancePoint.id,
+            resonanceDefId: resonancePoint.resonancePointId,
+            promptText: resonancePoint.promptText || 'Attune',
+            distance
+          };
+        }
+      }
+    }
+
     // Update nearest NPC (for backward compatibility)
     const newNearestNPC = nearestNPCData ? { id: nearestNPCData.id, dialogueId: nearestNPCData.dialogueId } : null;
     const npcChanged = (this.nearestNPC?.id !== newNearestNPC?.id);
@@ -127,7 +154,7 @@ export class InteractionSystem extends System {
 
     // Update nearest interactable (unified)
     const newNearestInteractable: NearbyInteractable | null = nearestInteractable
-      ? { type: nearestInteractable.type, id: nearestInteractable.id, dialogueId: nearestInteractable.dialogueId, inspectionId: nearestInteractable.inspectionId, promptText: nearestInteractable.promptText }
+      ? { type: nearestInteractable.type, id: nearestInteractable.id, dialogueId: nearestInteractable.dialogueId, inspectionId: nearestInteractable.inspectionId, resonanceDefId: nearestInteractable.resonanceDefId, promptText: nearestInteractable.promptText }
       : null;
     const interactableChanged = (this.nearestInteractable?.id !== newNearestInteractable?.id) ||
                                  (this.nearestInteractable?.type !== newNearestInteractable?.type);
@@ -148,6 +175,12 @@ export class InteractionSystem extends System {
           this.nearestInteractable.id,
           this.nearestInteractable.inspectionId!,
           this.nearestInteractable.promptText || 'Inspect'
+        );
+      } else if (this.nearestInteractable.type === 'resonancePoint' && this.onResonance) {
+        this.onResonance(
+          this.nearestInteractable.id,
+          this.nearestInteractable.resonanceDefId!,
+          this.nearestInteractable.promptText || 'Attune'
         );
       }
     }

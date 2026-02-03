@@ -56,6 +56,13 @@ export interface InspectableDefinition {
   promptText?: string;
 }
 
+export interface ResonancePointDefinition {
+  id: string;
+  resonancePointId: string;         // References ResonancePointData.id
+  position: Vec3;
+  promptText?: string;              // Custom "Press E to..." text
+}
+
 export interface RegionAvailability {
   fromEpisode?: string;   // First episode this region is accessible
   untilEpisode?: string;  // Last episode (for temporary areas)
@@ -187,6 +194,7 @@ export interface RegionData {
   triggers: TriggerDefinition[];
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
+  resonancePoints?: ResonancePointDefinition[];
   environmentAnimations?: EnvironmentAnimationEntry[];
   availability?: RegionAvailability;
 }

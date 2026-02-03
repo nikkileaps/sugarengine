@@ -18,6 +18,7 @@ import {
   DebugHUD,
   SpellMenuUI,
   CasterHUD,
+  ResonanceGameUI,
 } from './engine';
 
 interface ProjectMessage {
@@ -111,6 +112,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   const spellMenuUI = new SpellMenuUI(container, game.caster);
   // CasterHUD auto-shows when caster exists
   new CasterHUD(container, game.caster);
+  const resonanceGameUI = new ResonanceGameUI(container);
   const debugHUD = new DebugHUD(container, game.quests);
 
   debugHUD.setPlayerPositionProvider(() => game.getPlayerPosition());
@@ -151,6 +153,15 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     game.giveItemToNpc(npcId, itemId);
   });
 
+  // Resonance game handler
+  game.setResonanceGameHandler((config) => {
+    resonanceGameUI.start(config);
+  });
+
+  resonanceGameUI.setOnComplete((result) => {
+    game.handleResonanceGameComplete(result.success, result.resonanceGained);
+  });
+
   // ========================================
   // UI State Management
   // ========================================
@@ -174,7 +185,8 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
     giftUI.isVisible() ||
-    spellMenuUI.isVisible();
+    spellMenuUI.isVisible() ||
+    resonanceGameUI.isActive();
 
   // Show/hide interaction prompt
   let nearbyPickupId: string | null = null;

@@ -120,4 +120,17 @@ export {
   DebugHUD,
   SpellMenuUI,
   CasterHUD,
+  ResonanceGameUI,
 } from './ui';
+
+// Resonance System
+export { ResonancePointLoader } from './resonance';
+export type {
+  ResonanceDifficulty,
+  ResonancePointConfig,
+  FireflyPattern,
+  Trajectory,
+  TrajectoryPoint,
+  TrajectoryOption,
+  ResonanceGameResult,
+} from './resonance';

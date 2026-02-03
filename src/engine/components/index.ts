@@ -9,6 +9,7 @@ export { ItemPickup } from './ItemPickup';
 export { NPCMovement } from './NPCMovement';
 export type { Waypoint, MovementBehavior } from './NPCMovement';
 export { Inspectable } from './Inspectable';
+export { ResonancePoint } from './ResonancePoint';
 export { WorldLabel } from './WorldLabel';
 export { SurfacePatchLOD } from './SurfacePatchLOD';
 export { Caster } from './Caster';

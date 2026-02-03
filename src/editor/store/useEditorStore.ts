@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import type { EnvironmentAnimationEntry } from '../../engine/shaders';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance';
 
 export interface ValidationError {
   type: 'error' | 'warning';
@@ -61,6 +61,23 @@ export interface InspectionData {
   sections?: { heading?: string; text: string }[];
 }
 
+export interface ResonancePointData {
+  id: string;
+  name: string;
+  description?: string;
+  icon?: string;                    // Emoji for editor display
+  resonanceReward: number;          // How much resonance gained on success (0-100)
+  difficulty: 'easy' | 'medium' | 'hard';  // Affects firefly pattern complexity
+  cooldownMinutes?: number;         // Optional cooldown before reuse
+}
+
+export interface ResonancePointDefinition {
+  id: string;
+  resonancePointId: string;         // References ResonancePointData.id
+  position: { x: number; y: number; z: number };
+  promptText?: string;              // Custom "Press E to..." text
+}
+
 export interface RegionData {
   id: string;
   name: string;
@@ -70,6 +87,7 @@ export interface RegionData {
   npcs?: { id: string; position: { x: number; y: number; z: number } }[];
   pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[];
   inspectables?: { id: string; position: { x: number; y: number; z: number }; inspectionId: string; promptText?: string }[];
+  resonancePoints?: ResonancePointDefinition[];
   triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[];
   availability?: { fromEpisode?: string; untilEpisode?: string };
   environmentAnimations?: EnvironmentAnimationEntry[];
@@ -144,6 +162,7 @@ interface EditorState {
   regions: RegionData[];
   playerCaster: PlayerCasterData | null;
   spells: SpellData[];
+  resonancePoints: ResonancePointData[];
 
   // Episode context
   currentSeasonId: string | null;
@@ -174,6 +193,7 @@ interface EditorState {
   setRegions: (regions: RegionData[]) => void;
   setPlayerCaster: (playerCaster: PlayerCasterData | null) => void;
   setSpells: (spells: SpellData[]) => void;
+  setResonancePoints: (resonancePoints: ResonancePointData[]) => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -200,6 +220,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   regions: [],
   playerCaster: null,
   spells: [],
+  resonancePoints: [],
 
   // Actions
   setActiveTab: (tab) => set({ activeTab: tab, selectedEntryId: null }),
@@ -228,4 +249,5 @@ export const useEditorStore = create<EditorState>((set) => ({
   setRegions: (regions) => set({ regions }),
   setPlayerCaster: (playerCaster) => set({ playerCaster }),
   setSpells: (spells) => set({ spells }),
+  setResonancePoints: (resonancePoints) => set({ resonancePoints }),
 }));

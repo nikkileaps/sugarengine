@@ -27,17 +27,18 @@ import {
   NPCDefinition,
   PickupDefinition,
   InspectableDefinition,
+  ResonancePointDefinition,
   TriggerDefinition,
 } from './RegionPanel';
 import { generateUUID, shortId } from '../../utils';
 
-type SpawnType = 'npc' | 'pickup' | 'inspectable' | 'trigger';
+type SpawnType = 'npc' | 'pickup' | 'inspectable' | 'resonancePoint' | 'trigger';
 
 interface SpawnEntry {
   id: string;
   type: SpawnType;
   position: Vec3;
-  data: NPCDefinition | PickupDefinition | InspectableDefinition | TriggerDefinition;
+  data: NPCDefinition | PickupDefinition | InspectableDefinition | ResonancePointDefinition | TriggerDefinition;
 }
 
 interface RegionDetailProps {
@@ -45,6 +46,7 @@ interface RegionDetailProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   inspections: { id: string; displayName?: string }[];
+  resonancePointDefs: { id: string; name: string }[];
   episodes: { id: string; name: string }[];
   selectedSpawnId: string | null;
   onSelectSpawn: (id: string | null) => void;
@@ -56,6 +58,7 @@ const SPAWN_CONFIG: Record<SpawnType, { icon: string; title: string; color: stri
   npc: { icon: '👤', title: 'NPCs', color: '#89b4fa' },
   pickup: { icon: '📦', title: 'Items', color: '#f9e2af' },
   inspectable: { icon: '🔍', title: 'Inspectables', color: '#cba6f7' },
+  resonancePoint: { icon: '🦋', title: 'Resonance Points', color: '#94e2d5' },
   trigger: { icon: '⚡', title: 'Triggers', color: '#f38ba8' },
 };
 
@@ -64,6 +67,7 @@ export function RegionDetail({
   npcs,
   items,
   inspections,
+  resonancePointDefs,
   episodes,
   selectedSpawnId,
   onSelectSpawn,
@@ -96,6 +100,9 @@ export function RegionDetail({
     for (const inspectable of region.inspectables || []) {
       spawns.push({ id: inspectable.id, type: 'inspectable', position: inspectable.position, data: inspectable });
     }
+    for (const resonancePoint of region.resonancePoints || []) {
+      spawns.push({ id: resonancePoint.id, type: 'resonancePoint', position: resonancePoint.position, data: resonancePoint });
+    }
     for (const trigger of region.triggers || []) {
       const center: Vec3 = {
         x: (trigger.bounds.min[0] + trigger.bounds.max[0]) / 2,
@@ -125,6 +132,11 @@ export function RegionDetail({
         const insp = inspections.find((i) => i.id === inspData.inspectionId);
         return insp?.displayName || `Inspection ${shortId(inspData.inspectionId)}`;
       }
+      case 'resonancePoint': {
+        const resData = spawn.data as ResonancePointDefinition;
+        const resPt = resonancePointDefs.find((r) => r.id === resData.resonancePointId);
+        return resPt?.name || `Resonance ${shortId(resData.resonancePointId)}`;
+      }
       case 'trigger': {
         const triggerData = spawn.data as TriggerDefinition;
         return `Trigger: ${triggerData.event.type}`;
@@ -147,6 +159,9 @@ export function RegionDetail({
       case 'inspectable':
         updated = { ...region, inspectables: [...(region.inspectables || []), { id, inspectionId: inspections[0]?.id || '', position: defaultPos }] };
         break;
+      case 'resonancePoint':
+        updated = { ...region, resonancePoints: [...(region.resonancePoints || []), { id, resonancePointId: resonancePointDefs[0]?.id || '', position: defaultPos }] };
+        break;
       case 'trigger':
         updated = { ...region, triggers: [...(region.triggers || []), { id, type: 'box' as const, bounds: { min: [-1, 0, -1] as [number, number, number], max: [1, 2, 1] as [number, number, number] }, event: { type: 'custom' } }] };
         break;
@@ -163,6 +178,7 @@ export function RegionDetail({
       case 'npc': updated = { ...region, npcs: (region.npcs || []).filter((n) => n.id !== spawn.id) }; break;
       case 'pickup': updated = { ...region, pickups: (region.pickups || []).filter((p) => p.id !== spawn.id) }; break;
       case 'inspectable': updated = { ...region, inspectables: (region.inspectables || []).filter((i) => i.id !== spawn.id) }; break;
+      case 'resonancePoint': updated = { ...region, resonancePoints: (region.resonancePoints || []).filter((r) => r.id !== spawn.id) }; break;
       case 'trigger': updated = { ...region, triggers: (region.triggers || []).filter((t) => t.id !== spawn.id) }; break;
     }
     onChange(updated);

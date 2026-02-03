@@ -13,15 +13,15 @@ import {
   Paper,
   Box,
 } from '@mantine/core';
-import { Vec3, NPCDefinition, PickupDefinition, InspectableDefinition, TriggerDefinition } from './RegionPanel';
+import { Vec3, NPCDefinition, PickupDefinition, InspectableDefinition, ResonancePointDefinition, TriggerDefinition } from './RegionPanel';
 
-type SpawnType = 'npc' | 'pickup' | 'inspectable' | 'trigger';
+type SpawnType = 'npc' | 'pickup' | 'inspectable' | 'resonancePoint' | 'trigger';
 
 export interface SpawnData {
   id: string;
   type: SpawnType;
   position: Vec3;
-  data: NPCDefinition | PickupDefinition | InspectableDefinition | TriggerDefinition;
+  data: NPCDefinition | PickupDefinition | InspectableDefinition | ResonancePointDefinition | TriggerDefinition;
 }
 
 interface SpawnInspectorProps {
@@ -29,6 +29,7 @@ interface SpawnInspectorProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   inspections: { id: string; displayName?: string }[];
+  resonancePointDefs: { id: string; name: string }[];
   onChange: (spawn: SpawnData) => void;
   onDelete: () => void;
 }
@@ -37,6 +38,7 @@ const SPAWN_CONFIG: Record<SpawnType, { icon: string; title: string; color: stri
   npc: { icon: '👤', title: 'NPC', color: '#89b4fa' },
   pickup: { icon: '📦', title: 'Item Pickup', color: '#f9e2af' },
   inspectable: { icon: '🔍', title: 'Inspectable', color: '#cba6f7' },
+  resonancePoint: { icon: '🦋', title: 'Resonance Point', color: '#94e2d5' },
   trigger: { icon: '⚡', title: 'Trigger', color: '#f38ba8' },
 };
 
@@ -45,6 +47,7 @@ export function SpawnInspector({
   npcs,
   items,
   inspections,
+  resonancePointDefs,
   onChange,
   onDelete,
 }: SpawnInspectorProps) {
@@ -174,6 +177,26 @@ export function SpawnInspector({
               value={(spawn.data as InspectableDefinition).promptText || ''}
               onChange={(e) => updateData({ promptText: e.currentTarget.value || undefined })}
               placeholder="Press E to inspect"
+              size="sm"
+            />
+          </Stack>
+        )}
+
+        {spawn.type === 'resonancePoint' && (
+          <Stack gap="xs">
+            <Select
+              label="Resonance Point"
+              data={resonancePointDefs.map((r) => ({ value: r.id, label: r.name }))}
+              value={(spawn.data as ResonancePointDefinition).resonancePointId}
+              onChange={(val) => updateData({ resonancePointId: val || '' })}
+              searchable
+              size="sm"
+            />
+            <TextInput
+              label="Prompt Text"
+              value={(spawn.data as ResonancePointDefinition).promptText || ''}
+              onChange={(e) => updateData({ promptText: e.currentTarget.value || undefined })}
+              placeholder="Press E to attune"
               size="sm"
             />
           </Stack>
