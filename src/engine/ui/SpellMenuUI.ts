@@ -235,6 +235,12 @@ export class SpellMenuUI {
         color: #e87878;
       }
 
+      .spell-menu-chaos-warning {
+        color: #ff6b6b;
+        font-size: 14px;
+        margin-right: 6px;
+      }
+
       .spell-menu-description {
         background: rgba(0, 0, 0, 0.2);
         border-radius: 8px;
@@ -450,8 +456,10 @@ export class SpellMenuUI {
     const battery = this.casterManager.getBattery();
     const batteryTier = this.casterManager.getBatteryTier();
     const resonance = this.casterManager.getResonance();
+    const chaosChance = this.casterManager.getChaosChance();
 
     const batteryClass = batteryTier === 'full' ? '' : batteryTier;
+    const chaosWarning = chaosChance > 0 ? `<span class="spell-menu-chaos-warning" title="Chaos risk: ${Math.round(chaosChance * 100)}%">⚠️</span>` : '';
 
     this.header.innerHTML = `
       <div class="spell-menu-caster-name">${casterName}</div>
@@ -464,7 +472,7 @@ export class SpellMenuUI {
           <span class="spell-menu-meter-value">${Math.round(battery)}%</span>
         </div>
         <div class="spell-menu-meter">
-          <span class="spell-menu-meter-label">Resonance</span>
+          <span class="spell-menu-meter-label">${chaosWarning}Resonance</span>
           <div class="spell-menu-meter-bar">
             <div class="spell-menu-meter-fill resonance" style="width: ${resonance}%"></div>
           </div>

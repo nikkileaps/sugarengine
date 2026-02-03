@@ -256,6 +256,32 @@ export class CasterManager {
     return result;
   }
 
+  /**
+   * Get the current chaos chance (0-1) based on battery and resonance
+   */
+  getChaosChance(): number {
+    const battery = this.getBattery();
+    const resonance = this.getResonance();
+
+    // Base chaos chance from battery level
+    let chaosChance = 0;
+    if (battery >= 75) {
+      chaosChance = 0;
+    } else if (battery >= 25) {
+      chaosChance = 0.4;
+    } else if (battery > 0) {
+      chaosChance = 0.8;
+    } else {
+      return 1; // 100% chaos at 0 battery
+    }
+
+    // Resonance stabilizes - reduces chaos chance by up to 80%
+    const stabilization = (resonance / 100) * 0.8;
+    chaosChance *= (1 - stabilization);
+
+    return chaosChance;
+  }
+
   private resolveChaos(batteryBefore: number): boolean {
     const resonance = this.getResonance();
 
