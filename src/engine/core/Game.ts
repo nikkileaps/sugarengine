@@ -14,6 +14,7 @@ import { ObjectiveType } from '../quests/types';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
+import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
 
 export interface GameConfig {
   container: HTMLElement;
@@ -233,6 +234,17 @@ export class Game {
       this.resonancePointDefinitions.set(rp.id, rp);
     }
 
+    // Register VFX definitions
+    // First register built-in presets
+    for (const preset of BUILTIN_PRESETS) {
+      this.engine.registerVFXDefinition(preset);
+    }
+    // Then register custom definitions from project
+    const vfxDefinitions = VFXLoader.parseVFXDefinitions(projectData);
+    for (const vfx of vfxDefinitions) {
+      this.engine.registerVFXDefinition(vfx);
+    }
+
     console.log('[Game] Registered project content:', {
       regions: project.regions?.length || 0,
       dialogues: project.dialogues?.length || 0,
@@ -243,6 +255,7 @@ export class Game {
       playerCaster: this.playerCasterConfig,
       spells: spells.length,
       resonancePoints: resonancePoints.length,
+      vfxDefinitions: vfxDefinitions.length + BUILTIN_PRESETS.length,
     });
   }
 

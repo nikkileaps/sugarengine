@@ -13,3 +13,4 @@ export { ResonancePoint } from './ResonancePoint';
 export { WorldLabel } from './WorldLabel';
 export { SurfacePatchLOD } from './SurfacePatchLOD';
 export { Caster } from './Caster';
+export { VFXEmitter } from './VFXEmitter';

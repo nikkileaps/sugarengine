@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef } from 'react';
-import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, ActionIcon } from '@mantine/core';
+import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, ActionIcon, ScrollArea } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
 import type { EditorTab } from './store/useEditorStore';
@@ -19,6 +19,7 @@ import { DialoguePanel } from './panels/dialogue';
 import { MagicPanel } from './panels/magic';
 import { PlayerPanel } from './panels/player';
 import { ResonancePanel } from './panels/resonance';
+import { VFXPanel } from './panels/vfx';
 import { WelcomeDialog } from './components/WelcomeDialog';
 import { ProjectMenu } from './components/ProjectMenu';
 import { ProjectExplorer } from './components/ProjectExplorer';
@@ -33,6 +34,7 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'items', label: 'Items', icon: '🎒' },
   { value: 'spells', label: 'Spells', icon: '✨' },
   { value: 'resonance', label: 'Resonance', icon: '🦋' },
+  { value: 'vfx', label: 'VFX', icon: '🔥' },
   { value: 'player', label: 'Player', icon: '🧙' },
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
@@ -87,6 +89,8 @@ export function Editor() {
   const setSpells = useEditorStore((s) => s.setSpells);
   const resonancePoints = useEditorStore((s) => s.resonancePoints);
   const setResonancePoints = useEditorStore((s) => s.setResonancePoints);
+  const vfxDefinitions = useEditorStore((s) => s.vfxDefinitions);
+  const setVFXDefinitions = useEditorStore((s) => s.setVFXDefinitions);
   const currentSeasonId = useEditorStore((s) => s.currentSeasonId);
   const currentEpisodeId = useEditorStore((s) => s.currentEpisodeId);
   const setCurrentSeason = useEditorStore((s) => s.setCurrentSeason);
@@ -141,6 +145,7 @@ export function Editor() {
       playerCaster,
       spells,
       resonancePoints,
+      vfxDefinitions,
     };
 
     console.log('[Editor] handlePreview: playerCaster =', playerCaster);
@@ -190,6 +195,7 @@ export function Editor() {
     setPlayerCaster(null);
     setSpells([]);
     setResonancePoints([]);
+    setVFXDefinitions([]);
     setCurrentSeason(seasonId);
     setCurrentEpisode(episodeId);
     setProjectLoaded(true, name);
@@ -246,6 +252,7 @@ export function Editor() {
       playerCaster,
       spells,
       resonancePoints,
+      vfxDefinitions,
     };
 
     const jsonContent = JSON.stringify(projectData, null, 2);
@@ -302,6 +309,7 @@ export function Editor() {
       playerCaster,
       spells,
       resonancePoints,
+      vfxDefinitions,
     };
 
     const jsonContent = JSON.stringify(gameData, null, 2);
@@ -427,6 +435,7 @@ export function Editor() {
       setPlayerCaster(data.playerCaster || null);
       setSpells(data.spells || []);
       setResonancePoints(data.resonancePoints || []);
+      setVFXDefinitions(data.vfxDefinitions || []);
 
       // Set current season/episode to first available
       const firstSeason = loadedSeasons.sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
@@ -504,11 +513,16 @@ export function Editor() {
                                 onResonancePointsChange={setResonancePoints}
                               >
                                 {(resonancePanel) => (
-                                  <PlayerPanel
-                                    playerCaster={playerCaster}
-                                    onPlayerCasterChange={setPlayerCaster}
+                                  <VFXPanel
+                                    vfxDefinitions={vfxDefinitions}
+                                    onVFXDefinitionsChange={setVFXDefinitions}
                                   >
-                                    {(playerPanel) => (
+                                    {(vfxPanel) => (
+                                      <PlayerPanel
+                                        playerCaster={playerCaster}
+                                        onPlayerCasterChange={setPlayerCaster}
+                                      >
+                                        {(playerPanel) => (
                                       <RegionPanel
                                 regions={regions as any}
                                 onRegionsChange={setRegions as any}
@@ -527,6 +541,7 @@ export function Editor() {
                                           activeTab === 'items' ? itemPanel :
                                           activeTab === 'spells' ? magicPanel :
                                           activeTab === 'resonance' ? resonancePanel :
+                                          activeTab === 'vfx' ? vfxPanel :
                                           activeTab === 'player' ? playerPanel :
                                           activeTab === 'inspections' ? inspectionPanel :
                                           activeTab === 'regions' ? regionPanel :
@@ -676,17 +691,21 @@ export function Editor() {
 
                                   {panelContent.inspector && (
                                     <AppShell.Aside p="md">
-                                      {panelContent.inspector}
+                                      <ScrollArea h="100%" offsetScrollbars>
+                                        {panelContent.inspector}
+                                      </ScrollArea>
                                     </AppShell.Aside>
                                   )}
                                         </AppShell>
                                       );
                                     }}
                                   </RegionPanel>
-                                )}
-                              </PlayerPanel>
-                            )}
-                          </ResonancePanel>
+                                  )}
+                                </PlayerPanel>
+                              )}
+                            </VFXPanel>
+                          )}
+                        </ResonancePanel>
                         )}
                       </MagicPanel>
                         )}

@@ -8,6 +8,7 @@ import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
 import { getRegionWorldOffset, gridKey } from '../streaming';
 import { EnvironmentAnimation } from '../shaders';
+import { VFXManager, EmitterInstance, VFXDefinition } from '../vfx';
 
 export interface CameraConfig {
   style: 'isometric' | 'perspective';
@@ -87,6 +88,7 @@ export class SugarEngine {
   private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
   private worldLabelSystem: WorldLabelSystem;
   private environmentAnimation: EnvironmentAnimation;
+  private vfxManager: VFXManager;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -166,6 +168,9 @@ export class SugarEngine {
 
     // Environment animation (shader-based procedural effects)
     this.environmentAnimation = new EnvironmentAnimation();
+
+    // VFX manager for particle effects
+    this.vfxManager = new VFXManager(this.scene);
 
     // Default lighting (will be replaced by region lighting)
     this.setupDefaultLighting();
@@ -1222,6 +1227,9 @@ export class SugarEngine {
         // Update environmental animations (lamp glow, etc.)
         this.environmentAnimation.update();
 
+        // Update VFX particles
+        this.vfxManager.update(delta);
+
         // Update camera target to follow player
         if (this.playerEntity >= 0) {
           const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
@@ -1617,5 +1625,54 @@ export class SugarEngine {
    */
   getPlayerEntity(): number {
     return this.playerEntity;
+  }
+
+  // ==================== VFX Methods ====================
+
+  /**
+   * Register a VFX definition
+   */
+  registerVFXDefinition(definition: VFXDefinition): void {
+    this.vfxManager.registerDefinition(definition);
+  }
+
+  /**
+   * Get a registered VFX definition
+   */
+  getVFXDefinition(id: string): VFXDefinition | undefined {
+    return this.vfxManager.getDefinition(id);
+  }
+
+  /**
+   * Create a VFX emitter at a position
+   */
+  createVFXEmitter(
+    vfxId: string,
+    position: THREE.Vector3,
+    scale?: number,
+    autoPlay?: boolean
+  ): EmitterInstance | null {
+    return this.vfxManager.createEmitter(vfxId, position, scale, autoPlay);
+  }
+
+  /**
+   * Get a VFX emitter by ID
+   */
+  getVFXEmitter(id: string): EmitterInstance | undefined {
+    return this.vfxManager.getEmitter(id);
+  }
+
+  /**
+   * Remove a VFX emitter
+   */
+  removeVFXEmitter(id: string): void {
+    this.vfxManager.removeEmitter(id);
+  }
+
+  /**
+   * Get the VFX manager for advanced usage
+   */
+  getVFXManager(): VFXManager {
+    return this.vfxManager;
   }
 }

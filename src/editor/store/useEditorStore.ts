@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import type { EnvironmentAnimationEntry } from '../../engine/shaders';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance' | 'vfx';
 
 export interface ValidationError {
   type: 'error' | 'warning';
@@ -69,6 +69,29 @@ export interface ResonancePointData {
   resonanceReward: number;          // How much resonance gained on success (0-100)
   difficulty: 'easy' | 'medium' | 'hard';  // Affects firefly pattern complexity
   cooldownMinutes?: number;         // Optional cooldown before reuse
+}
+
+export interface VFXDefinitionData {
+  id: string;
+  name: string;
+  emissionRate: number;
+  maxParticles: number;
+  burst?: { count: number; interval: number };
+  lifetime: [number, number];
+  size: [number, number];
+  sizeOverLife?: number;
+  speed: [number, number];
+  geometry: 'point' | 'cube' | 'shard' | 'spark';
+  color: string;
+  colorEnd?: string;
+  opacity?: number;
+  blendMode: 'normal' | 'additive';
+  direction: { x: number; y: number; z: number };
+  spread: number;
+  gravity: number;
+  sprite?: string;
+  loop: boolean;
+  duration?: number;
 }
 
 export interface ResonancePointDefinition {
@@ -163,6 +186,7 @@ interface EditorState {
   playerCaster: PlayerCasterData | null;
   spells: SpellData[];
   resonancePoints: ResonancePointData[];
+  vfxDefinitions: VFXDefinitionData[];
 
   // Episode context
   currentSeasonId: string | null;
@@ -194,6 +218,7 @@ interface EditorState {
   setPlayerCaster: (playerCaster: PlayerCasterData | null) => void;
   setSpells: (spells: SpellData[]) => void;
   setResonancePoints: (resonancePoints: ResonancePointData[]) => void;
+  setVFXDefinitions: (vfxDefinitions: VFXDefinitionData[]) => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -221,6 +246,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   playerCaster: null,
   spells: [],
   resonancePoints: [],
+  vfxDefinitions: [],
 
   // Actions
   setActiveTab: (tab) => set({ activeTab: tab, selectedEntryId: null }),
@@ -250,4 +276,5 @@ export const useEditorStore = create<EditorState>((set) => ({
   setPlayerCaster: (playerCaster) => set({ playerCaster }),
   setSpells: (spells) => set({ spells }),
   setResonancePoints: (resonancePoints) => set({ resonancePoints }),
+  setVFXDefinitions: (vfxDefinitions) => set({ vfxDefinitions }),
 }));
