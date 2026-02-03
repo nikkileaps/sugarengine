@@ -21,6 +21,8 @@ export interface ProjectData {
   items: unknown[];
   inspections: unknown[];
   regions?: unknown[];
+  playerCaster?: unknown;
+  spells?: unknown[];
 }
 
 export class PreviewManager {

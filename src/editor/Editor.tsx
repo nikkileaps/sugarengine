@@ -16,6 +16,8 @@ import { QuestPanel } from './panels/quest';
 import { InspectionPanel } from './panels/inspection';
 import { RegionPanel } from './panels/region';
 import { DialoguePanel } from './panels/dialogue';
+import { MagicPanel } from './panels/magic';
+import { PlayerPanel } from './panels/player';
 import { WelcomeDialog } from './components/WelcomeDialog';
 import { ProjectMenu } from './components/ProjectMenu';
 import { ProjectExplorer } from './components/ProjectExplorer';
@@ -28,6 +30,8 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'quests', label: 'Quests', icon: '📜' },
   { value: 'npcs', label: 'NPCs', icon: '👤' },
   { value: 'items', label: 'Items', icon: '🎒' },
+  { value: 'spells', label: 'Spells', icon: '✨' },
+  { value: 'player', label: 'Player', icon: '🧙' },
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
 ];
@@ -75,6 +79,10 @@ export function Editor() {
   const setEpisodes = useEditorStore((s) => s.setEpisodes);
   const regions = useEditorStore((s) => s.regions);
   const setRegions = useEditorStore((s) => s.setRegions);
+  const playerCaster = useEditorStore((s) => s.playerCaster);
+  const setPlayerCaster = useEditorStore((s) => s.setPlayerCaster);
+  const spells = useEditorStore((s) => s.spells);
+  const setSpells = useEditorStore((s) => s.setSpells);
   const currentSeasonId = useEditorStore((s) => s.currentSeasonId);
   const currentEpisodeId = useEditorStore((s) => s.currentEpisodeId);
   const setCurrentSeason = useEditorStore((s) => s.setCurrentSeason);
@@ -126,8 +134,11 @@ export function Editor() {
       items,
       inspections,
       regions,
+      playerCaster,
+      spells,
     };
 
+    console.log('[Editor] handlePreview: playerCaster =', playerCaster);
     previewManagerRef.current.openPreviewWithData(projectData, currentEpisodeId || undefined);
   };
 
@@ -171,6 +182,8 @@ export function Editor() {
     setItems([]);
     setInspections([]);
     setRegions([]);
+    setPlayerCaster(null);
+    setSpells([]);
     setCurrentSeason(seasonId);
     setCurrentEpisode(episodeId);
     setProjectLoaded(true, name);
@@ -224,6 +237,8 @@ export function Editor() {
       items,
       inspections,
       regions,
+      playerCaster,
+      spells,
     };
 
     const jsonContent = JSON.stringify(projectData, null, 2);
@@ -277,6 +292,8 @@ export function Editor() {
       items,
       inspections,
       regions,
+      playerCaster,
+      spells,
     };
 
     const jsonContent = JSON.stringify(gameData, null, 2);
@@ -399,6 +416,8 @@ export function Editor() {
       setItems(data.items || []);
       setInspections(data.inspections || []);
       setRegions(data.regions || []);
+      setPlayerCaster(data.playerCaster || null);
+      setSpells(data.spells || []);
 
       // Set current season/episode to first available
       const firstSeason = loadedSeasons.sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
@@ -465,24 +484,37 @@ export function Editor() {
                         onInspectionsChange={setInspections as any}
                       >
                         {(inspectionPanel) => (
-                          <RegionPanel
-                            regions={regions as any}
-                            onRegionsChange={setRegions as any}
-                            npcs={npcList}
-                            items={itemList}
-                            inspections={inspectionList}
-                            episodes={episodeList}
+                          <MagicPanel
+                            spells={spells}
+                            onSpellsChange={setSpells}
+                            dialogues={dialogues.map((d) => ({ id: d.id, name: d.displayName || d.id }))}
                           >
-                            {(regionPanel) => {
-                              // Select the panel based on active tab
-                              const panelContent =
-                                activeTab === 'dialogues' ? dialoguePanel :
-                                activeTab === 'quests' ? questPanel :
-                                activeTab === 'npcs' ? npcPanel :
-                                activeTab === 'items' ? itemPanel :
-                                activeTab === 'inspections' ? inspectionPanel :
-                                activeTab === 'regions' ? regionPanel :
-                                npcPanel;
+                            {(magicPanel) => (
+                              <PlayerPanel
+                                playerCaster={playerCaster}
+                                onPlayerCasterChange={setPlayerCaster}
+                              >
+                                {(playerPanel) => (
+                                  <RegionPanel
+                                regions={regions as any}
+                                onRegionsChange={setRegions as any}
+                                npcs={npcList}
+                                items={itemList}
+                                inspections={inspectionList}
+                                episodes={episodeList}
+                              >
+                                  {(regionPanel) => {
+                                    // Select the panel based on active tab
+                                    const panelContent =
+                                      activeTab === 'dialogues' ? dialoguePanel :
+                                      activeTab === 'quests' ? questPanel :
+                                      activeTab === 'npcs' ? npcPanel :
+                                      activeTab === 'items' ? itemPanel :
+                                      activeTab === 'spells' ? magicPanel :
+                                      activeTab === 'player' ? playerPanel :
+                                      activeTab === 'inspections' ? inspectionPanel :
+                                      activeTab === 'regions' ? regionPanel :
+                                      npcPanel;
 
                               return (
                                 <AppShell
@@ -633,8 +665,12 @@ export function Editor() {
                                   )}
                                 </AppShell>
                               );
-                            }}
-                          </RegionPanel>
+                                  }}
+                                </RegionPanel>
+                              )}
+                            </PlayerPanel>
+                          )}
+                        </MagicPanel>
                         )}
                       </InspectionPanel>
                     )}

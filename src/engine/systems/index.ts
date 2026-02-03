@@ -8,3 +8,5 @@ export { NPCMovementSystem } from './NPCMovementSystem';
 export { WorldLabelSystem } from './WorldLabelSystem';
 export { LODSystem } from './LODSystem';
 export type { LODStats } from './LODSystem';
+export { CasterSystem } from './CasterSystem';
+export type { BatteryTier, BatteryChangedHandler, ResonanceChangedHandler } from './CasterSystem';

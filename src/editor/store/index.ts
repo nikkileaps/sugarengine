@@ -1,5 +1,6 @@
 // Zustand store (new)
 export { useEditorStore } from './useEditorStore';
+export type { PlayerCasterData, SpellData, SpellEffectData } from './useEditorStore';
 
 // Legacy stores (for migration)
 export { Store } from './Store';

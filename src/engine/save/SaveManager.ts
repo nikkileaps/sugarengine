@@ -35,6 +35,11 @@ interface EngineLike {
   loadRegion(regionPath: string, spawnOverride?: { x: number; y: number; z: number }, collectedPickups?: string[]): Promise<void>;
 }
 
+interface CasterManagerLike {
+  getCasterState(): { battery: number; resonance: number } | null;
+  loadCasterState(state: { battery: number; resonance: number }): void;
+}
+
 export type SaveEventHandler = (trigger: AutoSaveTrigger, slotId: string) => void;
 
 /**
@@ -72,6 +77,7 @@ export class SaveManager {
   private engine: EngineLike | null = null;
   private questManager: QuestManagerLike | null = null;
   private inventoryManager: InventoryManagerLike | null = null;
+  private casterManager: CasterManagerLike | null = null;
 
   constructor(config: Partial<SaveManagerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -120,11 +126,13 @@ export class SaveManager {
   setGameSystems(
     engine: EngineLike,
     questManager: QuestManagerLike,
-    inventoryManager: InventoryManagerLike
+    inventoryManager: InventoryManagerLike,
+    casterManager?: CasterManagerLike
   ): void {
     this.engine = engine;
     this.questManager = questManager;
     this.inventoryManager = inventoryManager;
+    this.casterManager = casterManager ?? null;
   }
 
   // ============================================
@@ -200,6 +208,7 @@ export class SaveManager {
     const playerState = this.gatherPlayerState();
     const questState = this.gatherQuestState();
     const inventoryState = this.gatherInventoryState();
+    const casterState = this.gatherCasterState();
 
     return {
       version: SAVE_DATA_VERSION,
@@ -210,8 +219,16 @@ export class SaveManager {
       inventory: inventoryState,
       world: {
         collectedPickups: this.serializeCollectedPickups()
-      }
+      },
+      caster: casterState,
     };
+  }
+
+  private gatherCasterState(): GameSaveData['caster'] {
+    if (!this.casterManager) return undefined;
+    const state = this.casterManager.getCasterState();
+    if (!state) return undefined;
+    return state;
   }
 
   private gatherPlayerState(): GameSaveData['player'] {
@@ -350,6 +367,18 @@ export class SaveManager {
 
     // 4. Restore inventory state
     this.restoreInventoryState(data.inventory);
+
+    // 5. Restore caster state
+    this.restoreCasterState(data.caster);
+  }
+
+  private restoreCasterState(caster: GameSaveData['caster']): void {
+    if (!this.casterManager) return;
+
+    if (caster) {
+      this.casterManager.loadCasterState(caster);
+    }
+    // If no caster data, the Caster component will use defaults when initialized
   }
 
   private async restoreQuestState(quests: GameSaveData['quests']): Promise<void> {

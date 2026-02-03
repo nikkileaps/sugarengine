@@ -7,6 +7,9 @@ import { SaveManager, SaveManagerConfig } from '../save/SaveManager';
 import { SceneManager } from '../scenes/SceneManager';
 import { EpisodeManager } from '../episodes/EpisodeManager';
 import { AudioManager, AudioConfig, AmbientController } from '../audio';
+import { CasterManager, SpellLoader, SpellDefinition, SpellResult, SpellEffect, PlayerCasterConfig } from '../caster';
+import { CasterSystem } from '../systems/CasterSystem';
+import { Caster } from '../components/Caster';
 import { ObjectiveType } from '../quests/types';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 
@@ -33,6 +36,8 @@ export interface GameEventHandlers {
   onObjectiveProgress?: () => void;
   onItemAdded?: (itemName: string, quantity: number) => void;
   onDialogueEvent?: (eventName: string) => void;
+  onSpellCast?: (spell: SpellDefinition, result: SpellResult) => void;
+  onChaosTriggered?: (spell: SpellDefinition, chaosEffect: SpellEffect) => void;
 }
 
 /**
@@ -50,6 +55,7 @@ export class Game {
   readonly episodes: EpisodeManager;
   readonly audio: AudioManager;
   readonly ambient: AmbientController;
+  readonly caster: CasterManager;
 
   private config: GameConfig;
   private eventHandlers: GameEventHandlers = {};
@@ -57,6 +63,8 @@ export class Game {
   private nearbyInteractable: import('../systems').NearbyInteractable | null = null;
   private projectData: unknown = null;
   private onNearbyInteractionChangeHandler: ((interaction: { type: string; id: string; promptText?: string; available: boolean } | null) => void) | null = null;
+  private playerCasterConfig: PlayerCasterConfig | null = null;
+  private casterSystem: CasterSystem;
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -95,6 +103,14 @@ export class Game {
     this.sceneManager = new SceneManager(container);
     this.audio = new AudioManager(config.audio);
     this.ambient = new AmbientController(this.audio);
+    this.caster = new CasterManager();
+
+    // Create caster system and add to ECS world
+    this.casterSystem = new CasterSystem();
+    this.engine.world.addSystem(this.casterSystem);
+
+    // Connect caster manager to the ECS world
+    this.caster.setWorld(this.engine.world);
 
     // Create episode manager
     this.episodes = new EpisodeManager({
@@ -124,7 +140,7 @@ export class Game {
     }
 
     // Connect save manager to game systems
-    this.saveManager.setGameSystems(this.engine, this.quests, this.inventory);
+    this.saveManager.setGameSystems(this.engine, this.quests, this.inventory, this.caster);
     this.sceneManager.setGameSystems(this.engine, this.saveManager);
   }
 
@@ -139,6 +155,8 @@ export class Game {
       items?: { id: string; name: string }[];
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
       regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
+      playerCaster?: unknown;
+      spells?: unknown[];
     };
 
     // Pre-register regions (must happen before loadRegion)
@@ -195,6 +213,15 @@ export class Game {
       }
     }
 
+    // Parse player caster config
+    this.playerCasterConfig = SpellLoader.parsePlayerCaster(projectData);
+
+    // Register spells
+    const spells = SpellLoader.parseSpells(projectData);
+    for (const spell of spells) {
+      this.caster.registerSpell(spell);
+    }
+
     console.log('[Game] Registered project content:', {
       regions: project.regions?.length || 0,
       dialogues: project.dialogues?.length || 0,
@@ -202,6 +229,8 @@ export class Game {
       npcs: project.npcs?.length || 0,
       inspections: project.inspections?.length || 0,
       items: project.items?.length || 0,
+      playerCaster: this.playerCasterConfig,
+      spells: spells.length,
     });
   }
 
@@ -212,6 +241,10 @@ export class Game {
     this.projectData = projectData;
     // Re-register content
     this.registerProjectContent(projectData);
+
+    // Re-initialize player caster with updated config
+    // This updates the Caster component if it already exists
+    this.initializePlayerCaster();
   }
 
   /**
@@ -392,6 +425,22 @@ export class Game {
     });
 
     // ========================================
+    // Caster System
+    // ========================================
+    this.caster.setOnSpellCast((spell, result) => {
+      this.eventHandlers.onSpellCast?.(spell, result);
+
+      // Handle spell effects
+      for (const effect of result.effects) {
+        this.handleSpellEffect(effect);
+      }
+    });
+
+    this.caster.setOnChaosTriggered((spell, chaosEffect) => {
+      this.eventHandlers.onChaosTriggered?.(spell, chaosEffect);
+    });
+
+    // ========================================
     // Engine Events → System Triggers
     // ========================================
 
@@ -478,6 +527,9 @@ export class Game {
       }
       await this.engine.loadRegion(this.config.startRegion);
 
+      // Add Caster component to player entity
+      this.initializePlayerCaster();
+
       // Start all quests for this episode
       const episodeQuestIds = this.getEpisodeQuests();
       console.log('[Game] Episode quests to start:', episodeQuestIds);
@@ -519,6 +571,10 @@ export class Game {
       const result = await this.saveManager.load(slotId);
       if (result.success) {
         console.log(`Game loaded from ${slotId}`);
+
+        // Ensure player has Caster component (save manager will restore state)
+        this.initializePlayerCaster();
+
         this.engine.run();
       } else {
         console.error('Load failed:', result.error);
@@ -541,6 +597,81 @@ export class Game {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Initialize the Caster component on the player entity
+   */
+  private initializePlayerCaster(): void {
+    const playerEntity = this.engine.getPlayerEntity();
+    if (playerEntity < 0) {
+      console.warn('[Game] No player entity to attach Caster component');
+      return;
+    }
+
+    // Remove existing Caster component if any
+    const existingCaster = this.engine.world.getComponent<Caster>(playerEntity, Caster);
+    if (existingCaster) {
+      this.engine.world.removeComponent(playerEntity, Caster);
+    }
+
+    // Create Caster component with config or defaults
+    const casterConfig = this.playerCasterConfig ?? {
+      initialBattery: 100,
+      rechargeRate: 1,  // 1% per minute (slow trickle from ambient magic)
+    };
+
+    this.engine.world.addComponent(playerEntity, new Caster({
+      initialBattery: casterConfig.initialBattery,
+      rechargeRate: casterConfig.rechargeRate,
+      initialResonance: casterConfig.initialResonance,
+      allowedSpellTags: casterConfig.allowedSpellTags,
+      blockedSpellTags: casterConfig.blockedSpellTags,
+    }));
+
+    // Sync UI with initial values
+    this.casterSystem.syncUI(this.engine.world);
+
+    console.log('[Game] Player caster initialized:', casterConfig);
+  }
+
+  /**
+   * Handle a spell effect
+   */
+  private handleSpellEffect(effect: SpellEffect): void {
+    switch (effect.type) {
+      case 'event':
+        if (effect.eventName) {
+          console.log(`[Spell Effect] Event: ${effect.eventName}`);
+          // Trigger the event via dialogue system (which handles quest triggers)
+          this.eventHandlers.onDialogueEvent?.(effect.eventName);
+        }
+        break;
+
+      case 'dialogue':
+        if (effect.dialogueId) {
+          this.dialogue.start(effect.dialogueId);
+        }
+        break;
+
+      case 'world-flag':
+        if (effect.flagName !== undefined) {
+          console.log(`[Spell Effect] World flag: ${effect.flagName} = ${effect.flagValue}`);
+          // World flags would be handled by a world state manager (future feature)
+        }
+        break;
+
+      case 'unlock':
+        console.log('[Spell Effect] Unlock:', effect);
+        // Unlock effects would be handled by a progression system (future feature)
+        break;
+
+      case 'heal':
+      case 'damage':
+        console.log(`[Spell Effect] ${effect.type}: ${effect.amount}`);
+        // Health effects would be handled by a health system (future feature)
+        break;
+    }
   }
 
   /**

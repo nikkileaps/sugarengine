@@ -1,7 +1,7 @@
 /**
  * Save data format version for migration support
  */
-export const SAVE_DATA_VERSION = 2;
+export const SAVE_DATA_VERSION = 3;
 
 /**
  * Episode progression data
@@ -62,6 +62,14 @@ export interface CollectedPickupsData {
 }
 
 /**
+ * Caster system state for saving
+ */
+export interface CasterSaveData {
+  battery: number;
+  resonance: number;
+}
+
+/**
  * Complete game state for saving
  */
 export interface GameSaveData {
@@ -85,6 +93,8 @@ export interface GameSaveData {
   world: {
     collectedPickups: CollectedPickupsData;
   };
+
+  caster?: CasterSaveData;
 
   episodes?: EpisodeProgressionData;
 }

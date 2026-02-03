@@ -83,6 +83,18 @@ export { LocalStorageProvider } from './save/LocalStorageProvider';
 export { TauriFileProvider } from './save/TauriFileProvider';
 export type * from './save/types';
 
+// Caster System
+export { CasterManager, SpellLoader } from './caster';
+export type {
+  PlayerCasterConfig,
+  SpellDefinition,
+  SpellEffect,
+  BatteryTier,
+  SpellResult,
+  SpellCastEvent,
+  ChaosEvent,
+} from './caster';
+
 // Scenes
 export { SceneManager } from './scenes/SceneManager';
 export { Screen } from './scenes/Screen';
@@ -106,4 +118,6 @@ export {
   InspectionUI,
   GiftUI,
   DebugHUD,
+  SpellMenuUI,
+  CasterHUD,
 } from './ui';

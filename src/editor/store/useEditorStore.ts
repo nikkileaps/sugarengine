@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import type { EnvironmentAnimationEntry } from '../../engine/shaders';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player';
 
 export interface ValidationError {
   type: 'error' | 'warning';
@@ -75,6 +75,34 @@ export interface RegionData {
   environmentAnimations?: EnvironmentAnimationEntry[];
 }
 
+export interface PlayerCasterData {
+  initialBattery: number;        // Starting battery % (0-100) for the episode
+  rechargeRate: number;          // Battery % per minute (slow trickle from ambient magic)
+  initialResonance?: number;     // Starting resonance % (0-100) for the episode
+  allowedSpellTags?: string[];
+  blockedSpellTags?: string[];
+}
+
+export interface SpellEffectData {
+  type: 'event' | 'unlock' | 'world-flag' | 'dialogue' | 'heal' | 'damage';
+  eventName?: string;
+  flagName?: string;
+  flagValue?: boolean | string | number;
+  dialogueId?: string;
+  amount?: number;
+}
+
+export interface SpellData {
+  id: string;
+  name: string;
+  description: string;
+  icon?: string;
+  tags: string[];
+  batteryCost: number;
+  effects: SpellEffectData[];
+  chaosEffects?: SpellEffectData[];
+}
+
 export interface SeasonData {
   id: string;
   name: string;
@@ -114,6 +142,8 @@ interface EditorState {
   items: ItemData[];
   inspections: InspectionData[];
   regions: RegionData[];
+  playerCaster: PlayerCasterData | null;
+  spells: SpellData[];
 
   // Episode context
   currentSeasonId: string | null;
@@ -142,6 +172,8 @@ interface EditorState {
   setItems: (items: ItemData[]) => void;
   setInspections: (inspections: InspectionData[]) => void;
   setRegions: (regions: RegionData[]) => void;
+  setPlayerCaster: (playerCaster: PlayerCasterData | null) => void;
+  setSpells: (spells: SpellData[]) => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -166,6 +198,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   items: [],
   inspections: [],
   regions: [],
+  playerCaster: null,
+  spells: [],
 
   // Actions
   setActiveTab: (tab) => set({ activeTab: tab, selectedEntryId: null }),
@@ -192,4 +226,6 @@ export const useEditorStore = create<EditorState>((set) => ({
   setItems: (items) => set({ items }),
   setInspections: (inspections) => set({ inspections }),
   setRegions: (regions) => set({ regions }),
+  setPlayerCaster: (playerCaster) => set({ playerCaster }),
+  setSpells: (spells) => set({ spells }),
 }));

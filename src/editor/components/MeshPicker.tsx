@@ -224,7 +224,7 @@ export function MeshPicker({
       if (originalMat) hoveredMesh.material = originalMat;
     }
 
-    if (intersects.length > 0) {
+    if (intersects.length > 0 && intersects[0]) {
       const mesh = intersects[0].object as THREE.Mesh;
       if (mesh.name) {
         setHoveredName(mesh.name);

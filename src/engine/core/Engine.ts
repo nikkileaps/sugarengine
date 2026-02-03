@@ -1239,6 +1239,13 @@ export class SugarEngine {
   }
 
   /**
+   * Check if spell menu key was just pressed (C)
+   */
+  isSpellMenuPressed(): boolean {
+    return this.input.isSpellMenuPressed();
+  }
+
+  /**
    * Set callback for when an item is picked up
    */
   onItemPickup(handler: (pickupId: string, itemId: string, quantity: number) => void): void {
@@ -1498,5 +1505,12 @@ export class SugarEngine {
    */
   registerNPC(id: string, name: string, dialogue?: string): void {
     this.npcDatabase.set(id, { id, name, dialogue });
+  }
+
+  /**
+   * Get the player entity ID (for adding components)
+   */
+  getPlayerEntity(): number {
+    return this.playerEntity;
   }
 }

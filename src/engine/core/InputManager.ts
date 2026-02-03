@@ -149,6 +149,13 @@ export class InputManager {
   }
 
   /**
+   * Check if spell menu key was just pressed (C key)
+   */
+  isSpellMenuPressed(): boolean {
+    return this.keysJustPressed.has('KeyC');
+  }
+
+  /**
    * Call at end of frame to clear "just pressed" state
    */
   endFrame(): void {

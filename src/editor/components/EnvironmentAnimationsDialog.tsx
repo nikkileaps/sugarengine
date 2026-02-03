@@ -39,8 +39,11 @@ export function EnvironmentAnimationsDialog({
 
   const handleUpdateAnimation = (index: number, animationType: EnvironmentAnimationType) => {
     const updated = [...animations];
-    updated[index] = { ...updated[index], animationType };
-    onAnimationsChange(updated);
+    const existing = updated[index];
+    if (existing) {
+      updated[index] = { ...existing, animationType };
+      onAnimationsChange(updated);
+    }
   };
 
   const handleRemoveAnimation = (index: number) => {

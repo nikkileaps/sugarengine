@@ -16,6 +16,8 @@ import {
   InventoryUI,
   GiftUI,
   DebugHUD,
+  SpellMenuUI,
+  CasterHUD,
 } from './engine';
 
 interface ProjectMessage {
@@ -106,6 +108,9 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   const itemNotification = new ItemNotification(container);
   const inventoryUI = new InventoryUI(container, game.inventory);
   const giftUI = new GiftUI(container, game.inventory);
+  const spellMenuUI = new SpellMenuUI(container, game.caster);
+  // CasterHUD auto-shows when caster exists
+  new CasterHUD(container, game.caster);
   const debugHUD = new DebugHUD(container, game.quests);
 
   debugHUD.setPlayerPositionProvider(() => game.getPlayerPosition());
@@ -154,19 +159,22 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   let journalWasPressed = false;
   let inventoryWasPressed = false;
   let giftWasPressed = false;
+  let spellMenuWasPressed = false;
   let escapeWasPressed = false;
 
   // Disable movement when UIs are open
   questJournal.setOnClose(() => game.engine.setMovementEnabled(true));
   inventoryUI.setOnClose(() => game.engine.setMovementEnabled(true));
   giftUI.setOnClose(() => game.engine.setMovementEnabled(true));
+  spellMenuUI.setOnClose(() => game.engine.setMovementEnabled(true));
 
   // Helper to check if any UI is blocking
   const isUIBlocking = () =>
     game.isUIBlocking() ||
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
-    giftUI.isVisible();
+    giftUI.isVisible() ||
+    spellMenuUI.isVisible();
 
   // Show/hide interaction prompt
   let nearbyPickupId: string | null = null;
@@ -246,6 +254,18 @@ async function runGame(projectData?: unknown, episodeId?: string) {
         }
       }
       giftWasPressed = giftPressed;
+
+      // Spell menu toggle (C)
+      const spellMenuPressed = game.engine.isSpellMenuPressed();
+      if (spellMenuPressed && !spellMenuWasPressed) {
+        if (spellMenuUI.isVisible()) {
+          spellMenuUI.hide();
+        } else {
+          spellMenuUI.show();
+          game.engine.setMovementEnabled(false);
+        }
+      }
+      spellMenuWasPressed = spellMenuPressed;
 
       // Item pickup handling
       if (!game.getNearbyNpcId()) {

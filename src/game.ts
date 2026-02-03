@@ -13,6 +13,8 @@ import {
   ItemNotification,
   InventoryUI,
   GiftUI,
+  SpellMenuUI,
+  CasterHUD,
 } from './engine';
 
 interface GameData {
@@ -87,6 +89,9 @@ async function runGame(gameData: GameData) {
   const itemNotification = new ItemNotification(container);
   const inventoryUI = new InventoryUI(container, game.inventory);
   const giftUI = new GiftUI(container, game.inventory);
+  const spellMenuUI = new SpellMenuUI(container, game.caster);
+  // CasterHUD auto-registers event handlers and manages its own visibility
+  new CasterHUD(container, game.caster);
 
   // ========================================
   // Game Event Handlers → UI Updates
@@ -124,17 +129,20 @@ async function runGame(gameData: GameData) {
   let journalWasPressed = false;
   let inventoryWasPressed = false;
   let giftWasPressed = false;
+  let spellMenuWasPressed = false;
   let escapeWasPressed = false;
 
   questJournal.setOnClose(() => game.engine.setMovementEnabled(true));
   inventoryUI.setOnClose(() => game.engine.setMovementEnabled(true));
   giftUI.setOnClose(() => game.engine.setMovementEnabled(true));
+  spellMenuUI.setOnClose(() => game.engine.setMovementEnabled(true));
 
   const isUIBlocking = () =>
     game.isUIBlocking() ||
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
-    giftUI.isVisible();
+    giftUI.isVisible() ||
+    spellMenuUI.isVisible();
 
   let nearbyPickupId: string | null = null;
 
@@ -213,6 +221,18 @@ async function runGame(gameData: GameData) {
         }
       }
       giftWasPressed = giftPressed;
+
+      // Spell menu toggle (C)
+      const spellMenuPressed = game.engine.isSpellMenuPressed();
+      if (spellMenuPressed && !spellMenuWasPressed) {
+        if (spellMenuUI.isVisible()) {
+          spellMenuUI.hide();
+        } else {
+          spellMenuUI.show();
+          game.engine.setMovementEnabled(false);
+        }
+      }
+      spellMenuWasPressed = spellMenuPressed;
 
       // Item pickup handling
       if (!game.getNearbyNpcId()) {
