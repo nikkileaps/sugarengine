@@ -530,6 +530,7 @@ export function Editor() {
                                 items={itemList}
                                 inspections={inspectionList}
                                 resonancePointDefs={resonancePoints.map((r) => ({ id: r.id, name: r.name }))}
+                                vfxDefinitions={vfxDefinitions.map((v) => ({ id: v.id, name: v.name }))}
                                 episodes={episodeList}
                               >
                                   {(regionPanel) => {

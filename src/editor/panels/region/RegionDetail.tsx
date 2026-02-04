@@ -10,7 +10,6 @@ import {
   Button,
   Paper,
   Badge,
-  ScrollArea,
   Modal,
   TextInput,
   NumberInput,
@@ -28,17 +27,18 @@ import {
   PickupDefinition,
   InspectableDefinition,
   ResonancePointDefinition,
+  VFXSpawnDefinition,
   TriggerDefinition,
 } from './RegionPanel';
 import { generateUUID, shortId } from '../../utils';
 
-type SpawnType = 'npc' | 'pickup' | 'inspectable' | 'resonancePoint' | 'trigger';
+type SpawnType = 'npc' | 'pickup' | 'inspectable' | 'resonancePoint' | 'vfx' | 'trigger';
 
 interface SpawnEntry {
   id: string;
   type: SpawnType;
   position: Vec3;
-  data: NPCDefinition | PickupDefinition | InspectableDefinition | ResonancePointDefinition | TriggerDefinition;
+  data: NPCDefinition | PickupDefinition | InspectableDefinition | ResonancePointDefinition | VFXSpawnDefinition | TriggerDefinition;
 }
 
 interface RegionDetailProps {
@@ -47,6 +47,7 @@ interface RegionDetailProps {
   items: { id: string; name: string }[];
   inspections: { id: string; displayName?: string }[];
   resonancePointDefs: { id: string; name: string }[];
+  vfxDefinitions: { id: string; name: string }[];
   episodes: { id: string; name: string }[];
   selectedSpawnId: string | null;
   onSelectSpawn: (id: string | null) => void;
@@ -59,6 +60,7 @@ const SPAWN_CONFIG: Record<SpawnType, { icon: string; title: string; color: stri
   pickup: { icon: '📦', title: 'Items', color: '#f9e2af' },
   inspectable: { icon: '🔍', title: 'Inspectables', color: '#cba6f7' },
   resonancePoint: { icon: '🦋', title: 'Resonance Points', color: '#94e2d5' },
+  vfx: { icon: '✨', title: 'VFX', color: '#fab387' },
   trigger: { icon: '⚡', title: 'Triggers', color: '#f38ba8' },
 };
 
@@ -68,6 +70,7 @@ export function RegionDetail({
   items,
   inspections,
   resonancePointDefs,
+  vfxDefinitions,
   episodes,
   selectedSpawnId,
   onSelectSpawn,
@@ -103,6 +106,9 @@ export function RegionDetail({
     for (const resonancePoint of region.resonancePoints || []) {
       spawns.push({ id: resonancePoint.id, type: 'resonancePoint', position: resonancePoint.position, data: resonancePoint });
     }
+    for (const vfxSpawn of region.vfxSpawns || []) {
+      spawns.push({ id: vfxSpawn.id, type: 'vfx', position: vfxSpawn.position, data: vfxSpawn });
+    }
     for (const trigger of region.triggers || []) {
       const center: Vec3 = {
         x: (trigger.bounds.min[0] + trigger.bounds.max[0]) / 2,
@@ -137,6 +143,11 @@ export function RegionDetail({
         const resPt = resonancePointDefs.find((r) => r.id === resData.resonancePointId);
         return resPt?.name || `Resonance ${shortId(resData.resonancePointId)}`;
       }
+      case 'vfx': {
+        const vfxData = spawn.data as VFXSpawnDefinition;
+        const vfxDef = vfxDefinitions.find((v) => v.id === vfxData.vfxId);
+        return vfxDef?.name || `VFX ${shortId(vfxData.vfxId)}`;
+      }
       case 'trigger': {
         const triggerData = spawn.data as TriggerDefinition;
         return `Trigger: ${triggerData.event.type}`;
@@ -162,6 +173,9 @@ export function RegionDetail({
       case 'resonancePoint':
         updated = { ...region, resonancePoints: [...(region.resonancePoints || []), { id, resonancePointId: resonancePointDefs[0]?.id || '', position: defaultPos }] };
         break;
+      case 'vfx':
+        updated = { ...region, vfxSpawns: [...(region.vfxSpawns || []), { id, vfxId: vfxDefinitions[0]?.id || '', position: defaultPos, scale: 1, autoPlay: true }] };
+        break;
       case 'trigger':
         updated = { ...region, triggers: [...(region.triggers || []), { id, type: 'box' as const, bounds: { min: [-1, 0, -1] as [number, number, number], max: [1, 2, 1] as [number, number, number] }, event: { type: 'custom' } }] };
         break;
@@ -179,6 +193,7 @@ export function RegionDetail({
       case 'pickup': updated = { ...region, pickups: (region.pickups || []).filter((p) => p.id !== spawn.id) }; break;
       case 'inspectable': updated = { ...region, inspectables: (region.inspectables || []).filter((i) => i.id !== spawn.id) }; break;
       case 'resonancePoint': updated = { ...region, resonancePoints: (region.resonancePoints || []).filter((r) => r.id !== spawn.id) }; break;
+      case 'vfx': updated = { ...region, vfxSpawns: (region.vfxSpawns || []).filter((v) => v.id !== spawn.id) }; break;
       case 'trigger': updated = { ...region, triggers: (region.triggers || []).filter((t) => t.id !== spawn.id) }; break;
     }
     onChange(updated);
@@ -193,16 +208,17 @@ export function RegionDetail({
   }
 
   return (
-    <Stack gap={0} h="100%">
-      {/* Header */}
-      <Paper
-        p="lg"
-        radius={0}
-        style={{
-          background: 'linear-gradient(135deg, #1e1e2e 0%, #181825 100%)',
-          borderBottom: '1px solid #313244',
-        }}
-      >
+    <div style={{ height: 'calc(100vh - 60px)', overflow: 'auto' }}>
+      <Stack gap={0}>
+        {/* Header */}
+        <Paper
+          p="lg"
+          radius={0}
+          style={{
+            background: 'linear-gradient(135deg, #1e1e2e 0%, #181825 100%)',
+            borderBottom: '1px solid #313244',
+          }}
+        >
         <Group justify="space-between" align="flex-start">
           <Group gap="lg">
             <Box
@@ -320,8 +336,7 @@ export function RegionDetail({
       </Paper>
 
       {/* Entity Spawns */}
-      <ScrollArea style={{ flex: 1 }} p="lg">
-        <Stack gap="lg">
+      <Stack gap="lg" p="lg">
           {Array.from(spawnsByType.entries()).map(([type, entries]) => {
             const config = SPAWN_CONFIG[type];
             return (
@@ -371,7 +386,6 @@ export function RegionDetail({
             </Paper>
           )}
         </Stack>
-      </ScrollArea>
 
       {/* Add Spawn Modal */}
       <Modal opened={addSpawnModalOpen} onClose={() => setAddSpawnModalOpen(false)} title="Add Spawn" centered styles={{ header: { background: '#1e1e2e', borderBottom: '1px solid #313244' }, title: { color: '#cdd6f4', fontWeight: 600 }, body: { background: '#1e1e2e', padding: '20px' }, content: { background: '#1e1e2e' } }}>
@@ -395,6 +409,7 @@ export function RegionDetail({
         />
       )}
 
-    </Stack>
+      </Stack>
+    </div>
   );
 }

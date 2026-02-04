@@ -63,6 +63,14 @@ export interface TriggerDefinition {
   };
 }
 
+export interface VFXSpawnDefinition {
+  id: string;
+  vfxId: string;              // References VFXDefinition.id
+  position: Vec3;
+  scale?: number;             // Scale multiplier (default 1)
+  autoPlay?: boolean;         // Start playing on load (default true)
+}
+
 export type EnvironmentAnimationType = 'lamp_glow' | 'candle_flicker' | 'wind_sway';
 
 export interface EnvironmentAnimationEntry {
@@ -82,6 +90,7 @@ export interface RegionEntry {
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
   resonancePoints?: ResonancePointDefinition[];
+  vfxSpawns?: VFXSpawnDefinition[];
   triggers?: TriggerDefinition[];
   environmentAnimations?: EnvironmentAnimationEntry[];
   availability?: { fromEpisode?: string; untilEpisode?: string };
@@ -100,6 +109,7 @@ interface RegionPanelProps {
   items?: { id: string; name: string }[];
   inspections?: { id: string; displayName?: string }[];
   resonancePointDefs?: { id: string; name: string }[];
+  vfxDefinitions?: { id: string; name: string }[];
   episodes?: { id: string; name: string }[];
   children: (result: RegionPanelResult) => ReactNode;
 }
@@ -111,6 +121,7 @@ export function RegionPanel({
   items = [],
   inspections = [],
   resonancePointDefs = [],
+  vfxDefinitions = [],
   episodes = [],
   children,
 }: RegionPanelProps) {
@@ -133,6 +144,7 @@ export function RegionPanel({
       (region.pickups?.length || 0) +
       (region.inspectables?.length || 0) +
       (region.resonancePoints?.length || 0) +
+      (region.vfxSpawns?.length || 0) +
       (region.triggers?.length || 0)
     );
   };
@@ -190,6 +202,11 @@ export function RegionPanel({
         return { id: resonancePoint.id, type: 'resonancePoint', position: resonancePoint.position, data: resonancePoint };
       }
     }
+    for (const vfxSpawn of selectedRegion.vfxSpawns || []) {
+      if (vfxSpawn.id === selectedSpawnId) {
+        return { id: vfxSpawn.id, type: 'vfx', position: vfxSpawn.position, data: vfxSpawn };
+      }
+    }
     for (const trigger of selectedRegion.triggers || []) {
       if (trigger.id === selectedSpawnId) {
         const center: Vec3 = {
@@ -228,6 +245,11 @@ export function RegionPanel({
           r.id === spawn.id ? { ...(spawn.data as ResonancePointDefinition), position: spawn.position } : r
         );
         break;
+      case 'vfx':
+        updated.vfxSpawns = (selectedRegion.vfxSpawns || []).map((v) =>
+          v.id === spawn.id ? { ...(spawn.data as VFXSpawnDefinition), position: spawn.position } : v
+        );
+        break;
       case 'trigger': {
         const triggerData = spawn.data as TriggerDefinition;
         const halfSize = {
@@ -259,6 +281,7 @@ export function RegionPanel({
       case 'pickup': updated.pickups = (selectedRegion.pickups || []).filter((p) => p.id !== selectedSpawnId); break;
       case 'inspectable': updated.inspectables = (selectedRegion.inspectables || []).filter((i) => i.id !== selectedSpawnId); break;
       case 'resonancePoint': updated.resonancePoints = (selectedRegion.resonancePoints || []).filter((r) => r.id !== selectedSpawnId); break;
+      case 'vfx': updated.vfxSpawns = (selectedRegion.vfxSpawns || []).filter((v) => v.id !== selectedSpawnId); break;
       case 'trigger': updated.triggers = (selectedRegion.triggers || []).filter((t) => t.id !== selectedSpawnId); break;
     }
     handleUpdate(updated);
@@ -328,6 +351,7 @@ export function RegionPanel({
         items={items}
         inspections={inspections}
         resonancePointDefs={resonancePointDefs}
+        vfxDefinitions={vfxDefinitions}
         episodes={episodes}
         selectedSpawnId={selectedSpawnId}
         onSelectSpawn={setSelectedSpawnId}
@@ -352,6 +376,7 @@ export function RegionPanel({
         items={items}
         inspections={inspections}
         resonancePointDefs={resonancePointDefs}
+        vfxDefinitions={vfxDefinitions}
         onChange={handleSpawnUpdate}
         onDelete={handleSpawnDelete}
       />

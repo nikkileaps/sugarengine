@@ -33,20 +33,20 @@ export const FLAME_PRESET: VFXDefinition = {
 export const SPARKLE_PRESET: VFXDefinition = {
   id: 'builtin-sparkle',
   name: 'Sparkle',
-  emissionRate: 8,
-  maxParticles: 40,
-  lifetime: [0.3, 0.7],
-  size: [0.03, 0.1],
-  sizeOverLife: 0.2,
-  speed: [0.3, 1.0],
-  geometry: 'point',
+  emissionRate: 6,
+  maxParticles: 30,
+  lifetime: [0.8, 1.5],
+  size: [0.04, 0.12],
+  sizeOverLife: 1.0,            // Don't shrink - twinkling handles visibility
+  speed: [0.02, 0.08],          // Almost stationary - just tiny drift
+  geometry: 'sparkle',
   color: '#ffffff',
-  colorEnd: '#ffff88',
+  colorEnd: '#ffffff',          // Stay white - no color fade
   opacity: 1.0,
   blendMode: 'additive',
   direction: { x: 0, y: 1, z: 0 },
-  spread: 360,
-  gravity: 0.15,
+  spread: 360,                  // Spread in all directions (sphere)
+  gravity: 0,                   // No gravity - sparkles float
   loop: true,
 };
 

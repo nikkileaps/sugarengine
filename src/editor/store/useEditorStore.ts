@@ -81,7 +81,7 @@ export interface VFXDefinitionData {
   size: [number, number];
   sizeOverLife?: number;
   speed: [number, number];
-  geometry: 'point' | 'cube' | 'shard' | 'spark';
+  geometry: 'point' | 'sparkle' | 'cube' | 'shard' | 'spark';
   color: string;
   colorEnd?: string;
   opacity?: number;

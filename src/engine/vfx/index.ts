@@ -4,7 +4,8 @@
 
 export * from './types';
 export { ParticlePool } from './ParticlePool';
-export { VFXManager, EmitterInstance } from './VFXManager';
+export { VFXManager, FlameEmitter, SparkleEmitter } from './VFXManager';
+export type { Emitter } from './VFXManager';
 export {
   VFXLoader,
   FLAME_PRESET,

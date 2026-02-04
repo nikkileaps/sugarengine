@@ -5,7 +5,7 @@
 /**
  * Geometry type for particles
  */
-export type ParticleGeometry = 'point' | 'cube' | 'shard' | 'spark';
+export type ParticleGeometry = 'point' | 'sparkle' | 'cube' | 'shard' | 'spark';
 
 /**
  * Blend mode for particle rendering

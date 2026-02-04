@@ -23,6 +23,8 @@ export interface ProjectData {
   regions?: unknown[];
   playerCaster?: unknown;
   spells?: unknown[];
+  resonancePoints?: unknown[];
+  vfxDefinitions?: unknown[];
 }
 
 export class PreviewManager {

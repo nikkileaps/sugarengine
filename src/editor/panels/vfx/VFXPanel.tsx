@@ -42,6 +42,7 @@ interface VFXPanelProps {
 
 const GEOMETRY_OPTIONS: { value: ParticleGeometry; label: string }[] = [
   { value: 'point', label: 'Point (Round)' },
+  { value: 'sparkle', label: 'Sparkle (Starburst)' },
   { value: 'spark', label: 'Spark (Soft Circle)' },
   { value: 'cube', label: 'Cube' },
   { value: 'shard', label: 'Shard' },
@@ -211,6 +212,11 @@ export function VFXPanel({
 // Detail Editor
 // ============================================
 
+const EFFECT_TYPE_OPTIONS = [
+  { value: 'flame', label: 'Flame / Smoke', description: 'Particles emit, move, and fade' },
+  { value: 'sparkle', label: 'Sparkle', description: 'Stationary twinkling particles' },
+];
+
 function VFXDetail({
   vfx,
   onChange,
@@ -220,6 +226,33 @@ function VFXDetail({
   onChange: (v: VFXData) => void;
   onDelete: () => void;
 }) {
+  const isSparkle = vfx.geometry === 'sparkle';
+
+  const handleEffectTypeChange = (type: string | null) => {
+    if (type === 'sparkle') {
+      // Switch to sparkle with appropriate defaults
+      onChange({
+        ...vfx,
+        geometry: 'sparkle',
+        speed: [0, 0],
+        gravity: 0,
+        spread: 360,
+        sizeOverLife: 1.0,
+      });
+    } else {
+      // Switch to flame with appropriate defaults
+      onChange({
+        ...vfx,
+        geometry: 'spark',
+        speed: [0.8, 1.5],
+        gravity: -0.4,
+        spread: 25,
+        sizeOverLife: 0.3,
+        direction: { x: 0, y: 1, z: 0 },
+      });
+    }
+  };
+
   return (
     <div style={{ height: 'calc(100vh - 60px)', overflow: 'auto', padding: 'var(--mantine-spacing-md)' }}>
       <Stack gap="md">
@@ -249,258 +282,353 @@ function VFXDetail({
           onChange={(e) => onChange({ ...vfx, name: e.currentTarget.value })}
         />
 
-        {/* Appearance */}
-        <Paper p="md" withBorder>
+        {/* Effect Type - Primary Choice */}
+        <Paper p="md" withBorder style={{ background: '#252536' }}>
           <Stack gap="md">
-            <Text fw={500}>Appearance</Text>
-
+            <Text fw={500}>Effect Type</Text>
             <Select
-              label="Geometry"
-              description="Shape of individual particles"
-              data={GEOMETRY_OPTIONS}
-              value={vfx.geometry}
-              onChange={(v) => onChange({ ...vfx, geometry: (v as ParticleGeometry) || 'point' })}
+              label="Type"
+              description="Determines particle behavior"
+              data={EFFECT_TYPE_OPTIONS}
+              value={isSparkle ? 'sparkle' : 'flame'}
+              onChange={handleEffectTypeChange}
             />
-
-            <Group grow>
-              <ColorInput
-                label="Start Color"
-                value={vfx.color}
-                onChange={(v) => onChange({ ...vfx, color: v })}
-              />
-              <ColorInput
-                label="End Color"
-                description="Gradient over lifetime"
-                value={vfx.colorEnd || vfx.color}
-                onChange={(v) => onChange({ ...vfx, colorEnd: v })}
-              />
-            </Group>
-
-            <Select
-              label="Blend Mode"
-              data={BLEND_MODE_OPTIONS}
-              value={vfx.blendMode}
-              onChange={(v) => onChange({ ...vfx, blendMode: (v as BlendMode) || 'additive' })}
-            />
-
-            <Stack gap={4}>
-              <Text size="sm">Opacity: {(vfx.opacity ?? 1).toFixed(2)}</Text>
-              <Slider
-                min={0}
-                max={1}
-                step={0.05}
-                value={vfx.opacity ?? 1}
-                onChange={(v) => onChange({ ...vfx, opacity: v })}
-              />
-            </Stack>
           </Stack>
         </Paper>
 
-        {/* Emission */}
-        <Paper p="md" withBorder>
-          <Stack gap="md">
-            <Text fw={500}>Emission</Text>
+        {/* SPARKLE-SPECIFIC SETTINGS */}
+        {isSparkle ? (
+          <>
+            {/* Sparkle Appearance */}
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text fw={500}>Sparkle Appearance</Text>
 
-            <NumberInput
-              label="Emission Rate"
-              description="Particles per second"
-              value={vfx.emissionRate}
-              onChange={(v) => onChange({ ...vfx, emissionRate: Number(v) || 0 })}
-              min={0}
-              max={200}
-            />
+                <ColorInput
+                  label="Color"
+                  description="Sparkle color (stays constant)"
+                  value={vfx.color}
+                  onChange={(v) => onChange({ ...vfx, color: v, colorEnd: v })}
+                />
 
-            <NumberInput
-              label="Max Particles"
-              description="Pool size (memory)"
-              value={vfx.maxParticles}
-              onChange={(v) => onChange({ ...vfx, maxParticles: Number(v) || 10 })}
-              min={10}
-              max={1000}
-              step={10}
-            />
+                <Group grow>
+                  <NumberInput
+                    label="Size Min"
+                    description="Smallest sparkle"
+                    value={vfx.size[0]}
+                    onChange={(v) => onChange({ ...vfx, size: [Number(v) || 0.01, vfx.size[1]] })}
+                    min={0.01}
+                    max={0.5}
+                    step={0.01}
+                    decimalScale={2}
+                  />
+                  <NumberInput
+                    label="Size Max"
+                    description="Largest sparkle"
+                    value={vfx.size[1]}
+                    onChange={(v) => onChange({ ...vfx, size: [vfx.size[0], Number(v) || 0.01] })}
+                    min={0.01}
+                    max={0.5}
+                    step={0.01}
+                    decimalScale={2}
+                  />
+                </Group>
+              </Stack>
+            </Paper>
 
-            <Switch
-              label="Loop"
-              description="Emit continuously vs one-shot"
-              checked={vfx.loop}
-              onChange={(e) => onChange({ ...vfx, loop: e.currentTarget.checked })}
-            />
+            {/* Sparkle Spawning */}
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text fw={500}>Spawning</Text>
 
-            {!vfx.loop && (
-              <NumberInput
-                label="Duration"
-                description="Seconds before stopping"
-                value={vfx.duration ?? 1}
-                onChange={(v) => onChange({ ...vfx, duration: Number(v) || 1 })}
-                min={0.1}
-                max={10}
-                step={0.1}
-                decimalScale={1}
-              />
-            )}
-          </Stack>
-        </Paper>
+                <NumberInput
+                  label="Spawn Rate"
+                  description="New sparkles per second"
+                  value={vfx.emissionRate}
+                  onChange={(v) => onChange({ ...vfx, emissionRate: Number(v) || 1 })}
+                  min={1}
+                  max={50}
+                />
 
-        {/* Particle Properties */}
-        <Paper p="md" withBorder>
-          <Stack gap="md">
-            <Text fw={500}>Particle Properties</Text>
+                <NumberInput
+                  label="Max Sparkles"
+                  description="Maximum visible at once"
+                  value={vfx.maxParticles}
+                  onChange={(v) => onChange({ ...vfx, maxParticles: Number(v) || 10 })}
+                  min={5}
+                  max={200}
+                  step={5}
+                />
 
-            <Group grow>
-              <NumberInput
-                label="Lifetime Min"
-                value={vfx.lifetime[0]}
-                onChange={(v) =>
-                  onChange({ ...vfx, lifetime: [Number(v) || 0.1, vfx.lifetime[1]] })
-                }
-                min={0.1}
-                max={10}
-                step={0.1}
-                decimalScale={1}
-              />
-              <NumberInput
-                label="Lifetime Max"
-                value={vfx.lifetime[1]}
-                onChange={(v) =>
-                  onChange({ ...vfx, lifetime: [vfx.lifetime[0], Number(v) || 0.1] })
-                }
-                min={0.1}
-                max={10}
-                step={0.1}
-                decimalScale={1}
-              />
-            </Group>
+                <Group grow>
+                  <NumberInput
+                    label="Lifetime Min"
+                    description="Shortest twinkle duration"
+                    value={vfx.lifetime[0]}
+                    onChange={(v) => onChange({ ...vfx, lifetime: [Number(v) || 0.5, vfx.lifetime[1]] })}
+                    min={0.3}
+                    max={5}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                  <NumberInput
+                    label="Lifetime Max"
+                    description="Longest twinkle duration"
+                    value={vfx.lifetime[1]}
+                    onChange={(v) => onChange({ ...vfx, lifetime: [vfx.lifetime[0], Number(v) || 0.5] })}
+                    min={0.3}
+                    max={5}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                </Group>
 
-            <Group grow>
-              <NumberInput
-                label="Size Min"
-                value={vfx.size[0]}
-                onChange={(v) =>
-                  onChange({ ...vfx, size: [Number(v) || 0.01, vfx.size[1]] })
-                }
-                min={0.01}
-                max={2}
-                step={0.01}
-                decimalScale={2}
-              />
-              <NumberInput
-                label="Size Max"
-                value={vfx.size[1]}
-                onChange={(v) =>
-                  onChange({ ...vfx, size: [vfx.size[0], Number(v) || 0.01] })
-                }
-                min={0.01}
-                max={2}
-                step={0.01}
-                decimalScale={2}
-              />
-            </Group>
+                <Switch
+                  label="Loop"
+                  description="Continuously spawn new sparkles"
+                  checked={vfx.loop}
+                  onChange={(e) => onChange({ ...vfx, loop: e.currentTarget.checked })}
+                />
+              </Stack>
+            </Paper>
+          </>
+        ) : (
+          <>
+            {/* FLAME-SPECIFIC SETTINGS */}
 
-            <Stack gap={4}>
-              <Text size="sm">Size Over Life: {(vfx.sizeOverLife ?? 1).toFixed(2)}</Text>
-              <Slider
-                min={0}
-                max={2}
-                step={0.1}
-                value={vfx.sizeOverLife ?? 1}
-                onChange={(v) => onChange({ ...vfx, sizeOverLife: v })}
-              />
-            </Stack>
+            {/* Flame Appearance */}
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text fw={500}>Appearance</Text>
 
-            <Group grow>
-              <NumberInput
-                label="Speed Min"
-                value={vfx.speed[0]}
-                onChange={(v) =>
-                  onChange({ ...vfx, speed: [Number(v) || 0, vfx.speed[1]] })
-                }
-                min={0}
-                max={10}
-                step={0.1}
-                decimalScale={1}
-              />
-              <NumberInput
-                label="Speed Max"
-                value={vfx.speed[1]}
-                onChange={(v) =>
-                  onChange({ ...vfx, speed: [vfx.speed[0], Number(v) || 0] })
-                }
-                min={0}
-                max={10}
-                step={0.1}
-                decimalScale={1}
-              />
-            </Group>
-          </Stack>
-        </Paper>
+                <Select
+                  label="Particle Shape"
+                  data={GEOMETRY_OPTIONS.filter(g => g.value !== 'sparkle')}
+                  value={vfx.geometry}
+                  onChange={(v) => onChange({ ...vfx, geometry: (v as ParticleGeometry) || 'spark' })}
+                />
 
-        {/* Movement */}
-        <Paper p="md" withBorder>
-          <Stack gap="md">
-            <Text fw={500}>Movement</Text>
+                <Group grow>
+                  <ColorInput
+                    label="Start Color"
+                    value={vfx.color}
+                    onChange={(v) => onChange({ ...vfx, color: v })}
+                  />
+                  <ColorInput
+                    label="End Color"
+                    description="Fades to this color"
+                    value={vfx.colorEnd || vfx.color}
+                    onChange={(v) => onChange({ ...vfx, colorEnd: v })}
+                  />
+                </Group>
 
-            <Group grow>
-              <NumberInput
-                label="Direction X"
-                value={vfx.direction.x}
-                onChange={(v) =>
-                  onChange({ ...vfx, direction: { ...vfx.direction, x: Number(v) || 0 } })
-                }
-                min={-1}
-                max={1}
-                step={0.1}
-                decimalScale={1}
-              />
-              <NumberInput
-                label="Direction Y"
-                value={vfx.direction.y}
-                onChange={(v) =>
-                  onChange({ ...vfx, direction: { ...vfx.direction, y: Number(v) || 0 } })
-                }
-                min={-1}
-                max={1}
-                step={0.1}
-                decimalScale={1}
-              />
-              <NumberInput
-                label="Direction Z"
-                value={vfx.direction.z}
-                onChange={(v) =>
-                  onChange({ ...vfx, direction: { ...vfx.direction, z: Number(v) || 0 } })
-                }
-                min={-1}
-                max={1}
-                step={0.1}
-                decimalScale={1}
-              />
-            </Group>
+                <Select
+                  label="Blend Mode"
+                  data={BLEND_MODE_OPTIONS}
+                  value={vfx.blendMode}
+                  onChange={(v) => onChange({ ...vfx, blendMode: (v as BlendMode) || 'additive' })}
+                />
 
-            <Stack gap={4}>
-              <Text size="sm">Spread: {vfx.spread}°</Text>
-              <Slider
-                min={0}
-                max={360}
-                step={5}
-                value={vfx.spread}
-                onChange={(v) => onChange({ ...vfx, spread: v })}
-              />
-            </Stack>
+                <Stack gap={4}>
+                  <Text size="sm">Opacity: {(vfx.opacity ?? 1).toFixed(2)}</Text>
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={vfx.opacity ?? 1}
+                    onChange={(v) => onChange({ ...vfx, opacity: v })}
+                  />
+                </Stack>
+              </Stack>
+            </Paper>
 
-            <Stack gap={4}>
-              <Text size="sm">
-                Gravity: {vfx.gravity.toFixed(2)} ({vfx.gravity < 0 ? 'rise' : vfx.gravity > 0 ? 'fall' : 'none'})
-              </Text>
-              <Slider
-                min={-1}
-                max={1}
-                step={0.05}
-                value={vfx.gravity}
-                onChange={(v) => onChange({ ...vfx, gravity: v })}
-              />
-            </Stack>
-          </Stack>
-        </Paper>
+            {/* Flame Emission */}
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text fw={500}>Emission</Text>
+
+                <NumberInput
+                  label="Emission Rate"
+                  description="Particles per second"
+                  value={vfx.emissionRate}
+                  onChange={(v) => onChange({ ...vfx, emissionRate: Number(v) || 0 })}
+                  min={0}
+                  max={200}
+                />
+
+                <NumberInput
+                  label="Max Particles"
+                  description="Pool size"
+                  value={vfx.maxParticles}
+                  onChange={(v) => onChange({ ...vfx, maxParticles: Number(v) || 10 })}
+                  min={10}
+                  max={1000}
+                  step={10}
+                />
+
+                <Switch
+                  label="Loop"
+                  checked={vfx.loop}
+                  onChange={(e) => onChange({ ...vfx, loop: e.currentTarget.checked })}
+                />
+
+                {!vfx.loop && (
+                  <NumberInput
+                    label="Duration"
+                    value={vfx.duration ?? 1}
+                    onChange={(v) => onChange({ ...vfx, duration: Number(v) || 1 })}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                )}
+              </Stack>
+            </Paper>
+
+            {/* Flame Particle Properties */}
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text fw={500}>Particle Properties</Text>
+
+                <Group grow>
+                  <NumberInput
+                    label="Lifetime Min"
+                    value={vfx.lifetime[0]}
+                    onChange={(v) => onChange({ ...vfx, lifetime: [Number(v) || 0.1, vfx.lifetime[1]] })}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                  <NumberInput
+                    label="Lifetime Max"
+                    value={vfx.lifetime[1]}
+                    onChange={(v) => onChange({ ...vfx, lifetime: [vfx.lifetime[0], Number(v) || 0.1] })}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                </Group>
+
+                <Group grow>
+                  <NumberInput
+                    label="Size Min"
+                    value={vfx.size[0]}
+                    onChange={(v) => onChange({ ...vfx, size: [Number(v) || 0.01, vfx.size[1]] })}
+                    min={0.01}
+                    max={2}
+                    step={0.01}
+                    decimalScale={2}
+                  />
+                  <NumberInput
+                    label="Size Max"
+                    value={vfx.size[1]}
+                    onChange={(v) => onChange({ ...vfx, size: [vfx.size[0], Number(v) || 0.01] })}
+                    min={0.01}
+                    max={2}
+                    step={0.01}
+                    decimalScale={2}
+                  />
+                </Group>
+
+                <Stack gap={4}>
+                  <Text size="sm">Size Over Life: {(vfx.sizeOverLife ?? 1).toFixed(2)}</Text>
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={vfx.sizeOverLife ?? 1}
+                    onChange={(v) => onChange({ ...vfx, sizeOverLife: v })}
+                  />
+                </Stack>
+
+                <Group grow>
+                  <NumberInput
+                    label="Speed Min"
+                    value={vfx.speed[0]}
+                    onChange={(v) => onChange({ ...vfx, speed: [Number(v) || 0, vfx.speed[1]] })}
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                  <NumberInput
+                    label="Speed Max"
+                    value={vfx.speed[1]}
+                    onChange={(v) => onChange({ ...vfx, speed: [vfx.speed[0], Number(v) || 0] })}
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                </Group>
+              </Stack>
+            </Paper>
+
+            {/* Flame Movement */}
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Text fw={500}>Movement</Text>
+
+                <Group grow>
+                  <NumberInput
+                    label="Direction X"
+                    value={vfx.direction.x}
+                    onChange={(v) => onChange({ ...vfx, direction: { ...vfx.direction, x: Number(v) || 0 } })}
+                    min={-1}
+                    max={1}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                  <NumberInput
+                    label="Direction Y"
+                    value={vfx.direction.y}
+                    onChange={(v) => onChange({ ...vfx, direction: { ...vfx.direction, y: Number(v) || 0 } })}
+                    min={-1}
+                    max={1}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                  <NumberInput
+                    label="Direction Z"
+                    value={vfx.direction.z}
+                    onChange={(v) => onChange({ ...vfx, direction: { ...vfx.direction, z: Number(v) || 0 } })}
+                    min={-1}
+                    max={1}
+                    step={0.1}
+                    decimalScale={1}
+                  />
+                </Group>
+
+                <Stack gap={4}>
+                  <Text size="sm">Spread: {vfx.spread}°</Text>
+                  <Slider
+                    min={0}
+                    max={180}
+                    step={5}
+                    value={vfx.spread}
+                    onChange={(v) => onChange({ ...vfx, spread: v })}
+                  />
+                </Stack>
+
+                <Stack gap={4}>
+                  <Text size="sm">
+                    Gravity: {vfx.gravity.toFixed(2)} ({vfx.gravity < 0 ? 'rise' : vfx.gravity > 0 ? 'fall' : 'none'})
+                  </Text>
+                  <Slider
+                    min={-1}
+                    max={1}
+                    step={0.05}
+                    value={vfx.gravity}
+                    onChange={(v) => onChange({ ...vfx, gravity: v })}
+                  />
+                </Stack>
+              </Stack>
+            </Paper>
+          </>
+        )}
       </Stack>
     </div>
   );

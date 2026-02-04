@@ -8,7 +8,8 @@ import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
 import { getRegionWorldOffset, gridKey } from '../streaming';
 import { EnvironmentAnimation } from '../shaders';
-import { VFXManager, EmitterInstance, VFXDefinition } from '../vfx';
+import { VFXManager, VFXDefinition } from '../vfx';
+import type { Emitter } from '../vfx';
 
 export interface CameraConfig {
   style: 'isometric' | 'perspective';
@@ -71,6 +72,7 @@ export class SugarEngine {
   private pickupEntities: number[] = [];
   private inspectableEntities: number[] = [];
   private resonancePointEntities: number[] = [];
+  private vfxEmitterIds: string[] = [];
   private surfacePatchEntities: number[] = [];
 
   private triggerSystem: TriggerSystem;
@@ -305,6 +307,12 @@ export class SugarEngine {
       this.world.removeEntity(entityId);
     }
     this.resonancePointEntities = [];
+
+    // Remove old VFX emitters
+    for (const emitterId of this.vfxEmitterIds) {
+      this.vfxManager.removeEmitter(emitterId);
+    }
+    this.vfxEmitterIds = [];
 
     // Remove old surface patch LOD entities
     for (const entityId of this.surfacePatchEntities) {
@@ -543,6 +551,32 @@ export class SugarEngine {
     }
     if (resonancePoints.length > 0) {
       console.log(`Loaded ${resonancePoints.length} resonance points`);
+    }
+
+    // Create VFX emitters from region data
+    const vfxSpawns = this.currentRegion.data.vfxSpawns ?? [];
+    console.log(`[Engine] VFX spawns in region:`, vfxSpawns);
+    console.log(`[Engine] Registered VFX definitions:`, this.vfxManager.getAllDefinitions().map(d => d.id));
+    for (const vfxSpawn of vfxSpawns) {
+      const position = new THREE.Vector3(
+        vfxSpawn.position.x,
+        vfxSpawn.position.y,
+        vfxSpawn.position.z
+      );
+      const scale = vfxSpawn.scale ?? 1;
+      const autoPlay = vfxSpawn.autoPlay !== false;
+
+      console.log(`[Engine] Creating VFX emitter: vfxId=${vfxSpawn.vfxId}, pos=(${position.x}, ${position.y}, ${position.z}), scale=${scale}, autoPlay=${autoPlay}`);
+      const emitter = this.vfxManager.createEmitter(vfxSpawn.vfxId, position, scale, autoPlay);
+      if (emitter) {
+        console.log(`[Engine] Created emitter: ${emitter.id}`);
+        this.vfxEmitterIds.push(emitter.id);
+      } else {
+        console.warn(`[Engine] Failed to create emitter for vfxId=${vfxSpawn.vfxId}`);
+      }
+    }
+    if (vfxSpawns.length > 0) {
+      console.log(`Loaded ${vfxSpawns.length} VFX emitters`);
     }
 
     // Add geometry to scene
@@ -1651,14 +1685,14 @@ export class SugarEngine {
     position: THREE.Vector3,
     scale?: number,
     autoPlay?: boolean
-  ): EmitterInstance | null {
+  ): Emitter | null {
     return this.vfxManager.createEmitter(vfxId, position, scale, autoPlay);
   }
 
   /**
    * Get a VFX emitter by ID
    */
-  getVFXEmitter(id: string): EmitterInstance | undefined {
+  getVFXEmitter(id: string): Emitter | undefined {
     return this.vfxManager.getEmitter(id);
   }
 

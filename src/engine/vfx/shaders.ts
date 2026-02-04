@@ -96,9 +96,17 @@ export const pointsVertexShader = /* glsl */ `
   uniform vec3 colorEnd;
   uniform float opacity;
   uniform float baseSize;
+  uniform bool useSparkle;
+  uniform float time;
 
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vSparkle;
+
+  // Simple hash for per-particle randomness
+  float hash(float n) {
+    return fract(sin(n) * 43758.5453123);
+  }
 
   void main() {
     float life = instanceLife;
@@ -111,7 +119,31 @@ export const pointsVertexShader = /* glsl */ `
     vColor = mix(instanceColor, colorEnd, life);
 
     // Alpha fades out over lifetime
-    vAlpha = opacity * (1.0 - life);
+    float baseAlpha = opacity * (1.0 - life * life); // Quadratic fade for longer visibility
+
+    if (useSparkle) {
+      // Create unique random seed from position
+      float seed = position.x * 12.9898 + position.y * 78.233 + position.z * 45.164;
+
+      // Twinkle: oscillate size and brightness with sine waves
+      float twinkleSpeed1 = 8.0 + hash(seed) * 12.0; // 8-20 Hz
+      float twinkleSpeed2 = 15.0 + hash(seed + 1.0) * 10.0; // 15-25 Hz
+
+      float twinkle1 = sin(time * twinkleSpeed1 + hash(seed + 2.0) * 6.28) * 0.5 + 0.5;
+      float twinkle2 = sin(time * twinkleSpeed2 + hash(seed + 3.0) * 6.28) * 0.3 + 0.7;
+
+      float twinkle = twinkle1 * twinkle2;
+
+      // Apply twinkle to size
+      finalSize *= (0.5 + twinkle * 0.8);
+
+      // Pass twinkle to fragment for brightness
+      vSparkle = twinkle;
+      vAlpha = baseAlpha * (0.6 + twinkle * 0.4);
+    } else {
+      vSparkle = 1.0;
+      vAlpha = baseAlpha;
+    }
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -125,14 +157,44 @@ export const pointsVertexShader = /* glsl */ `
 export const pointsFragmentShader = /* glsl */ `
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vSparkle;
+
+  uniform bool useSparkle;
 
   void main() {
-    // Soft circle from point coordinate
-    vec2 center = vec2(0.5, 0.5);
-    float dist = length(gl_PointCoord - center);
-    float circle = 1.0 - smoothstep(0.3, 0.5, dist);
+    vec2 uv = gl_PointCoord - vec2(0.5);
+    float dist = length(uv);
 
-    float alpha = vAlpha * circle;
+    float shape;
+
+    if (useSparkle) {
+      // Sparkle: bright center + cross rays that twinkle
+      float center = 1.0 - smoothstep(0.0, 0.12, dist);
+
+      // Cross rays (+ shape) - intensity varies with twinkle
+      float rayIntensity = 0.5 + vSparkle * 0.5;
+      float rayX = exp(-abs(uv.y) * 12.0) * exp(-abs(uv.x) * 2.5) * rayIntensity;
+      float rayY = exp(-abs(uv.x) * 12.0) * exp(-abs(uv.y) * 2.5) * rayIntensity;
+
+      // Diagonal rays (× shape)
+      vec2 uvRot = vec2(uv.x + uv.y, uv.x - uv.y) * 0.707;
+      float rayD1 = exp(-abs(uvRot.y) * 18.0) * exp(-abs(uvRot.x) * 4.0) * rayIntensity * 0.6;
+      float rayD2 = exp(-abs(uvRot.x) * 18.0) * exp(-abs(uvRot.y) * 4.0) * rayIntensity * 0.6;
+
+      // Soft glow
+      float glow = exp(-dist * 5.0) * 0.25;
+
+      shape = center + rayX + rayY + rayD1 + rayD2 + glow;
+      shape = clamp(shape, 0.0, 1.0);
+
+      // Boost brightness for sparkle
+      shape *= (0.8 + vSparkle * 0.4);
+    } else {
+      // Soft circle
+      shape = 1.0 - smoothstep(0.3, 0.5, dist);
+    }
+
+    float alpha = vAlpha * shape;
     if (alpha < 0.01) discard;
 
     gl_FragColor = vec4(vColor, alpha);

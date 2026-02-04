@@ -63,6 +63,14 @@ export interface ResonancePointDefinition {
   promptText?: string;              // Custom "Press E to..." text
 }
 
+export interface VFXSpawnDefinition {
+  id: string;
+  vfxId: string;              // References VFXDefinition.id
+  position: Vec3;
+  scale?: number;             // Scale multiplier (default 1)
+  autoPlay?: boolean;         // Start playing on load (default true)
+}
+
 export interface RegionAvailability {
   fromEpisode?: string;   // First episode this region is accessible
   untilEpisode?: string;  // Last episode (for temporary areas)
@@ -195,6 +203,7 @@ export interface RegionData {
   pickups?: PickupDefinition[];
   inspectables?: InspectableDefinition[];
   resonancePoints?: ResonancePointDefinition[];
+  vfxSpawns?: VFXSpawnDefinition[];
   environmentAnimations?: EnvironmentAnimationEntry[];
   availability?: RegionAvailability;
 }
