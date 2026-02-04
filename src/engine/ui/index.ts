@@ -12,3 +12,4 @@ export { DebugHUD } from './DebugHUD';
 export { SpellMenuUI } from './SpellMenuUI';
 export { CasterHUD } from './CasterHUD';
 export { ResonanceGameUI } from './ResonanceGameUI';
+export { FadeOverlay } from './FadeOverlay';

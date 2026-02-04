@@ -85,6 +85,8 @@ export class SugarEngine {
   private currentRegionPath: string = '';
   private isPaused: boolean = false;
   private isRunning: boolean = false;
+  private cameraFollowsPlayer: boolean = true;
+  private cameraUpdateEnabled: boolean = true;
   private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
   private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
   private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
@@ -1185,6 +1187,20 @@ export class SugarEngine {
     this.camera.updateAspect(container);
   }
 
+  /**
+   * Get the THREE.js camera (for debug tools)
+   */
+  getCamera(): THREE.PerspectiveCamera {
+    return this.camera.getThreeCamera();
+  }
+
+  /**
+   * Enable or disable camera updates (for free camera mode)
+   */
+  setCameraUpdateEnabled(enabled: boolean): void {
+    this.cameraUpdateEnabled = enabled;
+  }
+
   onTriggerEnter(handler: TriggerHandler): void {
     this.triggerSystem.setTriggerEnterHandler(handler);
   }
@@ -1264,8 +1280,8 @@ export class SugarEngine {
         // Update VFX particles
         this.vfxManager.update(delta);
 
-        // Update camera target to follow player
-        if (this.playerEntity >= 0) {
+        // Update camera target to follow player (unless in fixed camera mode)
+        if (this.cameraFollowsPlayer && this.playerEntity >= 0) {
           const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
           if (playerPos) {
             this.camera.follow(new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z));
@@ -1273,8 +1289,11 @@ export class SugarEngine {
         }
       }
 
-      // Always update camera (for smooth interpolation even when paused)
-      this.camera.update(delta);
+      // Update camera (for smooth interpolation even when paused)
+      // Skip if camera update is disabled (e.g., free camera mode)
+      if (this.cameraUpdateEnabled) {
+        this.camera.update(delta);
+      }
 
       // Render with post-processing
       this.postProcessing.render();
@@ -1673,6 +1692,69 @@ export class SugarEngine {
       // Convert degrees to radians (negate because THREE.js rotation is clockwise)
       const radians = -(degrees * Math.PI) / 180;
       renderable.mesh.rotation.y = radians;
+    }
+  }
+
+  /**
+   * Show or hide the player mesh
+   */
+  setPlayerVisible(visible: boolean): void {
+    if (this.playerEntity < 0) return;
+
+    const renderable = this.world.getComponent<Renderable>(this.playerEntity, Renderable);
+    if (renderable?.mesh) {
+      renderable.mesh.visible = visible;
+    }
+  }
+
+  // ==================== Camera Control Methods ====================
+
+  /**
+   * Set camera to a fixed position (disables player following)
+   */
+  setCameraPosition(x: number, y: number, z: number): void {
+    this.cameraFollowsPlayer = false;
+    // Position the camera rig's target at the given position
+    // The camera will smoothly interpolate there
+    this.camera.follow(new THREE.Vector3(x, y, z));
+  }
+
+  /**
+   * Point camera at a world position
+   * Note: This sets the camera target position that the camera looks at
+   */
+  setCameraLookAt(x: number, y: number, z: number): void {
+    // The GameCamera rig always looks at its target position
+    // So we set that as our look-at point
+    this.camera.follow(new THREE.Vector3(x, y, z));
+  }
+
+  /**
+   * Directly position the THREE.js camera (bypasses rig smoothing)
+   * Use this for cinematic camera positioning
+   */
+  setCameraPositionImmediate(position: { x: number; y: number; z: number }, lookAt: { x: number; y: number; z: number }): void {
+    this.cameraFollowsPlayer = false;
+    this.cameraUpdateEnabled = false; // Disable rig updates so position isn't overridden
+    const cam = this.camera.getThreeCamera();
+    cam.position.set(position.x, position.y, position.z);
+    cam.lookAt(lookAt.x, lookAt.y, lookAt.z);
+  }
+
+  /**
+   * Resume normal player-following camera behavior
+   * Immediately snaps camera to player position
+   */
+  resumePlayerCamera(): void {
+    this.cameraFollowsPlayer = true;
+    this.cameraUpdateEnabled = true; // Re-enable rig updates
+
+    // Immediately snap camera rig to player position (no smooth interpolation)
+    if (this.playerEntity >= 0) {
+      const playerPos = this.world.getComponent<Position>(this.playerEntity, Position);
+      if (playerPos) {
+        this.camera.snapToTarget(new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z));
+      }
     }
   }
 

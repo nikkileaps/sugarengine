@@ -8,7 +8,7 @@
 export { SugarEngine } from './core/Engine';
 export type { EngineConfig, CameraConfig, LoadedRegionState, NPCDatabaseEntry } from './core/Engine';
 export { Game } from './core/Game';
-export type { GameConfig, GameEventHandlers } from './core/Game';
+export type { GameConfig, GameEventHandlers, TitleScreenConfig } from './core/Game';
 export { GameCamera } from './core/GameCamera';
 export type { GameCameraConfig } from './core/GameCamera';
 export { InputManager } from './core/InputManager';
@@ -121,6 +121,7 @@ export {
   SpellMenuUI,
   CasterHUD,
   ResonanceGameUI,
+  FadeOverlay,
 } from './ui';
 
 // Resonance System
@@ -134,3 +135,6 @@ export type {
   TrajectoryOption,
   ResonanceGameResult,
 } from './resonance';
+
+// Debug
+export { FreeCameraController } from './debug';

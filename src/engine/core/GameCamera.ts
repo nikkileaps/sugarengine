@@ -313,6 +313,21 @@ export class GameCamera {
     this.targetPosition.copy(target);
   }
 
+  /**
+   * Immediately snap camera rig to target position (no interpolation)
+   * Also resets the camera's local transform back to normal rig positioning
+   */
+  snapToTarget(target: THREE.Vector3): void {
+    this.targetPosition.copy(target);
+    this.cameraTarget.position.copy(target);
+    this.prevTargetPosition.copy(target);
+    // Reset camera local position and rotation within the rig
+    // (in case it was manually overridden by setCameraPositionImmediate)
+    this.camera.position.set(0, 0, this.currentDistance);
+    this.camera.rotation.set(0, 0, 0);
+    this.updateRig();
+  }
+
   private onMouseDown(e: MouseEvent): void {
     // Right mouse button for rotation
     if (e.button === 2) {

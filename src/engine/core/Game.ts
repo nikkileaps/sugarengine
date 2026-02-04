@@ -15,6 +15,18 @@ import { PLAYER, NARRATOR } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
 import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
+import { FadeOverlay } from '../ui/FadeOverlay';
+
+export interface TitleScreenConfig {
+  /** Camera position for title screen (world coordinates) */
+  cameraPosition: { x: number; y: number; z: number };
+  /** Point camera looks at (world coordinates) */
+  cameraLookAt: { x: number; y: number; z: number };
+  /** Hide player during title screen (default true) */
+  hidePlayer?: boolean;
+  /** Transition duration in ms (default 500) */
+  transitionDuration?: number;
+}
 
 export interface GameConfig {
   container: HTMLElement;
@@ -30,6 +42,8 @@ export interface GameConfig {
   projectData?: unknown;
   /** Current episode ID for development mode */
   currentEpisode?: string;
+  /** Title screen camera configuration */
+  titleScreen?: TitleScreenConfig;
 }
 
 export interface GameEventHandlers {
@@ -69,6 +83,7 @@ export class Game {
   private playerCasterConfig: PlayerCasterConfig | null = null;
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
+  private fadeOverlay: FadeOverlay;
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -108,6 +123,7 @@ export class Game {
     this.audio = new AudioManager(config.audio);
     this.ambient = new AmbientController(this.audio);
     this.caster = new CasterManager();
+    this.fadeOverlay = new FadeOverlay(container);
 
     // Create caster system and add to ECS world
     this.casterSystem = new CasterSystem();
@@ -552,6 +568,13 @@ export class Game {
     // Scene Manager Events
     // ========================================
     this.sceneManager.onNewGame(async () => {
+      const transitionDuration = this.config.titleScreen?.transitionDuration ?? 500;
+
+      // Fade to black if title screen is configured
+      if (this.config.titleScreen) {
+        await this.fadeOverlay.fadeToBlack(transitionDuration);
+      }
+
       // Fade out menu music, start ambient sounds
       this.audio.transitionToGame();
       this.ambient.start();
@@ -573,6 +596,12 @@ export class Game {
       // Set player facing direction if configured
       if (this.playerCasterConfig?.initialFacingAngle !== undefined) {
         this.engine.setPlayerFacingAngle(this.playerCasterConfig.initialFacingAngle);
+      }
+
+      // Show player and resume camera following (if title screen was configured)
+      if (this.config.titleScreen) {
+        this.engine.setPlayerVisible(true);
+        this.engine.resumePlayerCamera();
       }
 
       // Add Caster component to player entity
@@ -600,6 +629,11 @@ export class Game {
 
       this.sceneManager.showGameplay();
       this.engine.run();
+
+      // Fade from black if title screen is configured
+      if (this.config.titleScreen) {
+        await this.fadeOverlay.fadeFromBlack(transitionDuration);
+      }
     });
 
     this.sceneManager.onSave(async (slotId) => {
@@ -612,6 +646,13 @@ export class Game {
     });
 
     this.sceneManager.onLoad(async (slotId) => {
+      const transitionDuration = this.config.titleScreen?.transitionDuration ?? 500;
+
+      // Fade to black if title screen is configured
+      if (this.config.titleScreen) {
+        await this.fadeOverlay.fadeToBlack(transitionDuration);
+      }
+
       // Fade out menu music, start ambient sounds
       this.audio.transitionToGame();
       this.ambient.start();
@@ -620,10 +661,21 @@ export class Game {
       if (result.success) {
         console.log(`Game loaded from ${slotId}`);
 
+        // Show player and resume camera following (if title screen was configured)
+        if (this.config.titleScreen) {
+          this.engine.setPlayerVisible(true);
+          this.engine.resumePlayerCamera();
+        }
+
         // Ensure player has Caster component (save manager will restore state)
         this.initializePlayerCaster();
 
         this.engine.run();
+
+        // Fade from black if title screen is configured
+        if (this.config.titleScreen) {
+          await this.fadeOverlay.fadeFromBlack(transitionDuration);
+        }
       } else {
         console.error('Load failed:', result.error);
       }
@@ -805,6 +857,16 @@ export class Game {
     if (!this.audio.isPlaying('menu-music')) {
       this.audio.play('menu-music');
     }
+
+    // Set up title screen camera if configured
+    if (this.config.titleScreen) {
+      const { cameraPosition, cameraLookAt, hidePlayer } = this.config.titleScreen;
+      this.engine.setCameraPositionImmediate(cameraPosition, cameraLookAt);
+      if (hidePlayer !== false) {
+        this.engine.setPlayerVisible(false);
+      }
+    }
+
     await this.sceneManager.showTitle();
   }
 

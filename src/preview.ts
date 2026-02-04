@@ -19,6 +19,7 @@ import {
   SpellMenuUI,
   CasterHUD,
   ResonanceGameUI,
+  FreeCameraController,
 } from './engine';
 
 interface ProjectMessage {
@@ -93,6 +94,13 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     mode: isDevelopmentMode ? 'development' : 'production',
     projectData,
     currentEpisode: episodeId,
+    // Title screen camera
+    titleScreen: {
+      cameraPosition: { x: 0.0, y: 0.0, z: 25.0 },
+      cameraLookAt: { x: 0.3, y: -40.3, z: 54.6 },
+      hidePlayer: true,
+      transitionDuration: 600,
+    },
   });
 
   gameInstance = game;
@@ -123,6 +131,17 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     (level) => game.engine.setForcedLOD(level),
     () => game.engine.getForcedLOD()
   );
+
+  // Free camera controller for positioning title screen camera (F2 to toggle)
+  const freeCam = new FreeCameraController(game.engine.getCamera(), container);
+  freeCam.onEnable(() => {
+    // Disable normal camera updates when free cam is active
+    game.engine.setCameraUpdateEnabled(false);
+  });
+  freeCam.onDisable(() => {
+    // Resume normal camera updates
+    game.engine.setCameraUpdateEnabled(true);
+  });
 
   // ========================================
   // Game Event Handlers → UI Updates
