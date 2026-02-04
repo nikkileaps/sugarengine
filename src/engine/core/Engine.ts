@@ -1661,6 +1661,21 @@ export class SugarEngine {
     return this.playerEntity;
   }
 
+  /**
+   * Set the player's facing direction (in degrees)
+   * 0 = north (forward/+Z), 90 = east (+X), 180 = south (-Z), 270 = west (-X)
+   */
+  setPlayerFacingAngle(degrees: number): void {
+    if (this.playerEntity < 0) return;
+
+    const renderable = this.world.getComponent<Renderable>(this.playerEntity, Renderable);
+    if (renderable?.mesh) {
+      // Convert degrees to radians (negate because THREE.js rotation is clockwise)
+      const radians = -(degrees * Math.PI) / 180;
+      renderable.mesh.rotation.y = radians;
+    }
+  }
+
   // ==================== VFX Methods ====================
 
   /**

@@ -52,12 +52,23 @@ export class SpellLoader {
       return null;
     }
 
-    const result = {
+    // Parse spawn position if present
+    let initialSpawnPosition: { x: number; y: number; z: number } | undefined;
+    if (config.initialSpawnPosition && typeof config.initialSpawnPosition === 'object') {
+      const pos = config.initialSpawnPosition as Record<string, unknown>;
+      if (typeof pos.x === 'number' && typeof pos.y === 'number' && typeof pos.z === 'number') {
+        initialSpawnPosition = { x: pos.x, y: pos.y, z: pos.z };
+      }
+    }
+
+    const result: PlayerCasterConfig = {
       initialBattery: config.initialBattery,
       rechargeRate: config.rechargeRate,
       initialResonance: typeof config.initialResonance === 'number' ? config.initialResonance : undefined,
       allowedSpellTags: Array.isArray(config.allowedSpellTags) ? config.allowedSpellTags : undefined,
       blockedSpellTags: Array.isArray(config.blockedSpellTags) ? config.blockedSpellTags : undefined,
+      initialSpawnPosition,
+      initialFacingAngle: typeof config.initialFacingAngle === 'number' ? config.initialFacingAngle : undefined,
     };
     console.log('[SpellLoader] parsePlayerCaster: success', result);
     return result;

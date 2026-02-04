@@ -565,7 +565,15 @@ export class Game {
       if (!this.config.startRegion) {
         throw new Error('No startRegion configured. Set startRegion in GameConfig.');
       }
-      await this.engine.loadRegion(this.config.startRegion);
+
+      // Use player spawn position override if configured
+      const spawnOverride = this.playerCasterConfig?.initialSpawnPosition;
+      await this.engine.loadRegion(this.config.startRegion, spawnOverride);
+
+      // Set player facing direction if configured
+      if (this.playerCasterConfig?.initialFacingAngle !== undefined) {
+        this.engine.setPlayerFacingAngle(this.playerCasterConfig.initialFacingAngle);
+      }
 
       // Add Caster component to player entity
       this.initializePlayerCaster();

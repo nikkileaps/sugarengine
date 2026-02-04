@@ -122,6 +122,9 @@ export interface PlayerCasterData {
   initialResonance?: number;     // Starting resonance % (0-100) for the episode
   allowedSpellTags?: string[];
   blockedSpellTags?: string[];
+  // Spawn settings
+  initialSpawnPosition?: { x: number; y: number; z: number };  // Override region spawn position
+  initialFacingAngle?: number;   // Degrees (0 = north/forward, 90 = east, 180 = south, 270 = west)
 }
 
 export interface SpellEffectData {

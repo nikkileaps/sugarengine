@@ -17,6 +17,9 @@ export interface PlayerCasterConfig {
   initialResonance?: number;     // Starting resonance % (0-100) for the episode
   allowedSpellTags?: string[];   // Only these spell tags can be cast (if set)
   blockedSpellTags?: string[];   // These spell tags cannot be cast
+  // Spawn settings
+  initialSpawnPosition?: { x: number; y: number; z: number };  // Override region spawn
+  initialFacingAngle?: number;   // Degrees (0 = north, 90 = east, 180 = south, 270 = west)
 }
 
 /**
