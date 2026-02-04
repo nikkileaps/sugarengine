@@ -100,6 +100,12 @@ export class DebugHUD {
     this.customInfo.style.cssText = 'margin-top: 8px; color: #c0c0c0; display: none;';
     this.container.appendChild(this.customInfo);
 
+    // Keyboard shortcuts hint
+    const shortcuts = document.createElement('div');
+    shortcuts.style.cssText = 'margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.1); color: #666; font-size: 10px;';
+    shortcuts.textContent = 'F2 - Free Camera';
+    this.container.appendChild(shortcuts);
+
     parentContainer.appendChild(this.container);
 
     // Start update loop
