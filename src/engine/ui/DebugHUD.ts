@@ -35,7 +35,7 @@ export class DebugHUD {
     this.container.style.cssText = `
       position: absolute;
       top: 12px;
-      right: 12px;
+      left: 12px;
       background: rgba(0, 0, 0, 0.7);
       border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 8px;

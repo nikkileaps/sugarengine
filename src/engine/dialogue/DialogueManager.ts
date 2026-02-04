@@ -1,6 +1,6 @@
 import { DialogueLoader } from './DialogueLoader';
 import { DialogueNode, DialogueNext, LoadedDialogue } from './types';
-import { DialogueBox } from '../ui/DialogueBox';
+import { DialoguePanel } from '../ui/DialoguePanel';
 
 export type DialogueEventHandler = (eventName: string) => void;
 export type DialogueNodeHandler = (nodeId: string) => void;
@@ -11,7 +11,7 @@ export type SpeakerNameResolver = (speakerId: string) => string | undefined;
  */
 export class DialogueManager {
   private loader: DialogueLoader;
-  private dialogueBox: DialogueBox;
+  private dialoguePanel: DialoguePanel;
 
   private currentDialogue: LoadedDialogue | null = null;
   private currentNode: DialogueNode | null = null;
@@ -25,7 +25,7 @@ export class DialogueManager {
 
   constructor(container: HTMLElement) {
     this.loader = new DialogueLoader();
-    this.dialogueBox = new DialogueBox(container);
+    this.dialoguePanel = new DialoguePanel(container);
   }
 
   /**
@@ -81,6 +81,9 @@ export class DialogueManager {
 
     this.isActive = true;
 
+    // Clear history for new dialogue
+    this.dialoguePanel.clearHistory();
+
     if (this.onDialogueStart) {
       this.onDialogueStart();
     }
@@ -121,7 +124,7 @@ export class DialogueManager {
     }
 
     // Show in UI
-    this.dialogueBox.show(
+    this.dialoguePanel.show(
       displayNode,
       (selected?: DialogueNext) => {
         this.handleAdvance(selected);
@@ -172,7 +175,7 @@ export class DialogueManager {
    * End the current dialogue
    */
   end(): void {
-    this.dialogueBox.hide();
+    this.dialoguePanel.hide();
     this.currentDialogue = null;
     this.currentNode = null;
     this.isActive = false;
@@ -204,6 +207,6 @@ export class DialogueManager {
   }
 
   dispose(): void {
-    this.dialogueBox.dispose();
+    this.dialoguePanel.dispose();
   }
 }
