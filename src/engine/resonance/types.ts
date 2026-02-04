@@ -48,9 +48,10 @@ export interface TrajectoryOption {
 export interface FireflyPattern {
   id: string;
   difficulty: ResonanceDifficulty;
-  trajectories: Trajectory[];       // 5 fireflies, each with a path
-  correctAnswer: number;            // Index 0-3 of correct trajectory option
-  options: TrajectoryOption[];      // 4 trajectory options to choose from
+  trajectories: Trajectory[];              // The correct answer trajectory
+  distractionTrajectories: Trajectory[];   // Decoy patterns that don't match options
+  correctAnswer: number;                   // Index 0-3 of correct trajectory option
+  options: TrajectoryOption[];             // 4 trajectory options to choose from
 }
 
 /**

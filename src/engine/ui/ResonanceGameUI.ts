@@ -1,6 +1,13 @@
 /**
  * ResonanceGameUI - Full-screen mini-game overlay for resonance attunement
- * Displays the "Dance With the Fireflies" pattern recognition game
+ *
+ * "Dance With the Fireflies" - Pattern recognition through emergence
+ *
+ * Fireflies are positioned along a hidden trajectory. They twinkle in and out
+ * with coordinated timing so that periodically the shape "emerges" - enough
+ * fireflies are visible simultaneously to reveal the pattern. Then it fades
+ * back to apparent randomness. Players must catch these moments of coherence
+ * and identify which trajectory matches.
  */
 
 import type {
@@ -8,14 +15,41 @@ import type {
   ResonancePointConfig,
   ResonanceGameResult,
 } from '../resonance';
-import {
-  generatePattern,
-  checkAnswer,
-  interpolateTrajectory,
-} from '../resonance';
+import { generatePattern, checkAnswer } from '../resonance';
 
 const MAX_ATTEMPTS = 3;
-const TRAIL_LENGTH = 25; // Number of positions to remember for trail
+
+// Firefly rendering parameters
+const FIREFLIES_PER_PATH = 24;      // Number of fireflies along the trajectory
+const DISTRACTION_FIREFLIES = 35;   // Random fireflies to distract/add noise
+const COHERENCE_PERIOD = 18.0;      // Total cycle time (sweep + firefly lifecycle + dark pause)
+const SWEEP_DURATION = 3.5;         // How long the wave takes to sweep across the pattern (slower)
+const AFTERGLOW_DURATION = 2.0;     // How long afterglow persists (longer for meditative feel)
+// Note: Dark pause is implicit - after sweep + firefly cycle, remaining time is dark
+
+interface FireflyState {
+  x: number;
+  y: number;
+  pathPosition: number;    // 0-1 position along path (for coherence wave)
+  brightness: number;      // Current brightness (0-1)
+  afterglow: number;       // Afterglow intensity (0-1)
+  peakTime: number;        // Last time this firefly was at peak brightness
+  // State-based timing (like distraction fireflies)
+  state: 'dark' | 'fading-in' | 'bright' | 'fading-out';
+  stateStartTime: number;
+  stateDuration: number;
+  triggered: boolean;      // Whether this firefly has been triggered by coherence wave
+}
+
+// Distraction firefly with organic timing
+interface DistractionFirefly {
+  x: number;
+  y: number;
+  brightness: number;
+  state: 'dark' | 'fading-in' | 'bright' | 'fading-out';
+  stateStartTime: number;
+  stateDuration: number;   // How long this state lasts
+}
 
 export class ResonanceGameUI {
   private overlay: HTMLDivElement;
@@ -32,8 +66,28 @@ export class ResonanceGameUI {
   private animationStartTime: number = 0;
   private isAnimating: boolean = false;
 
-  // Trail history for each firefly (array of recent positions)
-  private trailHistory: { x: number; y: number }[][] = [];
+  // Firefly states for the main trajectory (the one player must identify)
+  private fireflies: FireflyState[] = [];
+
+  // Firefly states for distraction patterns (emerge but don't match any option)
+  private distractionPatternFireflies: { fireflies: FireflyState[]; color: string; phaseOffset: number }[] = [];
+
+  // Distraction fireflies scattered randomly across canvas
+  private distractionFireflies: DistractionFirefly[] = [];
+
+  // Track cycle for position randomization
+  private lastCycleIndex: number = -1;
+
+  // Base positions for patterns (before offset applied) - stored for repositioning
+  private mainPatternBasePositions: { x: number; y: number }[] = [];
+  private distractionPatternBasePositions: { x: number; y: number }[][] = [];
+
+  // Phase offset for main pattern (so it doesn't always emerge first)
+  private mainPatternPhaseOffset: number = 0;
+
+  // Afterglow buffer - accumulates glow that fades over time
+  private afterglowCanvas: HTMLCanvasElement | null = null;
+  private afterglowCtx: CanvasRenderingContext2D | null = null;
 
   private onCompleteHandler: ((result: ResonanceGameResult) => void) | null = null;
 
@@ -70,7 +124,7 @@ export class ResonanceGameUI {
     // Instructions
     const instructions = document.createElement('div');
     instructions.className = 'resonance-game-instructions';
-    instructions.textContent = 'Watch the fireflies dance, then identify the lead trajectory';
+    instructions.textContent = 'Watch for the pattern to emerge from the fireflies';
     panel.appendChild(instructions);
 
     // Options container
@@ -353,8 +407,16 @@ export class ResonanceGameUI {
     // Generate new pattern
     this.currentPattern = generatePattern(config.difficulty);
 
-    // Initialize trail history for each firefly
-    this.trailHistory = this.currentPattern.trajectories.map(() => []);
+    // Initialize fireflies along the first (correct) trajectory
+    this.initializeFireflies();
+
+    // Create afterglow buffer canvas
+    this.afterglowCanvas = document.createElement('canvas');
+    this.afterglowCanvas.width = this.canvas.width;
+    this.afterglowCanvas.height = this.canvas.height;
+    this.afterglowCtx = this.afterglowCanvas.getContext('2d')!;
+    this.afterglowCtx.fillStyle = 'rgb(10, 8, 20)';
+    this.afterglowCtx.fillRect(0, 0, this.afterglowCanvas.width, this.afterglowCanvas.height);
 
     // Setup UI
     this.renderOptions();
@@ -375,11 +437,233 @@ export class ResonanceGameUI {
   }
 
   /**
+   * Initialize fireflies at positions along the trajectory
+   */
+  private initializeFireflies(): void {
+    if (!this.currentPattern) return;
+
+    const trajectory = this.currentPattern.trajectories[0]!;
+    const points = trajectory.points;
+
+    // Store base positions (scaled but not offset) for repositioning between cycles
+    this.mainPatternBasePositions = [];
+    this.fireflies = [];
+
+    for (let i = 0; i < FIREFLIES_PER_PATH; i++) {
+      const pathPosition = i / (FIREFLIES_PER_PATH - 1);
+      const pointIndex = Math.floor(pathPosition * (points.length - 1));
+      const point = points[pointIndex]!;
+
+      // Store scaled base position (before quadrant offset)
+      const baseX = (point.x - 0.5) * 0.7 + 0.5;
+      const baseY = (point.y - 0.5) * 0.7 + 0.5;
+      this.mainPatternBasePositions.push({ x: baseX, y: baseY });
+
+      this.fireflies.push({
+        x: baseX,  // Will be offset in randomizePatternPositions
+        y: baseY,
+        pathPosition,
+        brightness: 0,
+        afterglow: 0,
+        peakTime: -999,
+        state: 'dark',
+        stateStartTime: 0,
+        stateDuration: this.getPatternFireflyDuration('dark'),
+        triggered: false,
+      });
+    }
+
+    // Create fireflies for distraction patterns (patterns that emerge but don't match options)
+    this.distractionPatternFireflies = [];
+    this.distractionPatternBasePositions = [];
+    const distractionTrajectories = this.currentPattern.distractionTrajectories || [];
+
+    // Generate and shuffle phase offsets for ALL patterns (main + distractions)
+    // so the main pattern doesn't always emerge first
+    const totalPatterns = 1 + distractionTrajectories.length;
+    const phaseOffsets: number[] = [];
+    for (let i = 0; i < totalPatterns; i++) {
+      phaseOffsets.push(i * (COHERENCE_PERIOD / totalPatterns));
+    }
+    // Shuffle the phase offsets
+    for (let i = phaseOffsets.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [phaseOffsets[i], phaseOffsets[j]] = [phaseOffsets[j]!, phaseOffsets[i]!];
+    }
+
+    // Main pattern gets the first shuffled offset
+    this.mainPatternPhaseOffset = phaseOffsets[0]!;
+
+    for (let patternIndex = 0; patternIndex < distractionTrajectories.length; patternIndex++) {
+      const distractionTraj = distractionTrajectories[patternIndex]!;
+      const patternFireflies: FireflyState[] = [];
+      const patternBasePositions: { x: number; y: number }[] = [];
+
+      // Distraction patterns get remaining shuffled offsets
+      const phaseOffset = phaseOffsets[patternIndex + 1]!;
+
+      for (let i = 0; i < FIREFLIES_PER_PATH; i++) {
+        const pathPosition = i / (FIREFLIES_PER_PATH - 1);
+        const pointIndex = Math.floor(pathPosition * (distractionTraj.points.length - 1));
+        const point = distractionTraj.points[pointIndex]!;
+
+        // Store scaled base position
+        const baseX = (point.x - 0.5) * 0.7 + 0.5;
+        const baseY = (point.y - 0.5) * 0.7 + 0.5;
+        patternBasePositions.push({ x: baseX, y: baseY });
+
+        patternFireflies.push({
+          x: baseX,  // Will be offset in randomizePatternPositions
+          y: baseY,
+          pathPosition,
+          brightness: 0,
+          afterglow: 0,
+          peakTime: -999,
+          state: 'dark',
+          stateStartTime: 0,
+          stateDuration: this.getPatternFireflyDuration('dark'),
+          triggered: false,
+        });
+      }
+
+      this.distractionPatternBasePositions.push(patternBasePositions);
+      this.distractionPatternFireflies.push({
+        fireflies: patternFireflies,
+        color: distractionTraj.color,
+        phaseOffset,
+      });
+    }
+
+    // Initial position randomization
+    this.lastCycleIndex = -1;
+    this.randomizePatternPositions();
+
+    // Create distraction fireflies scattered randomly
+    this.distractionFireflies = [];
+    for (let i = 0; i < DISTRACTION_FIREFLIES; i++) {
+      // Stagger initial states so they don't all start dark
+      const initialState = Math.random() < 0.3 ? 'bright' : 'dark';
+      this.distractionFireflies.push({
+        x: 0.05 + Math.random() * 0.9,  // Keep away from edges
+        y: 0.05 + Math.random() * 0.9,
+        brightness: initialState === 'bright' ? Math.random() * 0.5 + 0.3 : 0,
+        state: initialState,
+        stateStartTime: -Math.random() * 3,  // Stagger start times
+        stateDuration: this.getRandomStateDuration(initialState),
+      });
+    }
+  }
+
+  /**
+   * Get random duration for a distraction firefly state
+   */
+  private getRandomStateDuration(state: DistractionFirefly['state']): number {
+    switch (state) {
+      case 'dark':
+        // Stay dark for 3-8 seconds
+        return 3 + Math.random() * 5;
+      case 'fading-in':
+        // Fade in over 3.0-5.5 seconds (slow, meditative)
+        return 3.0 + Math.random() * 2.5;
+      case 'bright':
+        // Stay bright for 1.5-3.5 seconds
+        return 1.5 + Math.random() * 2.0;
+      case 'fading-out':
+        // Fade out over 2.5-5.0 seconds (slow, meditative)
+        return 2.5 + Math.random() * 2.5;
+    }
+  }
+
+  /**
+   * Get next state for distraction firefly
+   */
+  private getNextState(state: DistractionFirefly['state']): DistractionFirefly['state'] {
+    switch (state) {
+      case 'dark': return 'fading-in';
+      case 'fading-in': return 'bright';
+      case 'bright': return 'fading-out';
+      case 'fading-out': return 'dark';
+    }
+  }
+
+  /**
+   * Get random duration for pattern firefly states (similar to distraction but for coordinated emergence)
+   */
+  private getPatternFireflyDuration(state: FireflyState['state']): number {
+    switch (state) {
+      case 'dark':
+        // Stays dark until triggered by coherence wave
+        return 999;
+      case 'fading-in':
+        // Fade in over 3.0-5.0 seconds (slow, meditative)
+        return 3.0 + Math.random() * 2.0;
+      case 'bright':
+        // Stay bright for 2.0-3.5 seconds
+        return 2.0 + Math.random() * 1.5;
+      case 'fading-out':
+        // Fade out over 2.5-4.5 seconds (slow, meditative)
+        return 2.5 + Math.random() * 2.0;
+    }
+  }
+
+  /**
+   * Randomize which quadrant each pattern appears in
+   */
+  private randomizePatternPositions(): void {
+    // Position offsets for all patterns (main + distractions)
+    const allPositionOffsets = [
+      { x: -0.22, y: -0.18 },   // Top-left area
+      { x: 0.22, y: -0.18 },    // Top-right area
+      { x: -0.22, y: 0.18 },    // Bottom-left area
+      { x: 0.22, y: 0.18 },     // Bottom-right area
+    ];
+
+    // Shuffle the offsets
+    const shuffledOffsets = [...allPositionOffsets].sort(() => Math.random() - 0.5);
+
+    // Apply offset to main pattern fireflies
+    const mainOffset = shuffledOffsets[0]!;
+    for (let i = 0; i < this.fireflies.length; i++) {
+      const base = this.mainPatternBasePositions[i]!;
+      const jitterX = (Math.random() - 0.5) * 0.02;
+      const jitterY = (Math.random() - 0.5) * 0.02;
+      this.fireflies[i]!.x = base.x + mainOffset.x + jitterX;
+      this.fireflies[i]!.y = base.y + mainOffset.y + jitterY;
+    }
+
+    // Apply offsets to distraction pattern fireflies
+    for (let patternIndex = 0; patternIndex < this.distractionPatternFireflies.length; patternIndex++) {
+      const offset = shuffledOffsets[(patternIndex + 1) % shuffledOffsets.length]!;
+      const pattern = this.distractionPatternFireflies[patternIndex]!;
+      const basePositions = this.distractionPatternBasePositions[patternIndex]!;
+
+      for (let i = 0; i < pattern.fireflies.length; i++) {
+        const base = basePositions[i]!;
+        const jitterX = (Math.random() - 0.5) * 0.02;
+        const jitterY = (Math.random() - 0.5) * 0.02;
+        pattern.fireflies[i]!.x = base.x + offset.x + jitterX;
+        pattern.fireflies[i]!.y = base.y + offset.y + jitterY;
+      }
+    }
+  }
+
+  /**
    * Hide the game and cleanup
    */
   private hide(): void {
     this.stopAnimation();
     window.removeEventListener('keydown', this.handleKeyDown);
+
+    // Cleanup afterglow canvas
+    this.afterglowCanvas = null;
+    this.afterglowCtx = null;
+    this.fireflies = [];
+    this.distractionPatternFireflies = [];
+    this.distractionFireflies = [];
+    this.mainPatternBasePositions = [];
+    this.distractionPatternBasePositions = [];
+    this.lastCycleIndex = -1;
+    this.mainPatternPhaseOffset = 0;
 
     // Fade out
     this.overlay.classList.remove('faded-in');
@@ -421,81 +705,325 @@ export class ResonanceGameUI {
   };
 
   /**
-   * Render fireflies on canvas
+   * Render fireflies on canvas with twinkling emergence effect
    */
   private renderFireflies(time: number): void {
-    if (!this.currentPattern) return;
+    if (!this.currentPattern || !this.afterglowCtx || !this.afterglowCanvas) return;
 
     const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
 
-    // Fully clear canvas each frame
-    ctx.fillStyle = 'rgb(10, 8, 20)';
-    ctx.fillRect(0, 0, width, height);
+    // Track cycles for position randomization
+    const currentCycleIndex = Math.floor(time / COHERENCE_PERIOD);
 
-    // Draw each firefly with trail
-    for (let i = 0; i < this.currentPattern.trajectories.length; i++) {
-      const trajectory = this.currentPattern.trajectories[i]!;
-      const pos = interpolateTrajectory(trajectory, time);
+    // Randomize pattern positions at the start of each new cycle
+    if (currentCycleIndex !== this.lastCycleIndex) {
+      this.lastCycleIndex = currentCycleIndex;
+      this.randomizePatternPositions();
+      // Clear afterglow buffer completely so old positions don't linger
+      if (this.afterglowCtx) {
+        this.afterglowCtx.fillStyle = 'rgb(10, 8, 20)';
+        this.afterglowCtx.fillRect(0, 0, width, height);
+      }
+    }
 
-      // Convert normalized coords to canvas coords
-      const x = pos.x * width;
-      const y = pos.y * height;
+    // Main pattern has its own phase offset (so it doesn't always emerge first)
+    const mainOffsetTime = (time + this.mainPatternPhaseOffset) % COHERENCE_PERIOD;
+    let wavePosition: number;
+    if (mainOffsetTime < SWEEP_DURATION) {
+      // Wave is actively sweeping
+      wavePosition = mainOffsetTime / SWEEP_DURATION;
+    } else {
+      // Wave is off - no triggering during the dark pause
+      wavePosition = -1;
+    }
 
-      // Update trail history
-      const trail = this.trailHistory[i]!;
-      trail.unshift({ x, y }); // Add current position to front
-      if (trail.length > TRAIL_LENGTH) {
-        trail.pop(); // Remove oldest position
+    // Fade the afterglow buffer each frame (higher alpha = faster fade)
+    this.afterglowCtx.fillStyle = 'rgba(10, 8, 20, 0.15)';
+    this.afterglowCtx.fillRect(0, 0, width, height);
+
+    // Update each firefly using state-based timing
+    for (const firefly of this.fireflies) {
+      // Check if coherence wave should trigger this firefly
+      const distanceFromWave = Math.abs(firefly.pathPosition - wavePosition);
+      const isNearWave = distanceFromWave < 0.08;
+
+      // Trigger firefly when wave passes and it's currently dark
+      if (isNearWave && firefly.state === 'dark' && !firefly.triggered) {
+        firefly.triggered = true;
+        firefly.state = 'fading-in';
+        firefly.stateStartTime = time;
+        firefly.stateDuration = this.getPatternFireflyDuration('fading-in');
       }
 
-      // Draw trail as fading line segments
-      if (trail.length > 1) {
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+      // Update brightness based on current state
+      const timeInState = time - firefly.stateStartTime;
+      const progress = Math.min(1, timeInState / firefly.stateDuration);
 
-        for (let j = 0; j < trail.length - 1; j++) {
-          const p1 = trail[j]!;
-          const p2 = trail[j + 1]!;
+      switch (firefly.state) {
+        case 'dark':
+          firefly.brightness = 0;
+          break;
+        case 'fading-in':
+          // Ease in (slow start, faster end) - can reach full brightness
+          firefly.brightness = progress * progress;
+          break;
+        case 'bright':
+          // Slight flicker while bright
+          firefly.brightness = 0.85 + Math.sin(time * 3 + firefly.x * 10) * 0.15;
+          break;
+        case 'fading-out':
+          // Ease out (fast start, slow end)
+          firefly.brightness = (1 - progress) * (1 - progress);
+          break;
+      }
 
-          // Fade opacity based on distance from current position
-          const alpha = 1 - (j / TRAIL_LENGTH);
-          // Line width tapers toward the end
-          const lineWidth = Math.max(1, 3 * (1 - j / TRAIL_LENGTH));
-
-          ctx.strokeStyle = trajectory.color + Math.floor(alpha * 180).toString(16).padStart(2, '0');
-          ctx.lineWidth = lineWidth;
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
+      // Transition to next state when duration elapsed
+      if (timeInState >= firefly.stateDuration) {
+        const nextState = this.getNextState(firefly.state) as FireflyState['state'];
+        firefly.state = nextState;
+        firefly.stateStartTime = time;
+        firefly.stateDuration = this.getPatternFireflyDuration(nextState);
+        // Reset triggered when going back to dark so it can be triggered again
+        if (nextState === 'dark') {
+          firefly.triggered = false;
         }
       }
 
-      // Draw small glow around core
-      const gradient = ctx.createRadialGradient(x, y, 0, x, y, 10);
-      gradient.addColorStop(0, trajectory.color);
-      gradient.addColorStop(0.5, trajectory.color + '40');
+      // Track peak times for afterglow
+      if (firefly.brightness > 0.7) {
+        firefly.peakTime = time;
+      }
+
+      // Update afterglow (decays over time since last peak)
+      const timeSincePeak = time - firefly.peakTime;
+      firefly.afterglow = Math.max(0, 1 - timeSincePeak / AFTERGLOW_DURATION) * 0.6;
+
+      // Draw afterglow to buffer if significant (subtle, same color as random fireflies)
+      if (firefly.afterglow > 0.1) {
+        const ax = firefly.x * width;
+        const ay = firefly.y * height;
+        const glowRadius = 4 + firefly.afterglow * 4;
+
+        const gradient = this.afterglowCtx.createRadialGradient(ax, ay, 0, ax, ay, glowRadius);
+        const alpha = Math.floor(firefly.afterglow * 40);
+        gradient.addColorStop(0, '#ffee88' + alpha.toString(16).padStart(2, '0'));
+        gradient.addColorStop(1, 'transparent');
+
+        this.afterglowCtx.fillStyle = gradient;
+        this.afterglowCtx.beginPath();
+        this.afterglowCtx.arc(ax, ay, glowRadius, 0, Math.PI * 2);
+        this.afterglowCtx.fill();
+      }
+    }
+
+    // Update distraction pattern fireflies (patterns that don't match options)
+    for (const pattern of this.distractionPatternFireflies) {
+      // Each distraction pattern has its own phase offset for emergence timing
+      const offsetTime = time + pattern.phaseOffset;
+      const patternCycleTime = offsetTime % COHERENCE_PERIOD;
+      let patternWavePosition: number;
+      if (patternCycleTime < SWEEP_DURATION) {
+        patternWavePosition = patternCycleTime / SWEEP_DURATION;
+      } else {
+        patternWavePosition = -1;
+      }
+
+      for (const firefly of pattern.fireflies) {
+        // Check if coherence wave should trigger this firefly
+        const distanceFromWave = Math.abs(firefly.pathPosition - patternWavePosition);
+        const isNearWave = distanceFromWave < 0.08;
+
+        // Trigger firefly when wave passes and it's currently dark
+        if (isNearWave && firefly.state === 'dark' && !firefly.triggered) {
+          firefly.triggered = true;
+          firefly.state = 'fading-in';
+          firefly.stateStartTime = time;
+          firefly.stateDuration = this.getPatternFireflyDuration('fading-in');
+        }
+
+        // Update brightness based on current state
+        const timeInState = time - firefly.stateStartTime;
+        const progress = Math.min(1, timeInState / firefly.stateDuration);
+
+        switch (firefly.state) {
+          case 'dark':
+            firefly.brightness = 0;
+            break;
+          case 'fading-in':
+            firefly.brightness = progress * progress;
+            break;
+          case 'bright':
+            firefly.brightness = 0.85 + Math.sin(time * 3 + firefly.x * 10) * 0.15;
+            break;
+          case 'fading-out':
+            firefly.brightness = (1 - progress) * (1 - progress);
+            break;
+        }
+
+        // Transition to next state when duration elapsed
+        if (timeInState >= firefly.stateDuration) {
+          const nextState = this.getNextState(firefly.state) as FireflyState['state'];
+          firefly.state = nextState;
+          firefly.stateStartTime = time;
+          firefly.stateDuration = this.getPatternFireflyDuration(nextState);
+          if (nextState === 'dark') {
+            firefly.triggered = false;
+          }
+        }
+
+        if (firefly.brightness > 0.7) {
+          firefly.peakTime = time;
+        }
+
+        const timeSincePeak = time - firefly.peakTime;
+        firefly.afterglow = Math.max(0, 1 - timeSincePeak / AFTERGLOW_DURATION) * 0.6;
+
+        // Draw afterglow to buffer (subtle, same color as random fireflies)
+        if (firefly.afterglow > 0.1) {
+          const ax = firefly.x * width;
+          const ay = firefly.y * height;
+          const glowRadius = 4 + firefly.afterglow * 4;
+
+          const gradient = this.afterglowCtx.createRadialGradient(ax, ay, 0, ax, ay, glowRadius);
+          const alpha = Math.floor(firefly.afterglow * 40);
+          gradient.addColorStop(0, '#ffee88' + alpha.toString(16).padStart(2, '0'));
+          gradient.addColorStop(1, 'transparent');
+
+          this.afterglowCtx.fillStyle = gradient;
+          this.afterglowCtx.beginPath();
+          this.afterglowCtx.arc(ax, ay, glowRadius, 0, Math.PI * 2);
+          this.afterglowCtx.fill();
+        }
+      }
+    }
+
+    // Update distraction fireflies (organic state-based timing)
+    for (const firefly of this.distractionFireflies) {
+      const timeInState = time - firefly.stateStartTime;
+      const progress = Math.min(1, timeInState / firefly.stateDuration);
+
+      // Update brightness based on current state
+      switch (firefly.state) {
+        case 'dark':
+          firefly.brightness = 0;
+          break;
+        case 'fading-in':
+          // Ease in (slow start, faster end) - can reach full brightness
+          firefly.brightness = progress * progress;
+          break;
+        case 'bright':
+          // Slight flicker while bright - peak around 0.85-1.0
+          firefly.brightness = 0.85 + Math.sin(time * 3 + firefly.x * 10) * 0.15;
+          break;
+        case 'fading-out':
+          // Ease out (fast start, slow end) - starts from full brightness
+          firefly.brightness = (1 - progress) * (1 - progress);
+          break;
+      }
+
+      // Transition to next state when duration elapsed
+      if (timeInState >= firefly.stateDuration) {
+        firefly.state = this.getNextState(firefly.state);
+        firefly.stateStartTime = time;
+        firefly.stateDuration = this.getRandomStateDuration(firefly.state);
+      }
+    }
+
+    // Draw afterglow buffer first (background layer)
+    ctx.drawImage(this.afterglowCanvas, 0, 0);
+
+    // Draw distraction fireflies first (behind main fireflies)
+    for (const firefly of this.distractionFireflies) {
+      if (firefly.brightness < 0.05) continue;
+
+      const x = firefly.x * width;
+      const y = firefly.y * height;
+
+      const glowRadius = 4 + firefly.brightness * 6;
+      const glowAlpha = Math.floor(firefly.brightness * 120);
+
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, glowRadius);
+      gradient.addColorStop(0, '#ffffcc' + glowAlpha.toString(16).padStart(2, '0'));
+      gradient.addColorStop(0.5, '#ffee88' + Math.floor(glowAlpha * 0.4).toString(16).padStart(2, '0'));
       gradient.addColorStop(1, 'transparent');
+
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
       ctx.fill();
 
-      // Draw core dot
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Highlight the lead firefly (first trajectory)
-      if (i === 0) {
-        ctx.strokeStyle = trajectory.color;
-        ctx.lineWidth = 2;
+      // Bright core (when very bright)
+      if (firefly.brightness > 0.5) {
+        const coreRadius = 2 + firefly.brightness * 2;
+        ctx.fillStyle = `rgba(255, 255, 255, ${firefly.brightness})`;
         ctx.beginPath();
-        ctx.arc(x, y, 12, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Draw distraction pattern fireflies (same brightness as random fireflies)
+    for (const pattern of this.distractionPatternFireflies) {
+      for (const firefly of pattern.fireflies) {
+        if (firefly.brightness < 0.05) continue;
+
+        const x = firefly.x * width;
+        const y = firefly.y * height;
+
+        const glowRadius = 4 + firefly.brightness * 6;
+        const glowAlpha = Math.floor(firefly.brightness * 120);
+
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, glowRadius);
+        gradient.addColorStop(0, '#ffffcc' + glowAlpha.toString(16).padStart(2, '0'));
+        gradient.addColorStop(0.5, '#ffee88' + Math.floor(glowAlpha * 0.4).toString(16).padStart(2, '0'));
+        gradient.addColorStop(1, 'transparent');
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bright core (when very bright)
+        if (firefly.brightness > 0.5) {
+          const coreRadius = 2 + firefly.brightness * 2;
+          ctx.fillStyle = `rgba(255, 255, 255, ${firefly.brightness})`;
+          ctx.beginPath();
+          ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // Draw main trajectory fireflies on top (same brightness as distraction fireflies)
+    for (const firefly of this.fireflies) {
+      if (firefly.brightness < 0.05) continue;
+
+      const x = firefly.x * width;
+      const y = firefly.y * height;
+
+      // Same glow size as random distraction fireflies
+      const glowRadius = 4 + firefly.brightness * 6;
+      const glowAlpha = Math.floor(firefly.brightness * 120);
+
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, glowRadius);
+      gradient.addColorStop(0, '#ffffcc' + glowAlpha.toString(16).padStart(2, '0'));
+      gradient.addColorStop(0.5, '#ffee88' + Math.floor(glowAlpha * 0.4).toString(16).padStart(2, '0'));
+      gradient.addColorStop(1, 'transparent');
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bright core (when very bright)
+      if (firefly.brightness > 0.5) {
+        const coreRadius = 2 + firefly.brightness * 2;
+        ctx.fillStyle = `rgba(255, 255, 255, ${firefly.brightness})`;
+        ctx.beginPath();
+        ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
   }

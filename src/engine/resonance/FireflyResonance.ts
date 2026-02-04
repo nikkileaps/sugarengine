@@ -18,6 +18,7 @@ const DIFFICULTY_PARAMS = {
     fireflies: 5,
     duration: 4,          // Animation duration in seconds
     decoys: 2,            // Number of decoy options similar to correct
+    distractionPatterns: 1,  // Number of false patterns that emerge but don't match options
   },
   medium: {
     speed: 1.0,
@@ -25,6 +26,7 @@ const DIFFICULTY_PARAMS = {
     fireflies: 5,
     duration: 3.5,
     decoys: 3,
+    distractionPatterns: 2,
   },
   hard: {
     speed: 1.3,
@@ -32,6 +34,7 @@ const DIFFICULTY_PARAMS = {
     fireflies: 5,
     duration: 3,
     decoys: 3,
+    distractionPatterns: 3,
   },
 };
 
@@ -94,10 +97,37 @@ export function generatePattern(difficulty: ResonanceDifficulty): FireflyPattern
     opt.label = ['A', 'B', 'C', 'D'][i]!;
   });
 
+  // Generate distraction trajectories - patterns that emerge but don't match any option
+  // These use different path types to ensure they look distinct from the options
+  const distractionTrajectories: Trajectory[] = [];
+  const usedPathTypes = new Set<PathType>();
+
+  // Track what path types we've used in options to avoid them
+  // (We don't have direct access but we regenerate different types)
+  for (let i = 0; i < params.distractionPatterns; i++) {
+    // Pick path types not commonly used, or use variations
+    const distractionPathTypes: PathType[] = ['spiral', 'figure8', 'loop', 'zigzag'];
+    let pathType: PathType;
+
+    // Try to pick unique path types for each distraction
+    do {
+      pathType = distractionPathTypes[Math.floor(Math.random() * distractionPathTypes.length)]!;
+    } while (usedPathTypes.has(pathType) && usedPathTypes.size < distractionPathTypes.length);
+
+    usedPathTypes.add(pathType);
+
+    const distractionTraj = generateTrajectory(pathType, params.duration, params.speed);
+    // Give distraction patterns distinct colors (more muted/different)
+    const distractionColors = ['#88ccff', '#ff88cc', '#ccff88', '#ffcc88'];
+    distractionTraj.color = distractionColors[i % distractionColors.length]!;
+    distractionTrajectories.push(distractionTraj);
+  }
+
   return {
     id: patternId,
     difficulty,
     trajectories,
+    distractionTrajectories,
     correctAnswer: correctIndex,
     options: shuffled,
   };

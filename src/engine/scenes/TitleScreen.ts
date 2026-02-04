@@ -99,7 +99,7 @@ export class TitleScreen extends Screen {
     // Logo
     const logo = document.createElement('h1');
     logo.className = 'title-logo';
-    logo.textContent = 'Sugarengine';
+    logo.textContent = 'Rackwick City';
     content.appendChild(logo);
 
     // Subtitle
