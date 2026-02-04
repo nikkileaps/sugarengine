@@ -19,7 +19,7 @@ import { generateUUID, shortId } from '../../utils';
 
 export interface QuestObjective {
   id: string;
-  type: 'talk' | 'location' | 'collect' | 'trigger' | 'custom';
+  type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
   target: string;
   description: string;
   count?: number;
@@ -27,6 +27,7 @@ export interface QuestObjective {
   completed?: boolean;
   dialogue?: string;
   completeOn?: 'dialogueEnd' | string;
+  trigger?: 'onStageStart';
 }
 
 export interface QuestStage {

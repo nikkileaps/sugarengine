@@ -27,6 +27,7 @@ interface ObjectiveModalProps {
 
 const OBJECTIVE_TYPES = [
   { value: 'talk', label: 'Talk to NPC' },
+  { value: 'voiceover', label: 'Voice Over / Monologue' },
   { value: 'location', label: 'Go to Location' },
   { value: 'collect', label: 'Collect Item' },
   { value: 'trigger', label: 'Trigger Event' },
@@ -108,52 +109,59 @@ export function ObjectiveModal({
           }}
         />
 
-        {targetOptions ? (
-          <Select
-            label={objective.type === 'talk' ? 'NPC' : 'Item'}
-            data={targetOptions}
-            value={objective.target || null}
-            onChange={(value) => handleChange('target', value || '')}
-            searchable
-            placeholder={`Select ${objective.type === 'talk' ? 'NPC' : 'item'}...`}
-            styles={{
-              input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
-              label: { color: '#a6adc8' },
-            }}
-          />
-        ) : (
-          <TextInput
-            label="Target"
-            value={objective.target}
-            onChange={(e) => handleChange('target', e.currentTarget.value)}
-            placeholder={
-              objective.type === 'location'
-                ? 'Location ID'
-                : objective.type === 'trigger'
-                ? 'Event name'
-                : 'Target'
-            }
-            styles={{
-              input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
-              label: { color: '#a6adc8' },
-            }}
-          />
+        {/* Target field - not shown for voiceover */}
+        {objective.type !== 'voiceover' && (
+          targetOptions ? (
+            <Select
+              label={objective.type === 'talk' ? 'NPC' : 'Item'}
+              data={targetOptions}
+              value={objective.target || null}
+              onChange={(value) => handleChange('target', value || '')}
+              searchable
+              placeholder={`Select ${objective.type === 'talk' ? 'NPC' : 'item'}...`}
+              styles={{
+                input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
+                label: { color: '#a6adc8' },
+              }}
+            />
+          ) : (
+            <TextInput
+              label="Target"
+              value={objective.target}
+              onChange={(e) => handleChange('target', e.currentTarget.value)}
+              placeholder={
+                objective.type === 'location'
+                  ? 'Location ID'
+                  : objective.type === 'trigger'
+                  ? 'Event name'
+                  : 'Target'
+              }
+              styles={{
+                input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
+                label: { color: '#a6adc8' },
+              }}
+            />
+          )
         )}
 
-        {/* Dialogue picker for 'talk' objectives */}
-        {objective.type === 'talk' && (
+        {/* Dialogue picker for 'talk' and 'voiceover' objectives */}
+        {(objective.type === 'talk' || objective.type === 'voiceover') && (
           <>
             <Select
               label="Dialogue"
-              description="Override NPC's default dialogue"
-              data={[
-                { value: '', label: "Use NPC's default dialogue" },
-                ...dialogues.map((d) => ({ value: d.id, label: d.name })),
-              ]}
+              description={objective.type === 'voiceover' ? 'The dialogue to play' : "Override NPC's default dialogue"}
+              data={
+                objective.type === 'voiceover'
+                  ? dialogues.map((d) => ({ value: d.id, label: d.name }))
+                  : [
+                      { value: '', label: "Use NPC's default dialogue" },
+                      ...dialogues.map((d) => ({ value: d.id, label: d.name })),
+                    ]
+              }
               value={objective.dialogue || ''}
               onChange={(value) => handleChange('dialogue', value || undefined)}
               searchable
-              clearable
+              clearable={objective.type === 'talk'}
               styles={{
                 input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
                 label: { color: '#a6adc8' },
@@ -184,6 +192,22 @@ export function ObjectiveModal({
           onChange={(e) => handleChange('optional', e.currentTarget.checked)}
           styles={{
             label: { color: '#cdd6f4' },
+            description: { color: '#6c7086' },
+          }}
+        />
+
+        <Select
+          label="Auto-Trigger"
+          description="Automatically fire this objective when condition is met"
+          data={[
+            { value: '', label: 'None (manual)' },
+            { value: 'onStageStart', label: 'On Stage Start' },
+          ]}
+          value={objective.trigger || ''}
+          onChange={(value) => handleChange('trigger', (value || undefined) as 'onStageStart' | undefined)}
+          styles={{
+            input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
+            label: { color: '#a6adc8' },
             description: { color: '#6c7086' },
           }}
         />

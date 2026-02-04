@@ -10,7 +10,6 @@
 import {
   Game,
   InteractionPrompt,
-  QuestNotification,
   QuestJournal,
   ItemNotification,
   InventoryUI,
@@ -112,7 +111,6 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   // ========================================
 
   const interactionPrompt = new InteractionPrompt(container);
-  const questNotification = new QuestNotification(container);
   const questJournal = new QuestJournal(container, game.quests);
   const itemNotification = new ItemNotification(container);
   const inventoryUI = new InventoryUI(container, game.inventory);
@@ -148,15 +146,15 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   // ========================================
 
   game.setEventHandlers({
-    onQuestStart: (questName) => {
-      questNotification.showQuestStart(questName);
+    onQuestStart: () => {
+      // Silent - no notification for immersive narrative experience
     },
-    onQuestComplete: (questName) => {
-      questNotification.showQuestComplete(questName);
+    onQuestComplete: () => {
+      // Silent - no notification for immersive narrative experience
       questJournal.refresh();
     },
-    onObjectiveComplete: (description) => {
-      questNotification.showObjectiveComplete(description);
+    onObjectiveComplete: () => {
+      // Silent - no notification for immersive narrative experience
       questJournal.refresh();
     },
     onObjectiveProgress: () => {

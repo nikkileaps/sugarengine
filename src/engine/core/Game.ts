@@ -459,6 +459,17 @@ export class Game {
       this.eventHandlers.onObjectiveProgress?.();
     });
 
+    // Handle auto-triggered objectives (e.g., onStageStart)
+    this.quests.setOnObjectiveTrigger((_questId, objective) => {
+      console.log('[Game] Objective triggered:', objective.id, objective.type);
+
+      // Handle 'talk' or 'voiceover' objectives - start the dialogue
+      if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
+        console.log('[Game] Auto-starting dialogue:', objective.dialogue);
+        this.dialogue.start(objective.dialogue);
+      }
+    });
+
     // ========================================
     // Inventory System
     // ========================================

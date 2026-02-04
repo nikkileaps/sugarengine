@@ -1,11 +1,16 @@
 /**
  * Quest objective types
  */
-export type ObjectiveType = 'talk' | 'location' | 'collect' | 'trigger' | 'custom';
+export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
 
 /**
  * A single quest objective
  */
+/**
+ * Trigger conditions for auto-firing objectives
+ */
+export type ObjectiveTrigger = 'onStageStart';
+
 export interface QuestObjective {
   id: string;
   type: ObjectiveType;
@@ -20,6 +25,9 @@ export interface QuestObjective {
   dialogue?: string;
   // When does the objective complete? 'dialogueEnd' (default) or specific node id
   completeOn?: 'dialogueEnd' | string;
+
+  // Auto-trigger condition - if set, objective fires automatically
+  trigger?: ObjectiveTrigger;
 }
 
 /**

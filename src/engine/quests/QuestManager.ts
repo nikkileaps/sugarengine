@@ -5,9 +5,18 @@ import {
   QuestObjective,
   LoadedQuest,
   ObjectiveType,
+  ObjectiveTrigger,
 } from './types';
 
 export type QuestEventHandler = (event: QuestEvent) => void;
+
+/**
+ * Handler for auto-triggered objectives
+ */
+export type ObjectiveTriggerHandler = (
+  questId: string,
+  objective: QuestObjective
+) => void;
 
 /**
  * Manages quest state, progression, and events
@@ -28,6 +37,7 @@ export class QuestManager {
   private onStageComplete: QuestEventHandler | null = null;
   private onObjectiveProgress: QuestEventHandler | null = null;
   private onObjectiveComplete: QuestEventHandler | null = null;
+  private onObjectiveTrigger: ObjectiveTriggerHandler | null = null;
 
   constructor() {
     this.loader = new QuestLoader();
@@ -59,6 +69,14 @@ export class QuestManager {
 
   setOnObjectiveComplete(handler: QuestEventHandler): void {
     this.onObjectiveComplete = handler;
+  }
+
+  /**
+   * Set handler for auto-triggered objectives (e.g., onStageStart)
+   * The handler should execute the objective action (e.g., start dialogue)
+   */
+  setOnObjectiveTrigger(handler: ObjectiveTriggerHandler): void {
+    this.onObjectiveTrigger = handler;
   }
 
   // ============================================
@@ -111,6 +129,11 @@ export class QuestManager {
       }
 
       this.activeQuests.set(questId, state);
+
+      // Fire any onStageStart triggered objectives
+      if (startStage) {
+        this.fireTriggeredObjectives(questId, startStage.objectives, 'onStageStart');
+      }
 
       // Auto-track if no quest is tracked
       if (!this.trackedQuestId) {
@@ -302,6 +325,25 @@ export class QuestManager {
         current: obj.current ?? 0,
         completed: false,
       });
+    }
+
+    // Fire any onStageStart triggered objectives
+    this.fireTriggeredObjectives(questId, newStage.objectives, 'onStageStart');
+  }
+
+  /**
+   * Fire objectives that have the specified trigger condition
+   */
+  private fireTriggeredObjectives(
+    questId: string,
+    objectives: QuestObjective[],
+    trigger: ObjectiveTrigger
+  ): void {
+    for (const obj of objectives) {
+      if (obj.trigger === trigger && this.onObjectiveTrigger) {
+        console.log(`[QuestManager] Firing triggered objective: ${obj.id} (${trigger})`);
+        this.onObjectiveTrigger(questId, obj);
+      }
     }
   }
 

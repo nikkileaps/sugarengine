@@ -323,9 +323,11 @@ export class DialoguePanel {
     const entry = document.createElement('div');
     entry.className = 'dialogue-entry';
 
-    // Check if this is the player speaking
-    const isPlayer = node.speaker?.toLowerCase() === 'you' ||
-                     node.speaker?.toLowerCase() === 'player';
+    // Check if this is the player speaking (internal monologue/voiceover)
+    const speakerLower = node.speaker?.toLowerCase();
+    const isPlayer = speakerLower === 'you' ||
+                     speakerLower === 'player' ||
+                     speakerLower === 'holly';
     if (isPlayer) {
       entry.classList.add('player');
     }

@@ -13,7 +13,7 @@ export interface Player extends BaseSpeaker {
 
 export const PLAYER: Player = {
   id: 'e095b3b2-3351-403a-abe1-88861fa489ad',
-  displayName: 'Player',
+  displayName: 'Holly',
   kind: 'player',
 };
 
