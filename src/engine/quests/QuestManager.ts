@@ -6,6 +6,7 @@ import {
   LoadedQuest,
   ObjectiveType,
   ObjectiveTrigger,
+  ObjectiveAction,
 } from './types';
 
 export type QuestEventHandler = (event: QuestEvent) => void;
@@ -17,6 +18,11 @@ export type ObjectiveTriggerHandler = (
   questId: string,
   objective: QuestObjective
 ) => void;
+
+/**
+ * Handler for objective completion actions
+ */
+export type ObjectiveActionHandler = (action: ObjectiveAction) => void;
 
 /**
  * Manages quest state, progression, and events
@@ -38,6 +44,7 @@ export class QuestManager {
   private onObjectiveProgress: QuestEventHandler | null = null;
   private onObjectiveComplete: QuestEventHandler | null = null;
   private onObjectiveTrigger: ObjectiveTriggerHandler | null = null;
+  private onObjectiveAction: ObjectiveActionHandler | null = null;
 
   constructor() {
     this.loader = new QuestLoader();
@@ -77,6 +84,13 @@ export class QuestManager {
    */
   setOnObjectiveTrigger(handler: ObjectiveTriggerHandler): void {
     this.onObjectiveTrigger = handler;
+  }
+
+  /**
+   * Set handler for objective completion actions (e.g., moveNpc)
+   */
+  setOnObjectiveAction(handler: ObjectiveActionHandler): void {
+    this.onObjectiveAction = handler;
   }
 
   // ============================================
@@ -268,6 +282,15 @@ export class QuestManager {
 
     // Fire event
     this.fireEvent('objective-complete', questId, objectiveId, objective);
+
+    // Fire completion actions
+    console.log('[QuestManager] Objective completed:', objectiveId, 'onComplete:', objective.onComplete);
+    if (objective.onComplete && this.onObjectiveAction) {
+      console.log('[QuestManager] Firing', objective.onComplete.length, 'completion actions');
+      for (const action of objective.onComplete) {
+        this.onObjectiveAction(action);
+      }
+    }
 
     // Check if stage is complete
     this.checkStageComplete(questId);
@@ -587,5 +610,30 @@ export class QuestManager {
    */
   registerQuest(questId: string, quest: unknown): void {
     this.loader.register(questId, quest as import('./types').QuestDefinition);
+  }
+
+  /**
+   * Get an objective by ID from any active quest's current stage
+   */
+  getObjectiveById(objectiveId: string): QuestObjective | null {
+    for (const [, state] of this.activeQuests) {
+      const objective = state.objectiveProgress.get(objectiveId);
+      if (objective) {
+        return objective;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get the quest ID that contains a given objective
+   */
+  getQuestIdForObjective(objectiveId: string): string | null {
+    for (const [questId, state] of this.activeQuests) {
+      if (state.objectiveProgress.has(objectiveId)) {
+        return questId;
+      }
+    }
+    return null;
   }
 }

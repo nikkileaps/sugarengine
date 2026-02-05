@@ -10,8 +10,12 @@ import {
   TextInput,
   Select,
   Switch,
+  Text,
+  Paper,
+  NumberInput,
+  ActionIcon,
 } from '@mantine/core';
-import { QuestStage, QuestObjective } from './QuestPanel';
+import { QuestStage, QuestObjective, MoveNpcAction, TriggerObjectiveAction, ObjectiveAction } from './QuestPanel';
 
 interface ObjectiveModalProps {
   opened: boolean;
@@ -21,6 +25,7 @@ interface ObjectiveModalProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
+  allObjectives: { id: string; description: string; stageId: string }[];
   onUpdate: (objective: QuestObjective) => void;
   onDelete: () => void;
 }
@@ -34,6 +39,11 @@ const OBJECTIVE_TYPES = [
   { value: 'custom', label: 'Custom' },
 ];
 
+const ACTION_TYPES = [
+  { value: 'moveNpc', label: 'Move NPC' },
+  { value: 'triggerObjective', label: 'Trigger Objective' },
+];
+
 export function ObjectiveModal({
   opened,
   onClose,
@@ -42,6 +52,7 @@ export function ObjectiveModal({
   npcs,
   items,
   dialogues,
+  allObjectives,
   onUpdate,
   onDelete,
 }: ObjectiveModalProps) {
@@ -211,6 +222,162 @@ export function ObjectiveModal({
             description: { color: '#6c7086' },
           }}
         />
+
+        {/* On Complete Actions */}
+        <Stack gap="xs">
+          <Group justify="space-between">
+            <Text size="sm" c="#a6adc8">On Complete Actions</Text>
+            <Select
+              size="xs"
+              placeholder="+ Add action"
+              data={ACTION_TYPES}
+              value={null}
+              onChange={(value) => {
+                if (!value) return;
+                let newAction: ObjectiveAction;
+                if (value === 'moveNpc') {
+                  newAction = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
+                } else {
+                  newAction = { type: 'triggerObjective', objectiveId: '' };
+                }
+                handleChange('onComplete', [...(objective.onComplete || []), newAction]);
+              }}
+              styles={{
+                input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4', width: 140 },
+              }}
+            />
+          </Group>
+
+          {(objective.onComplete || []).map((action, index) => (
+            <Paper key={index} p="sm" style={{ background: '#181825', border: '1px solid #313244' }}>
+              <Stack gap="xs">
+                <Group justify="space-between">
+                  <Select
+                    size="xs"
+                    data={ACTION_TYPES}
+                    value={action.type}
+                    onChange={(value) => {
+                      if (!value) return;
+                      const updated = [...(objective.onComplete || [])];
+                      if (value === 'moveNpc') {
+                        updated[index] = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
+                      } else {
+                        updated[index] = { type: 'triggerObjective', objectiveId: '' };
+                      }
+                      handleChange('onComplete', updated);
+                    }}
+                    styles={{
+                      input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 140 },
+                    }}
+                  />
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color="red"
+                    onClick={() => {
+                      const updated = [...(objective.onComplete || [])];
+                      updated.splice(index, 1);
+                      handleChange('onComplete', updated.length > 0 ? updated : undefined);
+                    }}
+                  >
+                    ×
+                  </ActionIcon>
+                </Group>
+
+                {action.type === 'moveNpc' && (
+                  <>
+                    <Select
+                      size="xs"
+                      placeholder="Select NPC..."
+                      data={npcs.map((n) => ({ value: n.id, label: n.name }))}
+                      value={(action as MoveNpcAction).npcId || null}
+                      onChange={(value) => {
+                        const updated = [...(objective.onComplete || [])];
+                        updated[index] = { ...action, npcId: value || '' } as MoveNpcAction;
+                        handleChange('onComplete', updated);
+                      }}
+                      searchable
+                      styles={{
+                        input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4' },
+                      }}
+                    />
+                    <Group gap="xs">
+                      <NumberInput
+                        size="xs"
+                        label="X"
+                        value={(action as MoveNpcAction).position?.x || 0}
+                        onChange={(value) => {
+                          const updated = [...(objective.onComplete || [])];
+                          const pos = (action as MoveNpcAction).position || { x: 0, y: 0, z: 0 };
+                          updated[index] = { ...action, position: { ...pos, x: Number(value) || 0 } } as MoveNpcAction;
+                          handleChange('onComplete', updated);
+                        }}
+                        styles={{
+                          input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 70 },
+                          label: { color: '#6c7086' },
+                        }}
+                      />
+                      <NumberInput
+                        size="xs"
+                        label="Y"
+                        value={(action as MoveNpcAction).position?.y || 0}
+                        onChange={(value) => {
+                          const updated = [...(objective.onComplete || [])];
+                          const pos = (action as MoveNpcAction).position || { x: 0, y: 0, z: 0 };
+                          updated[index] = { ...action, position: { ...pos, y: Number(value) || 0 } } as MoveNpcAction;
+                          handleChange('onComplete', updated);
+                        }}
+                        styles={{
+                          input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 70 },
+                          label: { color: '#6c7086' },
+                        }}
+                      />
+                      <NumberInput
+                        size="xs"
+                        label="Z"
+                        value={(action as MoveNpcAction).position?.z || 0}
+                        onChange={(value) => {
+                          const updated = [...(objective.onComplete || [])];
+                          const pos = (action as MoveNpcAction).position || { x: 0, y: 0, z: 0 };
+                          updated[index] = { ...action, position: { ...pos, z: Number(value) || 0 } } as MoveNpcAction;
+                          handleChange('onComplete', updated);
+                        }}
+                        styles={{
+                          input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 70 },
+                          label: { color: '#6c7086' },
+                        }}
+                      />
+                    </Group>
+                  </>
+                )}
+
+                {action.type === 'triggerObjective' && (
+                  <Select
+                    size="xs"
+                    placeholder="Select objective..."
+                    data={allObjectives
+                      .filter((o) => o.id !== objective.id) // Can't trigger self
+                      .map((o) => ({ value: o.id, label: o.description || o.id }))}
+                    value={(action as TriggerObjectiveAction).objectiveId || null}
+                    onChange={(value) => {
+                      const updated = [...(objective.onComplete || [])];
+                      updated[index] = { ...action, objectiveId: value || '' } as TriggerObjectiveAction;
+                      handleChange('onComplete', updated);
+                    }}
+                    searchable
+                    styles={{
+                      input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4' },
+                    }}
+                  />
+                )}
+              </Stack>
+            </Paper>
+          ))}
+
+          {(!objective.onComplete || objective.onComplete.length === 0) && (
+            <Text size="xs" c="#6c7086" fs="italic">No actions configured</Text>
+          )}
+        </Stack>
 
         <Group justify="space-between" mt="xl">
           <Button variant="subtle" color="red" onClick={handleDelete}>

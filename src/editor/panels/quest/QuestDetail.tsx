@@ -426,6 +426,9 @@ export function QuestDetail({
         npcs={npcs}
         items={items}
         dialogues={dialogues}
+        allObjectives={quest.stages.flatMap((s) =>
+          s.objectives.map((o) => ({ id: o.id, description: o.description, stageId: s.id }))
+        )}
         onUpdate={(obj) => {
           if (selectedObjectiveId) {
             handleObjectiveUpdate(selectedObjectiveId.stageId, obj);

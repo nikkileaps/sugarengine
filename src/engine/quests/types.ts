@@ -11,6 +11,24 @@ export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'tri
  */
 export type ObjectiveTrigger = 'onStageStart';
 
+/**
+ * Actions that can be triggered when an objective completes
+ */
+export type ObjectiveActionType = 'moveNpc' | 'triggerObjective';
+
+export interface MoveNpcAction {
+  type: 'moveNpc';
+  npcId: string;
+  position: { x: number; y: number; z: number };
+}
+
+export interface TriggerObjectiveAction {
+  type: 'triggerObjective';
+  objectiveId: string;
+}
+
+export type ObjectiveAction = MoveNpcAction | TriggerObjectiveAction;
+
 export interface QuestObjective {
   id: string;
   type: ObjectiveType;
@@ -28,6 +46,9 @@ export interface QuestObjective {
 
   // Auto-trigger condition - if set, objective fires automatically
   trigger?: ObjectiveTrigger;
+
+  // Actions to perform when this objective completes
+  onComplete?: ObjectiveAction[];
 }
 
 /**

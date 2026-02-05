@@ -17,6 +17,21 @@ import { useEditorStore } from '../../store';
 import { QuestDetail } from './QuestDetail';
 import { generateUUID, shortId } from '../../utils';
 
+export type ObjectiveActionType = 'moveNpc' | 'triggerObjective';
+
+export interface MoveNpcAction {
+  type: 'moveNpc';
+  npcId: string;
+  position: { x: number; y: number; z: number };
+}
+
+export interface TriggerObjectiveAction {
+  type: 'triggerObjective';
+  objectiveId: string;
+}
+
+export type ObjectiveAction = MoveNpcAction | TriggerObjectiveAction;
+
 export interface QuestObjective {
   id: string;
   type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
@@ -28,6 +43,7 @@ export interface QuestObjective {
   dialogue?: string;
   completeOn?: 'dialogueEnd' | string;
   trigger?: 'onStageStart';
+  onComplete?: ObjectiveAction[];
 }
 
 export interface QuestStage {

@@ -377,12 +377,19 @@ export class Game {
 
       // If this was a quest dialogue that completes on dialogue end, complete the objective
       if (this.activeQuestDialogue?.completeOn === 'dialogueEnd') {
+        // Save reference - completing might trigger another dialogue that sets a new activeQuestDialogue
+        const completingDialogue = this.activeQuestDialogue;
         this.quests.completeObjective(
-          this.activeQuestDialogue.questId,
-          this.activeQuestDialogue.objectiveId
+          completingDialogue.questId,
+          completingDialogue.objectiveId
         );
+        // Only clear if it wasn't replaced by a new triggered dialogue
+        if (this.activeQuestDialogue === completingDialogue) {
+          this.activeQuestDialogue = null;
+        }
+      } else {
+        this.activeQuestDialogue = null;
       }
-      this.activeQuestDialogue = null;
     });
 
     // Dialogue events can trigger quest objectives
@@ -460,13 +467,56 @@ export class Game {
     });
 
     // Handle auto-triggered objectives (e.g., onStageStart)
-    this.quests.setOnObjectiveTrigger((_questId, objective) => {
+    this.quests.setOnObjectiveTrigger((questId, objective) => {
       console.log('[Game] Objective triggered:', objective.id, objective.type);
 
       // Handle 'talk' or 'voiceover' objectives - start the dialogue
       if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
         console.log('[Game] Auto-starting dialogue:', objective.dialogue);
+
+        // Track this so we can complete the objective when dialogue ends
+        this.activeQuestDialogue = {
+          questId,
+          objectiveId: objective.id,
+          completeOn: objective.completeOn ?? 'dialogueEnd',
+        };
+
         this.dialogue.start(objective.dialogue);
+      }
+    });
+
+    // Handle objective completion actions (e.g., moveNpc, triggerObjective)
+    this.quests.setOnObjectiveAction((action) => {
+      console.log('[Game] Objective action:', action.type, action);
+
+      switch (action.type) {
+        case 'moveNpc':
+          this.engine.moveNPCTo(action.npcId, action.position)
+            .then(() => console.log(`[Game] NPC ${action.npcId} arrived at destination`))
+            .catch((err) => console.error(`[Game] Failed to move NPC:`, err));
+          break;
+
+        case 'triggerObjective':
+          // Find the objective and fire it like an auto-triggered one
+          const objective = this.quests.getObjectiveById(action.objectiveId);
+          if (objective) {
+            const questId = this.quests.getQuestIdForObjective(action.objectiveId);
+            if (questId) {
+              console.log(`[Game] Triggering objective: ${action.objectiveId}`);
+              // Handle 'talk' or 'voiceover' objectives - start the dialogue
+              if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
+                this.activeQuestDialogue = {
+                  questId,
+                  objectiveId: objective.id,
+                  completeOn: objective.completeOn ?? 'dialogueEnd',
+                };
+                this.dialogue.start(objective.dialogue);
+              }
+            }
+          } else {
+            console.warn(`[Game] Objective not found: ${action.objectiveId}`);
+          }
+          break;
       }
     });
 
