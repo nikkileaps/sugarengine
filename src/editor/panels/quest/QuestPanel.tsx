@@ -60,6 +60,34 @@ export interface QuestPanelResult {
   inspector: ReactNode;
 }
 
+/**
+ * Validate a quest and return warnings
+ */
+export function validateQuest(quest: QuestEntry): string[] {
+  const warnings: string[] = [];
+
+  if (!quest.stages.find((s) => s.id === quest.startStage)) {
+    warnings.push(`Start stage "${quest.startStage}" not found`);
+  }
+
+  for (const stage of quest.stages) {
+    if (stage.next && !quest.stages.find((s) => s.id === stage.next)) {
+      warnings.push(`Stage "${stage.id}" references non-existent stage "${stage.next}"`);
+    }
+    if (stage.objectives.length === 0) {
+      warnings.push(`Stage "${stage.id}" has no objectives`);
+    }
+    for (const obj of stage.objectives) {
+      // Voiceovers don't need a target
+      if (!obj.target && obj.type !== 'voiceover') {
+        warnings.push(`Objective in stage "${stage.id}" has no target`);
+      }
+    }
+  }
+
+  return warnings;
+}
+
 interface QuestPanelProps {
   quests: QuestEntry[];
   onQuestsChange: (quests: QuestEntry[]) => void;
@@ -89,30 +117,6 @@ export function QuestPanel({
       quest.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       quest.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const validateQuest = (quest: QuestEntry): string[] => {
-    const warnings: string[] = [];
-
-    if (!quest.stages.find((s) => s.id === quest.startStage)) {
-      warnings.push(`Start stage "${quest.startStage}" not found`);
-    }
-
-    for (const stage of quest.stages) {
-      if (stage.next && !quest.stages.find((s) => s.id === stage.next)) {
-        warnings.push(`Stage "${stage.id}" references non-existent stage "${stage.next}"`);
-      }
-      if (stage.objectives.length === 0) {
-        warnings.push(`Stage "${stage.id}" has no objectives`);
-      }
-      for (const obj of stage.objectives) {
-        if (!obj.target) {
-          warnings.push(`Objective in stage "${stage.id}" has no target`);
-        }
-      }
-    }
-
-    return warnings;
-  };
 
   const handleCreate = () => {
     const id = generateUUID();

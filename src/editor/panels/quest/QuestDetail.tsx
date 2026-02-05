@@ -15,7 +15,7 @@ import {
   TextInput,
   Textarea,
 } from '@mantine/core';
-import { QuestEntry, QuestStage, QuestObjective } from './QuestPanel';
+import { QuestEntry, QuestStage, QuestObjective, validateQuest } from './QuestPanel';
 import { ObjectiveModal } from './ObjectiveModal';
 import { generateUUID } from '../../utils';
 
@@ -93,30 +93,6 @@ export function QuestDetail({
     return ordered;
   };
 
-  const validateQuest = (): string[] => {
-    const warnings: string[] = [];
-
-    if (!quest.stages.find((s) => s.id === quest.startStage)) {
-      warnings.push(`Start stage "${quest.startStage}" not found`);
-    }
-
-    for (const stage of quest.stages) {
-      if (stage.next && !quest.stages.find((s) => s.id === stage.next)) {
-        warnings.push(`Stage "${stage.id}" references non-existent stage "${stage.next}"`);
-      }
-      if (stage.objectives.length === 0) {
-        warnings.push(`Stage "${stage.id}" has no objectives`);
-      }
-      for (const obj of stage.objectives) {
-        if (!obj.target) {
-          warnings.push(`Objective in stage "${stage.id}" has no target`);
-        }
-      }
-    }
-
-    return warnings;
-  };
-
   const handleAddStage = () => {
     const stageId = generateUUID();
     const newStage: QuestStage = {
@@ -176,7 +152,7 @@ export function QuestDetail({
   };
 
   const stageOrder = getStageOrder();
-  const warnings = validateQuest();
+  const warnings = validateQuest(quest);
 
   return (
     <Stack gap={0} h="100%">
