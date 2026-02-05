@@ -156,13 +156,10 @@ export class SugarEngine {
     this.world.addSystem(this.lodSystem);
 
     // Default trigger handler - handles built-in event types
-    this.triggerSystem.setTriggerEnterHandler((event, triggerId) => {
-      console.log(`Trigger entered: ${triggerId}`, event);
-
+    this.triggerSystem.setTriggerEnterHandler((event, _triggerId) => {
       // Handle map transitions
       if (event.type === 'transition' && event.target) {
         const spawnPoint = event.spawnPoint as { x: number; y: number; z: number } | undefined;
-        console.log(`Transitioning to: ${event.target}`, spawnPoint ? `at ${spawnPoint.x},${spawnPoint.y},${spawnPoint.z}` : '');
         this.loadRegion(event.target as string, spawnPoint);
       }
     });
@@ -343,9 +340,6 @@ export class SugarEngine {
       ));
       this.triggerEntities.push(entity);
     }
-    if (this.currentRegion.data.triggers.length > 0) {
-      console.log(`Loaded ${this.currentRegion.data.triggers.length} trigger zones`);
-    }
 
     // Create NPC entities from region data
     for (const npcDef of this.currentRegion.data.npcs) {
@@ -410,10 +404,6 @@ export class SugarEngine {
       this.world.addComponent(entity, new Renderable(mesh));
       this.npcEntities.push(entity);
     }
-    if (this.currentRegion.data.npcs.length > 0) {
-      console.log(`Loaded ${this.currentRegion.data.npcs.length} NPCs`);
-    }
-
     // Create pickup entities from region data (skip already collected ones)
     const pickups = this.currentRegion.data.pickups ?? [];
     const collectedSet = new Set(collectedPickups ?? []);
@@ -461,9 +451,6 @@ export class SugarEngine {
       this.world.addComponent(entity, new Renderable(mesh));
       this.pickupEntities.push(entity);
     }
-    if (pickups.length > 0) {
-      console.log(`Loaded ${pickups.length} item pickups`);
-    }
 
     // Create inspectable entities from region data
     const inspectables = this.currentRegion.data.inspectables ?? [];
@@ -506,10 +493,6 @@ export class SugarEngine {
       this.world.addComponent(entity, new Renderable(mesh));
       this.inspectableEntities.push(entity);
     }
-    if (inspectables.length > 0) {
-      console.log(`Loaded ${inspectables.length} inspectable objects`);
-    }
-
     // Create resonance point entities from region data
     const resonancePoints = this.currentRegion.data.resonancePoints ?? [];
     for (const resonancePointDef of resonancePoints) {
@@ -551,14 +534,9 @@ export class SugarEngine {
       this.world.addComponent(entity, new Renderable(mesh));
       this.resonancePointEntities.push(entity);
     }
-    if (resonancePoints.length > 0) {
-      console.log(`Loaded ${resonancePoints.length} resonance points`);
-    }
 
     // Create VFX emitters from region data
     const vfxSpawns = this.currentRegion.data.vfxSpawns ?? [];
-    console.log(`[Engine] VFX spawns in region:`, vfxSpawns);
-    console.log(`[Engine] Registered VFX definitions:`, this.vfxManager.getAllDefinitions().map(d => d.id));
     for (const vfxSpawn of vfxSpawns) {
       const position = new THREE.Vector3(
         vfxSpawn.position.x,
@@ -568,19 +546,13 @@ export class SugarEngine {
       const scale = vfxSpawn.scale ?? 1;
       const autoPlay = vfxSpawn.autoPlay !== false;
 
-      console.log(`[Engine] Creating VFX emitter: vfxId=${vfxSpawn.vfxId}, pos=(${position.x}, ${position.y}, ${position.z}), scale=${scale}, autoPlay=${autoPlay}`);
       const emitter = this.vfxManager.createEmitter(vfxSpawn.vfxId, position, scale, autoPlay);
       if (emitter) {
-        console.log(`[Engine] Created emitter: ${emitter.id}`);
         this.vfxEmitterIds.push(emitter.id);
       } else {
-        console.warn(`[Engine] Failed to create emitter for vfxId=${vfxSpawn.vfxId}`);
+        console.warn(`[Engine] Failed to create VFX emitter: ${vfxSpawn.vfxId}`);
       }
     }
-    if (vfxSpawns.length > 0) {
-      console.log(`Loaded ${vfxSpawns.length} VFX emitters`);
-    }
-
     // Add geometry to scene
     this.scene.add(this.currentRegion.geometry);
 
@@ -610,8 +582,6 @@ export class SugarEngine {
         pos.z = spawn.z;
       }
     }
-
-    console.log(`Loaded region: ${this.currentRegion.data.name}`);
   }
 
   /**
@@ -850,7 +820,6 @@ export class SugarEngine {
     );
 
     this.loadedRegions.set(regionId, state);
-    console.log(`Loaded region: ${regionData.name} at grid (${regionData.gridPosition?.x ?? 0}, ${regionData.gridPosition?.z ?? 0})`);
   }
 
   /**
@@ -926,8 +895,6 @@ export class SugarEngine {
     if (this.activeRegionId === regionId) {
       this.activeRegionId = null;
     }
-
-    console.log(`Unloaded region: ${regionId}`);
   }
 
   /**
@@ -1026,8 +993,6 @@ export class SugarEngine {
       return entities;
     }
 
-    console.log(`[LOD] Processing ${patches.length} surface patches`);
-
     for (const patchDef of patches) {
       // Find all LOD meshes by name in the loaded geometry
       const lod0Names = patchDef.lods.LOD0.meshNames;
@@ -1037,29 +1002,20 @@ export class SugarEngine {
       const lod1Meshes: THREE.Object3D[] = [];
 
       // Find LOD0 meshes
-      console.log(`[LOD]   LOD0 names: ${lod0Names.join(', ')}`);
       for (const name of lod0Names) {
         const mesh = geometry.getObjectByName(name);
         if (mesh) {
           lod0Meshes.push(mesh);
-        } else {
-          console.warn(`LOD0 mesh not found for patch "${patchDef.id}": ${name}`);
         }
       }
 
       // Find LOD1 meshes
-      console.log(`[LOD]   LOD1 names: ${lod1Names.join(', ')}`);
       for (const name of lod1Names) {
         const mesh = geometry.getObjectByName(name);
         if (mesh) {
           lod1Meshes.push(mesh);
-        } else {
-          console.warn(`LOD1 mesh not found for patch "${patchDef.id}": ${name}`);
         }
       }
-
-      // Log patch info
-      console.log(`[LOD] Patch "${patchDef.id}" type="${patchDef.type}": LOD0=${lod0Meshes.length} meshes, LOD1=${lod1Meshes.length} meshes`);
 
       // Skip patches with no meshes at all
       if (lod0Meshes.length === 0 && lod1Meshes.length === 0) {
@@ -1090,10 +1046,6 @@ export class SugarEngine {
       }
 
       entities.push(entity);
-    }
-
-    if (entities.length > 0) {
-      console.log(`Created ${entities.length} surface patch LOD entities`);
     }
 
     return entities;
@@ -1249,8 +1201,6 @@ export class SugarEngine {
         const npcId = current.userData.npcId as string;
         const entityId = current.userData.entityId as number;
         const npcComponent = this.world.getComponent<NPC>(entityId, NPC);
-
-        console.log(`Clicked NPC: ${npcId}`);
 
         if (this.onNPCClickHandler) {
           this.onNPCClickHandler(npcId, npcComponent?.dialogueId);

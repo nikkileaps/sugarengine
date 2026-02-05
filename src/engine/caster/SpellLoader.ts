@@ -27,15 +27,12 @@ export class SpellLoader {
    */
   static parsePlayerCaster(data: unknown): PlayerCasterConfig | null {
     if (!data || typeof data !== 'object') {
-      console.log('[SpellLoader] parsePlayerCaster: data is not an object', data);
       return null;
     }
 
     const project = data as { playerCaster?: unknown };
-    console.log('[SpellLoader] parsePlayerCaster: project.playerCaster =', project.playerCaster);
 
     if (!project.playerCaster || typeof project.playerCaster !== 'object') {
-      console.log('[SpellLoader] parsePlayerCaster: playerCaster missing or not object');
       return null;
     }
 
@@ -43,12 +40,6 @@ export class SpellLoader {
 
     // Validate required fields
     if (typeof config.initialBattery !== 'number' || typeof config.rechargeRate !== 'number') {
-      console.log('[SpellLoader] parsePlayerCaster: validation failed', {
-        initialBattery: config.initialBattery,
-        initialBatteryType: typeof config.initialBattery,
-        rechargeRate: config.rechargeRate,
-        rechargeRateType: typeof config.rechargeRate,
-      });
       return null;
     }
 
@@ -61,7 +52,7 @@ export class SpellLoader {
       }
     }
 
-    const result: PlayerCasterConfig = {
+    return {
       initialBattery: config.initialBattery,
       rechargeRate: config.rechargeRate,
       initialResonance: typeof config.initialResonance === 'number' ? config.initialResonance : undefined,
@@ -70,8 +61,6 @@ export class SpellLoader {
       initialSpawnPosition,
       initialFacingAngle: typeof config.initialFacingAngle === 'number' ? config.initialFacingAngle : undefined,
     };
-    console.log('[SpellLoader] parsePlayerCaster: success', result);
-    return result;
   }
 
   /**

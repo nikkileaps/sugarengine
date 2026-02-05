@@ -157,7 +157,6 @@ export class QuestManager {
       // Fire event
       this.fireEvent('quest-start', questId);
 
-      console.log(`Quest started: ${loaded.definition.name}`);
       return true;
     } catch (error) {
       console.error(`Failed to start quest ${questId}:`, error);
@@ -184,9 +183,6 @@ export class QuestManager {
     }
 
     this.fireEvent('quest-complete', questId);
-
-    const loaded = this.loadedQuests.get(questId);
-    console.log(`Quest completed: ${loaded?.definition.name ?? questId}`);
   }
 
   /**
@@ -284,9 +280,7 @@ export class QuestManager {
     this.fireEvent('objective-complete', questId, objectiveId, objective);
 
     // Fire completion actions
-    console.log('[QuestManager] Objective completed:', objectiveId, 'onComplete:', objective.onComplete);
     if (objective.onComplete && this.onObjectiveAction) {
-      console.log('[QuestManager] Firing', objective.onComplete.length, 'completion actions');
       for (const action of objective.onComplete) {
         this.onObjectiveAction(action);
       }
@@ -364,7 +358,6 @@ export class QuestManager {
   ): void {
     for (const obj of objectives) {
       if (obj.trigger === trigger && this.onObjectiveTrigger) {
-        console.log(`[QuestManager] Firing triggered objective: ${obj.id} (${trigger})`);
         this.onObjectiveTrigger(questId, obj);
       }
     }

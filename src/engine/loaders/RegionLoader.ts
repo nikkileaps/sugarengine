@@ -362,19 +362,12 @@ export class RegionLoader {
         // TODO: Remove this filter once Sugarbuilder export is fixed to not export
         // stray emissive meshes under the ground
         if (worldPos.y < 0.5) {
-          console.log(`Skipping underground emissive light from mesh "${child.name}" at y=${worldPos.y.toFixed(2)}`);
           continue;
         }
 
         lights.push(light);
-
-        console.log(`Created point light from emissive mesh "${child.name}" at (${worldPos.x.toFixed(1)}, ${worldPos.y.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
       }
     });
-
-    if (lights.length > 0) {
-      console.log(`Created ${lights.length} lights from emissive materials`);
-    }
 
     return lights;
   }

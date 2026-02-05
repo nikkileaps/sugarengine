@@ -169,9 +169,6 @@ export class SaveManager {
 
       this.onSaveCompleteHandler?.(slotId, result.success);
 
-      if (result.success) {
-        console.log(`Game saved to slot: ${slotId}`);
-      }
 
       return result;
     } catch (e) {
@@ -342,7 +339,6 @@ export class SaveManager {
       this.gameStartTime = Date.now();
 
       this.onLoadCompleteHandler?.(slotId, true);
-      console.log(`Game loaded from slot: ${slotId}`);
       return { success: true };
     } catch (e) {
       const error = e instanceof Error ? e.message : 'Unknown error';

@@ -64,7 +64,6 @@ export class AmbientController {
     for (const id of this.ambients.keys()) {
       this.scheduleNext(id);
     }
-    console.log(`[Ambient] Started ${this.ambients.size} ambient sounds`);
   }
 
   /**
@@ -80,7 +79,6 @@ export class AmbientController {
       }
       this.audio.stop(id);
     }
-    console.log('[Ambient] Stopped all ambient sounds');
   }
 
   /**

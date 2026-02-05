@@ -262,18 +262,6 @@ export class Game {
       this.engine.registerVFXDefinition(vfx);
     }
 
-    console.log('[Game] Registered project content:', {
-      regions: project.regions?.length || 0,
-      dialogues: project.dialogues?.length || 0,
-      quests: project.quests?.length || 0,
-      npcs: project.npcs?.length || 0,
-      inspections: project.inspections?.length || 0,
-      items: project.items?.length || 0,
-      playerCaster: this.playerCasterConfig,
-      spells: spells.length,
-      resonancePoints: resonancePoints.length,
-      vfxDefinitions: vfxDefinitions.length + BUILTIN_PRESETS.length,
-    });
   }
 
   /**
@@ -395,8 +383,6 @@ export class Game {
     // Dialogue events can trigger quest objectives
     // Format: "quest:<type>:<target>" e.g., "quest:custom:finished-greeting"
     this.dialogue.setOnEvent((eventName) => {
-      console.log(`[Dialogue Event] ${eventName}`);
-
       if (eventName.startsWith('quest:')) {
         const [, type, target] = eventName.split(':');
         if (type && target) {
@@ -468,12 +454,8 @@ export class Game {
 
     // Handle auto-triggered objectives (e.g., onStageStart)
     this.quests.setOnObjectiveTrigger((questId, objective) => {
-      console.log('[Game] Objective triggered:', objective.id, objective.type);
-
       // Handle 'talk' or 'voiceover' objectives - start the dialogue
       if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
-        console.log('[Game] Auto-starting dialogue:', objective.dialogue);
-
         // Track this so we can complete the objective when dialogue ends
         this.activeQuestDialogue = {
           questId,
@@ -487,12 +469,9 @@ export class Game {
 
     // Handle objective completion actions (e.g., moveNpc, triggerObjective)
     this.quests.setOnObjectiveAction((action) => {
-      console.log('[Game] Objective action:', action.type, action);
-
       switch (action.type) {
         case 'moveNpc':
           this.engine.moveNPCTo(action.npcId, action.position)
-            .then(() => console.log(`[Game] NPC ${action.npcId} arrived at destination`))
             .catch((err) => console.error(`[Game] Failed to move NPC:`, err));
           break;
 
@@ -502,7 +481,6 @@ export class Game {
           if (objective) {
             const questId = this.quests.getQuestIdForObjective(action.objectiveId);
             if (questId) {
-              console.log(`[Game] Triggering objective: ${action.objectiveId}`);
               // Handle 'talk' or 'voiceover' objectives - start the dialogue
               if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
                 this.activeQuestDialogue = {
@@ -581,8 +559,6 @@ export class Game {
 
         if (npcDefaultDialogue) {
           this.dialogue.start(npcDefaultDialogue);
-        } else {
-          console.log(`NPC ${npcId} has no dialogue`);
         }
       }
     });
@@ -670,10 +646,8 @@ export class Game {
 
       // Start all quests for this episode
       const episodeQuestIds = this.getEpisodeQuests();
-      console.log('[Game] Episode quests to start:', episodeQuestIds);
       for (const questId of episodeQuestIds) {
-        const started = await this.quests.startQuest(questId);
-        console.log('[Game] Started quest:', questId, 'result:', started);
+        await this.quests.startQuest(questId);
       }
 
       // Fallback to config.startQuest if no episode quests (production mode)
@@ -699,9 +673,7 @@ export class Game {
 
     this.sceneManager.onSave(async (slotId) => {
       const result = await this.saveManager.save(slotId);
-      if (result.success) {
-        console.log(`Game saved to ${slotId}`);
-      } else {
+      if (!result.success) {
         console.error('Save failed:', result.error);
       }
     });
@@ -720,8 +692,6 @@ export class Game {
 
       const result = await this.saveManager.load(slotId);
       if (result.success) {
-        console.log(`Game loaded from ${slotId}`);
-
         // Show player and resume camera following (if title screen was configured)
         if (this.config.titleScreen) {
           this.engine.setPlayerVisible(true);
@@ -751,9 +721,7 @@ export class Game {
    * Give an item to an NPC (for gift UI)
    */
   giveItemToNpc(npcId: string, itemId: string): boolean {
-    const itemDef = this.inventory.getItemDefinition(itemId);
     if (this.inventory.removeItem(itemId, 1)) {
-      console.log(`Gave ${itemDef?.name ?? itemId} to NPC ${npcId}`);
       this.quests.triggerObjective('custom', `gift-${npcId}`);
       return true;
     }
@@ -792,8 +760,6 @@ export class Game {
 
     // Sync UI with initial values
     this.casterSystem.syncUI(this.engine.world);
-
-    console.log('[Game] Player caster initialized:', casterConfig);
   }
 
   /**
@@ -803,7 +769,6 @@ export class Game {
     switch (effect.type) {
       case 'event':
         if (effect.eventName) {
-          console.log(`[Spell Effect] Event: ${effect.eventName}`);
           // Trigger the event via dialogue system (which handles quest triggers)
           this.eventHandlers.onDialogueEvent?.(effect.eventName);
         }
@@ -816,20 +781,15 @@ export class Game {
         break;
 
       case 'world-flag':
-        if (effect.flagName !== undefined) {
-          console.log(`[Spell Effect] World flag: ${effect.flagName} = ${effect.flagValue}`);
-          // World flags would be handled by a world state manager (future feature)
-        }
+        // World flags would be handled by a world state manager (future feature)
         break;
 
       case 'unlock':
-        console.log('[Spell Effect] Unlock:', effect);
         // Unlock effects would be handled by a progression system (future feature)
         break;
 
       case 'heal':
       case 'damage':
-        console.log(`[Spell Effect] ${effect.type}: ${effect.amount}`);
         // Health effects would be handled by a health system (future feature)
         break;
     }
@@ -875,7 +835,6 @@ export class Game {
     // Add resonance if successful
     if (success && resonanceGained > 0) {
       this.caster.addResonance(resonanceGained);
-      console.log(`[Game] Resonance increased by ${resonanceGained}`);
     }
   }
 
@@ -1002,7 +961,6 @@ export class Game {
       const episodeQuests = (project.quests || [])
         .filter(q => q.episodeId === this.config.currentEpisode)
         .map(q => q.id);
-      console.log('[Game] Found episode quests from projectData:', episodeQuests);
       return episodeQuests;
     }
 

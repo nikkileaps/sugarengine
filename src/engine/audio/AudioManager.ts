@@ -43,7 +43,6 @@ export class AudioManager {
         sprite: options?.sprite,
         volume: this.getCategoryVolume(category),
         onload: () => {
-          console.log(`[Audio] Loaded: ${id}`);
           resolve();
         },
         onloaderror: (_id, error) => {
@@ -228,7 +227,6 @@ export class AudioManager {
     if (this.currentMusic) {
       this.fadeOut(this.currentMusic);
     }
-    console.log('[Audio] Transitioned to game state');
   }
 
   /**
@@ -248,7 +246,6 @@ export class AudioManager {
       this.currentMusic = menuMusicId;
       this.fadeIn(menuMusicId);
     }
-    console.log('[Audio] Transitioned to menu state');
   }
 
   getState(): AudioState {

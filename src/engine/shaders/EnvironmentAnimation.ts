@@ -83,10 +83,7 @@ export class EnvironmentAnimation {
    * @param lights Optional array of lights to also animate (matched by sourceMeshName in userData)
    */
   processScene(scene: THREE.Object3D, entries?: EnvironmentAnimationEntry[], lights?: THREE.Light[]): void {
-    console.log(`[EnvironmentAnimation] processScene called with ${entries?.length ?? 0} entries:`, entries);
-
     if (!entries || entries.length === 0) {
-      console.log(`[EnvironmentAnimation] No animation entries for this region`);
       return;
     }
 
@@ -95,18 +92,13 @@ export class EnvironmentAnimation {
     for (const entry of entries) {
       if (entry.meshName) {
         entryMap.set(entry.meshName.toLowerCase(), entry);
-        console.log(`[EnvironmentAnimation] Looking for mesh: "${entry.meshName.toLowerCase()}"`);
       }
     }
-
-    let appliedCount = 0;
-    const scannedMeshes: string[] = [];
 
     scene.traverse((object) => {
       if (object instanceof THREE.Mesh && object.material) {
         // Check if this mesh or its material matches any entry
         const meshNameLower = (object.name || '').toLowerCase();
-        scannedMeshes.push(meshNameLower);
         const materials = Array.isArray(object.material)
           ? object.material
           : [object.material];
@@ -129,7 +121,6 @@ export class EnvironmentAnimation {
             } else {
               object.material = clonedMaterial;
             }
-            appliedCount++;
           }
         }
       }
@@ -137,7 +128,6 @@ export class EnvironmentAnimation {
 
     // Animate ALL point lights that aren't underground
     if (lights) {
-      let lightCount = 0;
       for (const light of lights) {
         if (!(light instanceof THREE.PointLight)) continue;
         if (light.position.y < 0.5) continue; // Skip underground lights
@@ -147,17 +137,7 @@ export class EnvironmentAnimation {
         const phaseOffset = Math.random() * Math.PI * 2;
 
         this.trackedLights.push({ light, baseIntensity, speed, phaseOffset });
-        lightCount++;
-        console.log(`[EnvironmentAnimation] Tracking light at y=${light.position.y.toFixed(1)} baseIntensity=${baseIntensity}`);
       }
-      if (lightCount > 0) {
-        console.log(`[EnvironmentAnimation] Tracking ${lightCount} lights for animation`);
-      }
-    }
-
-    console.log(`[EnvironmentAnimation] Applied ${appliedCount} material animations from ${entries.length} entries`);
-    if (appliedCount === 0 && entries.length > 0) {
-      console.log(`[EnvironmentAnimation] No matches found! Scene meshes:`, scannedMeshes.slice(0, 20));
     }
   }
 
@@ -167,15 +147,12 @@ export class EnvironmentAnimation {
   private applyAnimation(material: THREE.MeshStandardMaterial, entry: EnvironmentAnimationEntry): void {
     switch (entry.animationType) {
       case 'lamp_glow':
-        console.log(`[EnvironmentAnimation] Applying lamp glow to: ${material.name}`);
         this.applyLampGlow(material, entry.intensity, entry.speed);
         break;
       case 'candle_flicker':
-        console.log(`[EnvironmentAnimation] Candle flicker not yet implemented: ${material.name}`);
         // TODO: Implement candle flicker
         break;
       case 'wind_sway':
-        console.log(`[EnvironmentAnimation] Wind sway not yet implemented: ${material.name}`);
         // TODO: Implement wind sway
         break;
     }
@@ -214,8 +191,6 @@ export class EnvironmentAnimation {
 
     // Inject custom shader code
     material.onBeforeCompile = (shader) => {
-      console.log(`[EnvironmentAnimation] Shader compiling for lamp glow, emissiveIntensity=${originalEmissiveIntensity}`);
-
       // Add uniforms
       shader.uniforms.uTime = timeUniform;
       shader.uniforms.uGlowIntensity = { value: intensity };
