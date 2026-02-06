@@ -65,6 +65,38 @@ For all entities with Position + Velocity:
 - Only applied to player-controlled entities
 - Prevents walking through walls and objects
 
+### Movement Locks
+
+Movement can be disabled by multiple systems simultaneously using a lock-based approach. Each system adds/removes its own named lock, and movement is only allowed when no locks exist.
+
+**Source**: `src/core/InputManager.ts`
+
+```typescript
+// Add a lock (disables movement)
+engine.addMovementLock('dialogue');
+
+// Remove a lock (movement resumes only if no other locks exist)
+engine.removeMovementLock('dialogue');
+
+// Check if movement is allowed
+engine.isMovementAllowed(); // true if no locks
+```
+
+**Built-in lock reasons:**
+
+| Lock | Added by | Description |
+|------|----------|-------------|
+| `'pause'` | Engine | Game is paused |
+| `'dialogue'` | Game | Dialogue is active |
+| `'inspection'` | Game | Inspection panel is open |
+| `'resonance'` | Game | Resonance mini-game is active |
+| `'journal'` | Preview/Game UI | Quest journal is open |
+| `'inventory'` | Preview/Game UI | Inventory is open |
+| `'gift'` | Preview/Game UI | Gift UI is open |
+| `'spellMenu'` | Preview/Game UI | Spell menu is open |
+
+This prevents race conditions where one system might re-enable movement while another still needs it disabled. Each system only manages its own lock.
+
 ## RenderSystem
 
 Synchronizes entity positions to Three.js meshes.
