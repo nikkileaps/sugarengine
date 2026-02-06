@@ -15,7 +15,7 @@ import {
   NumberInput,
   ActionIcon,
 } from '@mantine/core';
-import { QuestStage, QuestObjective, MoveNpcAction, TriggerObjectiveAction, ObjectiveAction } from './QuestPanel';
+import { QuestStage, QuestObjective, MoveNpcAction, ObjectiveAction } from './QuestPanel';
 
 interface ObjectiveModalProps {
   opened: boolean;
@@ -25,7 +25,6 @@ interface ObjectiveModalProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
-  allObjectives: { id: string; description: string; stageId: string }[];
   onUpdate: (objective: QuestObjective) => void;
   onDelete: () => void;
 }
@@ -39,9 +38,9 @@ const OBJECTIVE_TYPES = [
   { value: 'custom', label: 'Custom' },
 ];
 
+// Note: Triggering other objectives is done via prerequisites (graph edges), not actions
 const ACTION_TYPES = [
   { value: 'moveNpc', label: 'Move NPC' },
-  { value: 'triggerObjective', label: 'Trigger Objective' },
 ];
 
 export function ObjectiveModal({
@@ -52,7 +51,6 @@ export function ObjectiveModal({
   npcs,
   items,
   dialogues,
-  allObjectives,
   onUpdate,
   onDelete,
 }: ObjectiveModalProps) {
@@ -207,18 +205,13 @@ export function ObjectiveModal({
           }}
         />
 
-        <Select
-          label="Auto-Trigger"
-          description="Automatically fire this objective when condition is met"
-          data={[
-            { value: '', label: 'None (manual)' },
-            { value: 'onStageStart', label: 'On Stage Start' },
-          ]}
-          value={objective.trigger || ''}
-          onChange={(value) => handleChange('trigger', (value || undefined) as 'onStageStart' | undefined)}
+        <Switch
+          label="Auto-start"
+          description="Fire automatically when available (at stage load or when prerequisites complete)"
+          checked={objective.autoStart ?? false}
+          onChange={(e) => handleChange('autoStart', e.currentTarget.checked || undefined)}
           styles={{
-            input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
-            label: { color: '#a6adc8' },
+            label: { color: '#cdd6f4' },
             description: { color: '#6c7086' },
           }}
         />
@@ -234,12 +227,8 @@ export function ObjectiveModal({
               value={null}
               onChange={(value) => {
                 if (!value) return;
-                let newAction: ObjectiveAction;
-                if (value === 'moveNpc') {
-                  newAction = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
-                } else {
-                  newAction = { type: 'triggerObjective', objectiveId: '' };
-                }
+                // Currently only moveNpc is supported; other actions may be added later
+                const newAction: ObjectiveAction = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
                 handleChange('onComplete', [...(objective.onComplete || []), newAction]);
               }}
               styles={{
@@ -259,11 +248,8 @@ export function ObjectiveModal({
                     onChange={(value) => {
                       if (!value) return;
                       const updated = [...(objective.onComplete || [])];
-                      if (value === 'moveNpc') {
-                        updated[index] = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
-                      } else {
-                        updated[index] = { type: 'triggerObjective', objectiveId: '' };
-                      }
+                      // Currently only moveNpc is supported
+                      updated[index] = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
                       handleChange('onComplete', updated);
                     }}
                     styles={{
@@ -351,25 +337,6 @@ export function ObjectiveModal({
                   </>
                 )}
 
-                {action.type === 'triggerObjective' && (
-                  <Select
-                    size="xs"
-                    placeholder="Select objective..."
-                    data={allObjectives
-                      .filter((o) => o.id !== objective.id) // Can't trigger self
-                      .map((o) => ({ value: o.id, label: o.description || o.id }))}
-                    value={(action as TriggerObjectiveAction).objectiveId || null}
-                    onChange={(value) => {
-                      const updated = [...(objective.onComplete || [])];
-                      updated[index] = { ...action, objectiveId: value || '' } as TriggerObjectiveAction;
-                      handleChange('onComplete', updated);
-                    }}
-                    searchable
-                    styles={{
-                      input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4' },
-                    }}
-                  />
-                )}
               </Stack>
             </Paper>
           ))}

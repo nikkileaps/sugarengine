@@ -26,6 +26,9 @@ export class DialoguePanel {
   private onComplete: DialoguePanelCallback | null = null;
   private onCancel: DialogueCancelCallback | null = null;
 
+  // Timestamp when the dialogue panel became visible (for filtering stale key events)
+  private visibleSince = 0;
+
   // Speaker color palette (rotating through these)
   private speakerColors: Record<string, string> = {};
   private colorPalette = [
@@ -266,6 +269,12 @@ export class DialoguePanel {
   private handleKeyDown(e: KeyboardEvent): void {
     if (!this.isVisible()) return;
 
+    // Ignore key events that occurred before the dialogue became visible
+    // This prevents the interaction key (E) from immediately advancing the dialogue
+    if (e.timeStamp < this.visibleSince) {
+      return;
+    }
+
     // Escape to cancel/close dialogue
     if (e.code === 'Escape') {
       e.preventDefault();
@@ -315,6 +324,11 @@ export class DialoguePanel {
    * Show a dialogue node (adds to history)
    */
   show(node: DialogueNode, onComplete: DialoguePanelCallback, onCancel?: DialogueCancelCallback): void {
+    // Track when this node was shown (for filtering stale key events)
+    // This must be set EVERY time, not just when panel becomes visible,
+    // because cascading dialogues can start while panel is still open
+    this.visibleSince = performance.now();
+
     this.onComplete = onComplete;
     this.onCancel = onCancel ?? null;
     this.currentNext = node.next ?? [];

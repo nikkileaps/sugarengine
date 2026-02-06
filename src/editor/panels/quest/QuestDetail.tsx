@@ -17,6 +17,7 @@ import {
 } from '@mantine/core';
 import { QuestEntry, QuestStage, QuestObjective, validateQuest } from './QuestPanel';
 import { ObjectiveModal } from './ObjectiveModal';
+import { ObjectiveNodeCanvas } from './ObjectiveNodeCanvas';
 import { generateUUID } from '../../utils';
 
 interface QuestDetailProps {
@@ -30,6 +31,7 @@ interface QuestDetailProps {
 
 const OBJECTIVE_ICONS: Record<string, string> = {
   talk: '💬',
+  voiceover: '🎤',
   location: '📍',
   collect: '📦',
   trigger: '⚡',
@@ -49,6 +51,9 @@ export function QuestDetail({
     stageId: string;
     objectiveId: string;
   } | null>(null);
+
+  // Track which stage is expanded in graph view
+  const [graphStageId, setGraphStageId] = useState<string | null>(null);
 
   // Derive actual stage and objective from quest data
   const selectedStage = selectedObjectiveId
@@ -151,7 +156,29 @@ export function QuestDetail({
     setSelectedObjectiveId(null);
   };
 
+  const handleStageChange = (updatedStage: QuestStage) => {
+    const updatedStages = quest.stages.map((s) =>
+      s.id === updatedStage.id ? updatedStage : s
+    );
+    onChange({ ...quest, stages: updatedStages });
+  };
+
   const stageOrder = getStageOrder();
+
+  // If a stage is in graph view, show the graph editor
+  const graphStage = graphStageId ? quest.stages.find((s) => s.id === graphStageId) : null;
+  if (graphStage) {
+    return (
+      <ObjectiveNodeCanvas
+        stage={graphStage}
+        npcs={npcs}
+        items={items}
+        dialogues={dialogues}
+        onStageChange={handleStageChange}
+        onClose={() => setGraphStageId(null)}
+      />
+    );
+  }
   const warnings = validateQuest(quest);
 
   return (
@@ -265,13 +292,24 @@ export function QuestDetail({
                         background: isStart ? '#a6e3a122' : '#313244',
                       }}
                     >
-                      <Group gap="xs">
-                        {isStart && (
-                          <Text size="xs" c="green">▶</Text>
-                        )}
-                        <Text size="sm" fw={600} c={isStart ? 'green' : undefined}>
-                          Stage {i + 1}: {stage.id}
-                        </Text>
+                      <Group gap="xs" justify="space-between">
+                        <Group gap="xs">
+                          {isStart && (
+                            <Text size="xs" c="green">▶</Text>
+                          )}
+                          <Text size="sm" fw={600} c={isStart ? 'green' : undefined}>
+                            Stage {i + 1}: {stage.id}
+                          </Text>
+                        </Group>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="blue"
+                          onClick={() => setGraphStageId(stage.id)}
+                          styles={{ root: { padding: '2px 6px' } }}
+                        >
+                          Graph
+                        </Button>
                       </Group>
                     </Box>
 
@@ -426,9 +464,6 @@ export function QuestDetail({
         npcs={npcs}
         items={items}
         dialogues={dialogues}
-        allObjectives={quest.stages.flatMap((s) =>
-          s.objectives.map((o) => ({ id: o.id, description: o.description, stageId: s.id }))
-        )}
         onUpdate={(obj) => {
           if (selectedObjectiveId) {
             handleObjectiveUpdate(selectedObjectiveId.stageId, obj);

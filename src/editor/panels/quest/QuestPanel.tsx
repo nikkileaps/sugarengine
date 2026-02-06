@@ -17,7 +17,8 @@ import { useEditorStore } from '../../store';
 import { QuestDetail } from './QuestDetail';
 import { generateUUID, shortId } from '../../utils';
 
-export type ObjectiveActionType = 'moveNpc' | 'triggerObjective';
+// Note: Triggering other objectives is done via prerequisites (graph edges), not actions
+export type ObjectiveActionType = 'moveNpc';
 
 export interface MoveNpcAction {
   type: 'moveNpc';
@@ -25,12 +26,7 @@ export interface MoveNpcAction {
   position: { x: number; y: number; z: number };
 }
 
-export interface TriggerObjectiveAction {
-  type: 'triggerObjective';
-  objectiveId: string;
-}
-
-export type ObjectiveAction = MoveNpcAction | TriggerObjectiveAction;
+export type ObjectiveAction = MoveNpcAction;
 
 export interface QuestObjective {
   id: string;
@@ -42,8 +38,11 @@ export interface QuestObjective {
   completed?: boolean;
   dialogue?: string;
   completeOn?: 'dialogueEnd' | string;
-  trigger?: 'onStageStart';
+  // Auto-start: fires automatically when available (at stage load or when prerequisites complete)
+  autoStart?: boolean;
   onComplete?: ObjectiveAction[];
+  // Graph structure - objective IDs that must complete before this one activates
+  prerequisites?: string[];
 }
 
 export interface QuestStage {
@@ -52,6 +51,10 @@ export interface QuestStage {
   objectives: QuestObjective[];
   next?: string;
   onComplete?: string;
+  // Graph structure - explicit entry points (if omitted, objectives without prerequisites are entries)
+  startObjectives?: string[];
+  // Editor-only: node positions for visual graph editor
+  objectivePositions?: Record<string, { x: number; y: number }>;
 }
 
 export interface QuestReward {

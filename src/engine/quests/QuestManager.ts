@@ -5,7 +5,6 @@ import {
   QuestObjective,
   LoadedQuest,
   ObjectiveType,
-  ObjectiveTrigger,
   ObjectiveAction,
 } from './types';
 
@@ -35,6 +34,10 @@ export class QuestManager {
 
   // Tracked quest for HUD display
   private trackedQuestId: string | null = null;
+
+  // Track which objectives are "active" (prerequisites met, ready to complete)
+  // Map<questId, Set<objectiveId>>
+  private activeObjectives: Map<string, Set<string>> = new Map();
 
   // Event handlers
   private onQuestStart: QuestEventHandler | null = null;
@@ -79,8 +82,8 @@ export class QuestManager {
   }
 
   /**
-   * Set handler for auto-triggered objectives (e.g., onStageStart)
-   * The handler should execute the objective action (e.g., start dialogue)
+   * Set handler for auto-start objectives
+   * Called when an objective with autoStart=true becomes available
    */
   setOnObjectiveTrigger(handler: ObjectiveTriggerHandler): void {
     this.onObjectiveTrigger = handler;
@@ -144,9 +147,9 @@ export class QuestManager {
 
       this.activeQuests.set(questId, state);
 
-      // Fire any onStageStart triggered objectives
+      // Initialize active objectives tracking and activate entry objectives
       if (startStage) {
-        this.fireTriggeredObjectives(questId, startStage.objectives, 'onStageStart');
+        this.initializeStageObjectives(questId, startStage);
       }
 
       // Auto-track if no quest is tracked
@@ -231,7 +234,10 @@ export class QuestManager {
         if (objective.type !== type) continue;
         if (objective.target !== targetId) continue;
 
-        // Found matching objective - complete it
+        // Check if objective is active (prerequisites met)
+        if (!this.isObjectiveActive(questId, objId)) continue;
+
+        // Found matching active objective - complete it
         if (objective.count && objective.count > 1) {
           // Countable objective - increment
           this.incrementObjective(questId, objId);
@@ -274,7 +280,18 @@ export class QuestManager {
     const objective = state.objectiveProgress.get(objectiveId);
     if (!objective || objective.completed) return;
 
+    // Check if objective is active (prerequisites met)
+    // For backward compatibility, allow completion if activeObjectives not tracking this quest
+    const activeSet = this.activeObjectives.get(questId);
+    if (activeSet && !activeSet.has(objectiveId)) {
+      // Objective not yet active - prerequisites not met
+      return;
+    }
+
     objective.completed = true;
+
+    // Remove from active set
+    activeSet?.delete(objectiveId);
 
     // Fire event
     this.fireEvent('objective-complete', questId, objectiveId, objective);
@@ -286,8 +303,53 @@ export class QuestManager {
       }
     }
 
+    // Cascade: check if this completion unlocks other objectives
+    this.cascadeActivateObjectives(questId, objectiveId);
+
     // Check if stage is complete
     this.checkStageComplete(questId);
+  }
+
+  /**
+   * After completing an objective, check if it unlocks other objectives
+   */
+  private cascadeActivateObjectives(questId: string, completedObjectiveId: string): void {
+    const state = this.activeQuests.get(questId);
+    const loaded = this.loadedQuests.get(questId);
+    if (!state || !loaded) return;
+
+    const currentStage = loaded.stageMap.get(state.currentStageId);
+    if (!currentStage) return;
+
+    // Check each objective in the stage
+    for (const obj of currentStage.objectives) {
+      // Skip if no prerequisites or already completed/active
+      if (!obj.prerequisites || obj.prerequisites.length === 0) continue;
+      if (state.objectiveProgress.get(obj.id)?.completed) continue;
+      if (this.isObjectiveActive(questId, obj.id)) continue;
+
+      // Check if completed objective is a prerequisite
+      if (!obj.prerequisites.includes(completedObjectiveId)) continue;
+
+      // Check if ALL prerequisites are now satisfied
+      const allPrereqsMet = obj.prerequisites.every(prereqId => {
+        const prereqObj = state.objectiveProgress.get(prereqId);
+        return prereqObj?.completed === true;
+      });
+
+      if (allPrereqsMet) {
+        // Activate this objective
+        this.activateObjective(questId, obj.id);
+
+        // Fire auto-start if this objective has it enabled
+        if (obj.autoStart && this.onObjectiveTrigger) {
+          const progressObj = state.objectiveProgress.get(obj.id);
+          if (progressObj) {
+            this.onObjectiveTrigger(questId, progressObj);
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -344,23 +406,69 @@ export class QuestManager {
       });
     }
 
-    // Fire any onStageStart triggered objectives
-    this.fireTriggeredObjectives(questId, newStage.objectives, 'onStageStart');
+    // Initialize active objectives and activate entry objectives
+    this.initializeStageObjectives(questId, newStage);
   }
 
   /**
-   * Fire objectives that have the specified trigger condition
+   * Initialize objectives for a stage - activate entry objectives (no prerequisites)
    */
-  private fireTriggeredObjectives(
-    questId: string,
-    objectives: QuestObjective[],
-    trigger: ObjectiveTrigger
-  ): void {
-    for (const obj of objectives) {
-      if (obj.trigger === trigger && this.onObjectiveTrigger) {
+  private initializeStageObjectives(questId: string, stage: import('./types').QuestStage): void {
+    // Clear and create fresh active set for this quest
+    this.activeObjectives.set(questId, new Set());
+
+    // Determine entry objectives
+    const entryObjectiveIds = new Set<string>();
+
+    if (stage.startObjectives && stage.startObjectives.length > 0) {
+      // Use explicit start objectives if defined
+      for (const id of stage.startObjectives) {
+        entryObjectiveIds.add(id);
+      }
+    } else {
+      // Otherwise, objectives without prerequisites are entry points
+      for (const obj of stage.objectives) {
+        if (!obj.prerequisites || obj.prerequisites.length === 0) {
+          entryObjectiveIds.add(obj.id);
+        }
+      }
+    }
+
+    // Activate entry objectives
+    for (const objId of entryObjectiveIds) {
+      this.activateObjective(questId, objId);
+    }
+
+    // Fire auto-start objectives (entry objectives with autoStart=true)
+    const activeSet = this.activeObjectives.get(questId);
+    const autoStartObjectives = stage.objectives.filter(
+      obj => obj.autoStart && activeSet?.has(obj.id)
+    );
+    for (const obj of autoStartObjectives) {
+      if (this.onObjectiveTrigger) {
         this.onObjectiveTrigger(questId, obj);
       }
     }
+  }
+
+  /**
+   * Activate an objective (mark it as ready to be completed)
+   */
+  private activateObjective(questId: string, objectiveId: string): void {
+    let activeSet = this.activeObjectives.get(questId);
+    if (!activeSet) {
+      activeSet = new Set();
+      this.activeObjectives.set(questId, activeSet);
+    }
+    activeSet.add(objectiveId);
+  }
+
+  /**
+   * Check if an objective is active (prerequisites met)
+   */
+  isObjectiveActive(questId: string, objectiveId: string): boolean {
+    const activeSet = this.activeObjectives.get(questId);
+    return activeSet?.has(objectiveId) ?? false;
   }
 
   // ============================================
@@ -420,6 +528,7 @@ export class QuestManager {
 
   /**
    * Get current objective for tracked quest
+   * Returns the first active (prerequisites met) incomplete objective
    */
   getTrackedObjective(): QuestObjective | null {
     if (!this.trackedQuestId) return null;
@@ -427,9 +536,9 @@ export class QuestManager {
     const state = this.activeQuests.get(this.trackedQuestId);
     if (!state) return null;
 
-    // Find first incomplete objective
+    // Find first active incomplete objective
     for (const objective of state.objectiveProgress.values()) {
-      if (!objective.completed) {
+      if (!objective.completed && this.isObjectiveActive(this.trackedQuestId, objective.id)) {
         return objective;
       }
     }
@@ -449,6 +558,7 @@ export class QuestManager {
   /**
    * Find a quest objective that wants to talk to a specific NPC.
    * Returns the objective info if found, including which dialogue to use.
+   * Only returns objectives that are active (prerequisites met).
    */
   getQuestDialogueForNpc(npcId: string): {
     questId: string;
@@ -462,6 +572,9 @@ export class QuestManager {
         if (objective.type !== 'talk') continue;
         if (objective.target !== npcId) continue;
         if (!objective.dialogue) continue; // No specific dialogue = use NPC default
+
+        // Only return if objective is active (prerequisites met)
+        if (!this.isObjectiveActive(questId, objId)) continue;
 
         return {
           questId,
@@ -545,6 +658,7 @@ export class QuestManager {
   clearAllQuests(): void {
     this.activeQuests.clear();
     this.completedQuests.clear();
+    this.activeObjectives.clear();
     this.trackedQuestId = null;
   }
 

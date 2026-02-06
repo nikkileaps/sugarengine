@@ -6,15 +6,12 @@ export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'tri
 /**
  * A single quest objective
  */
-/**
- * Trigger conditions for auto-firing objectives
- */
-export type ObjectiveTrigger = 'onStageStart';
 
 /**
  * Actions that can be triggered when an objective completes
+ * Note: Triggering other objectives is handled via prerequisites/graph edges, not actions
  */
-export type ObjectiveActionType = 'moveNpc' | 'triggerObjective';
+export type ObjectiveActionType = 'moveNpc';
 
 export interface MoveNpcAction {
   type: 'moveNpc';
@@ -22,12 +19,7 @@ export interface MoveNpcAction {
   position: { x: number; y: number; z: number };
 }
 
-export interface TriggerObjectiveAction {
-  type: 'triggerObjective';
-  objectiveId: string;
-}
-
-export type ObjectiveAction = MoveNpcAction | TriggerObjectiveAction;
+export type ObjectiveAction = MoveNpcAction;
 
 export interface QuestObjective {
   id: string;
@@ -44,11 +36,15 @@ export interface QuestObjective {
   // When does the objective complete? 'dialogueEnd' (default) or specific node id
   completeOn?: 'dialogueEnd' | string;
 
-  // Auto-trigger condition - if set, objective fires automatically
-  trigger?: ObjectiveTrigger;
+  // Auto-start: if true, objective fires automatically when it becomes available
+  // (at stage load for entry nodes, or when prerequisites complete for others)
+  autoStart?: boolean;
 
   // Actions to perform when this objective completes
   onComplete?: ObjectiveAction[];
+
+  // Graph structure - objective IDs that must complete before this one activates
+  prerequisites?: string[];
 }
 
 /**
@@ -60,6 +56,11 @@ export interface QuestStage {
   objectives: QuestObjective[];
   onComplete?: string;    // Event to fire when stage completes
   next?: string;          // Next stage id (if undefined, quest ends)
+
+  // Graph structure - explicit entry points (if omitted, objectives without prerequisites are entries)
+  startObjectives?: string[];
+  // Editor-only: node positions for visual graph editor
+  objectivePositions?: Record<string, { x: number; y: number }>;
 }
 
 /**

@@ -452,7 +452,7 @@ export class Game {
       this.eventHandlers.onObjectiveProgress?.();
     });
 
-    // Handle auto-triggered objectives (e.g., onStageStart)
+    // Handle auto-start objectives
     this.quests.setOnObjectiveTrigger((questId, objective) => {
       // Handle 'talk' or 'voiceover' objectives - start the dialogue
       if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
@@ -467,33 +467,13 @@ export class Game {
       }
     });
 
-    // Handle objective completion actions (e.g., moveNpc, triggerObjective)
+    // Handle objective completion side effects (e.g., moveNpc)
+    // Note: Triggering other objectives is handled via prerequisites, not actions
     this.quests.setOnObjectiveAction((action) => {
       switch (action.type) {
         case 'moveNpc':
           this.engine.moveNPCTo(action.npcId, action.position)
             .catch((err) => console.error(`[Game] Failed to move NPC:`, err));
-          break;
-
-        case 'triggerObjective':
-          // Find the objective and fire it like an auto-triggered one
-          const objective = this.quests.getObjectiveById(action.objectiveId);
-          if (objective) {
-            const questId = this.quests.getQuestIdForObjective(action.objectiveId);
-            if (questId) {
-              // Handle 'talk' or 'voiceover' objectives - start the dialogue
-              if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
-                this.activeQuestDialogue = {
-                  questId,
-                  objectiveId: objective.id,
-                  completeOn: objective.completeOn ?? 'dialogueEnd',
-                };
-                this.dialogue.start(objective.dialogue);
-              }
-            }
-          } else {
-            console.warn(`[Game] Objective not found: ${action.objectiveId}`);
-          }
           break;
       }
     });
@@ -503,6 +483,9 @@ export class Game {
     // ========================================
     this.inventory.setOnItemAdded((event) => {
       this.eventHandlers.onItemAdded?.(event.itemName, event.quantity);
+
+      // Trigger collect objectives for this item
+      this.quests.triggerObjective('collect', event.itemId);
     });
 
     // ========================================
