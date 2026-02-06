@@ -7,14 +7,14 @@ import { NPCEntry } from './NPCPanel';
 
 interface NPCInspectorProps {
   npc: NPCEntry;
-  dialogues: { id: string; displayName?: string }[];
+  dialogues: { id: string; name?: string }[];
   onChange: (updated: NPCEntry) => void;
 }
 
 export function NPCInspector({ npc, dialogues, onChange }: NPCInspectorProps) {
   const dialogueOptions = dialogues.map((d) => ({
     value: d.id,
-    label: d.displayName || d.id,
+    label: d.name || d.id,
   }));
 
   const handleChange = (field: keyof NPCEntry, value: string | null) => {

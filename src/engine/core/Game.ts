@@ -555,6 +555,10 @@ export class Game {
 
     // Trigger zones → quest triggers + auto-save on transitions
     this.engine.onTriggerEnter((event, triggerId) => {
+      // Location objectives complete when player reaches a trigger zone
+      // The objective's target should match the trigger ID
+      this.quests.triggerObjective('location', triggerId);
+
       if (event.type === 'quest') {
         this.quests.triggerObjective('trigger', triggerId);
       }

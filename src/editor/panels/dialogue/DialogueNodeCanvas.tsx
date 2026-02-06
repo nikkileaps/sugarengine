@@ -57,7 +57,7 @@ export function DialogueNodeCanvas({
   const dialogueRef = useRef<DialogueEntry>(dialogue);
   const selectedNodeIdRef = useRef<string | null>(selectedNodeId);
 
-  const [displayName, setDisplayName] = useState(dialogue.displayName || '');
+  const [name, setName] = useState(dialogue.name || '');
   const [isPlaytesting, setIsPlaytesting] = useState(false);
   const [playtestNodeId, setPlaytestNodeId] = useState<string | null>(null);
   const playtestNodeIdRef = useRef<string | null>(null);
@@ -260,10 +260,10 @@ export function DialogueNodeCanvas({
           header.appendChild(icon);
         }
 
-        const name = document.createElement('span');
-        name.textContent = node.displayName || node.id;
-        name.style.cssText = `font-size: 12px; color: ${isStart ? '#a6e3a1' : '#cdd6f4'}; flex: 1;`;
-        header.appendChild(name);
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = node.name || node.id;
+        nameSpan.style.cssText = `font-size: 12px; color: ${isStart ? '#a6e3a1' : '#cdd6f4'}; flex: 1;`;
+        header.appendChild(nameSpan);
 
         if (node.speaker) {
           const speaker = document.createElement('span');
@@ -308,7 +308,7 @@ export function DialogueNodeCanvas({
             const nextNode = currentDialogue.nodes.find((n) => n.id === nextNodeId);
             const nextLabel = document.createElement('div');
             nextLabel.style.cssText = 'font-size: 10px; color: #6c7086;';
-            nextLabel.textContent = `→ ${nextNode?.displayName || nextNodeId}`;
+            nextLabel.textContent = `→ ${nextNode?.name || nextNodeId}`;
             footer.appendChild(nextLabel);
           }
 
@@ -343,15 +343,15 @@ export function DialogueNodeCanvas({
     updateCanvas();
   }, [playtestNodeId]);
 
-  // Update display name when dialogue changes
+  // Update name when dialogue changes
   useEffect(() => {
-    setDisplayName(dialogue.displayName || '');
-  }, [dialogue.displayName]);
+    setName(dialogue.name || '');
+  }, [dialogue.name]);
 
-  const handleDisplayNameBlur = () => {
+  const handleNameBlur = () => {
     const currentDialogue = dialogueRef.current;
-    if (displayName !== currentDialogue.displayName) {
-      onDialogueChange({ ...currentDialogue, displayName: displayName || undefined });
+    if (name !== currentDialogue.name) {
+      onDialogueChange({ ...currentDialogue, name: name || undefined });
     }
   };
 
@@ -368,9 +368,9 @@ export function DialogueNodeCanvas({
       >
         <Group gap="sm">
           <TextInput
-            value={displayName}
-            onChange={(e) => setDisplayName(e.currentTarget.value)}
-            onBlur={handleDisplayNameBlur}
+            value={name}
+            onChange={(e) => setName(e.currentTarget.value)}
+            onBlur={handleNameBlur}
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             placeholder={dialogue.id}
             size="xs"
@@ -495,7 +495,7 @@ function NodeEditorPanel({
 
   const nodeOptions = dialogueNodes
     .filter((n) => n.id !== node.id)
-    .map((n) => ({ value: n.id, label: n.displayName || n.id }));
+    .map((n) => ({ value: n.id, label: n.name || n.id }));
 
   const handleChange = <K extends keyof DialogueNode>(field: K, value: DialogueNode[K]) => {
     onChange({ ...node, [field]: value });
@@ -547,9 +547,9 @@ function NodeEditorPanel({
       <ScrollArea style={{ flex: 1 }}>
         <Stack gap="md" p="sm">
           <TextInput
-            label="Display Name"
-            value={node.displayName || ''}
-            onChange={(e) => handleChange('displayName', e.currentTarget.value || undefined)}
+            label="Name"
+            value={node.name || ''}
+            onChange={(e) => handleChange('name', e.currentTarget.value || undefined)}
             placeholder="Human-readable name"
           />
 

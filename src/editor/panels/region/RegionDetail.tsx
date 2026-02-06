@@ -150,7 +150,7 @@ export function RegionDetail({
       }
       case 'trigger': {
         const triggerData = spawn.data as TriggerDefinition;
-        return `Trigger: ${triggerData.event.type}`;
+        return triggerData.name || `Trigger: ${triggerData.event.type}`;
       }
     }
   };

@@ -466,6 +466,10 @@ export function Editor() {
   const itemList = items.map((i) => ({ id: i.id, name: i.name }));
   const inspectionList = inspections.map((i) => ({ id: i.id, displayName: i.title }));
   const episodeList = episodes.map((e) => ({ id: e.id, name: e.name }));
+  // Gather all triggers from all regions
+  const triggerList = regions.flatMap((r) =>
+    (r.triggers ?? []).map((t) => ({ id: t.id, name: t.name || t.id }))
+  );
 
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
@@ -481,7 +485,8 @@ export function Editor() {
             onQuestsChange={setQuests as any}
             npcs={npcList}
             items={itemList}
-            dialogues={dialogues.map((d) => ({ id: d.id, name: d.displayName || d.id }))}
+            dialogues={dialogues.map((d) => ({ id: d.id, name: d.name || d.id }))}
+            triggers={triggerList}
           >
             {(questPanel) => (
               <NPCPanel
@@ -505,7 +510,7 @@ export function Editor() {
                           <MagicPanel
                             spells={spells}
                             onSpellsChange={setSpells}
-                            dialogues={dialogues.map((d) => ({ id: d.id, name: d.displayName || d.id }))}
+                            dialogues={dialogues.map((d) => ({ id: d.id, name: d.name || d.id }))}
                           >
                             {(magicPanel) => (
                               <ResonancePanel

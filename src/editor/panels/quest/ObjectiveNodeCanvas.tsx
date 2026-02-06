@@ -56,6 +56,7 @@ interface ObjectiveNodeCanvasProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
+  triggers: { id: string; name: string }[];
   onStageChange: (stage: QuestStage) => void;
   onClose: () => void;
 }
@@ -65,6 +66,7 @@ export function ObjectiveNodeCanvas({
   npcs,
   items,
   dialogues,
+  triggers,
   onStageChange,
   onClose,
 }: ObjectiveNodeCanvasProps) {
@@ -515,6 +517,7 @@ export function ObjectiveNodeCanvas({
               npcs={npcs}
               items={items}
               dialogues={dialogues}
+              triggers={triggers}
               onChange={handleObjectiveChange}
               onDelete={() => handleDeleteObjective(selectedObjective.id)}
               onRemovePrerequisite={(prereqId) => handleRemovePrerequisite(selectedObjective.id, prereqId)}
@@ -533,6 +536,7 @@ interface ObjectiveEditorPanelProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
+  triggers: { id: string; name: string }[];
   onChange: (objective: QuestObjective) => void;
   onDelete: () => void;
   onRemovePrerequisite: (prereqId: string) => void;
@@ -545,6 +549,7 @@ function ObjectiveEditorPanel({
   npcs,
   items,
   dialogues,
+  triggers,
   onChange,
   onDelete,
   onRemovePrerequisite,
@@ -569,6 +574,8 @@ function ObjectiveEditorPanel({
     ? npcs.map((n) => ({ value: n.id, label: n.name }))
     : objective.type === 'collect'
     ? items.map((i) => ({ value: i.id, label: i.name }))
+    : objective.type === 'location' || objective.type === 'trigger'
+    ? triggers.map((t) => ({ value: t.id, label: t.name }))
     : [];
 
   const dialogueOptions = dialogues.map((d) => ({ value: d.id, label: d.name }));

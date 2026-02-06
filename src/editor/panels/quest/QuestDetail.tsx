@@ -29,6 +29,7 @@ interface QuestDetailProps {
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
+  triggers: { id: string; name: string }[];
   onChange: (quest: QuestEntry) => void;
   onDelete: () => void;
 }
@@ -226,6 +227,7 @@ export function QuestDetail({
   npcs,
   items,
   dialogues,
+  triggers,
   onChange,
   onDelete,
 }: QuestDetailProps) {
@@ -329,6 +331,7 @@ export function QuestDetail({
         npcs={npcs}
         items={items}
         dialogues={dialogues}
+        triggers={triggers}
         onStageChange={handleStageChange}
         onClose={() => setGraphStageId(null)}
       />

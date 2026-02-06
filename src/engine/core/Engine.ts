@@ -68,6 +68,8 @@ export class SugarEngine {
   private currentRegion: LoadedRegion | null = null;
   private regionLights: THREE.Light[] = [];
   private triggerEntities: number[] = [];
+  private triggerDebugMeshes: THREE.Mesh[] = [];
+  private showTriggerDebug = true; // Show yellow debug spheres for trigger zones
   private npcEntities: number[] = [];
   private pickupEntities: number[] = [];
   private inspectableEntities: number[] = [];
@@ -260,6 +262,14 @@ export class SugarEngine {
     }
     this.triggerEntities = [];
 
+    // Remove trigger debug meshes
+    for (const mesh of this.triggerDebugMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.triggerDebugMeshes = [];
+
     // Remove old NPC entities (and their meshes and labels)
     for (const entityId of this.npcEntities) {
       const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
@@ -339,6 +349,11 @@ export class SugarEngine {
         triggerDef.event
       ));
       this.triggerEntities.push(entity);
+
+      // Debug visualization: yellow semi-transparent sphere at trigger center
+      if (this.showTriggerDebug) {
+        this.createTriggerDebugMesh(triggerDef.bounds.min, triggerDef.bounds.max);
+      }
     }
 
     // Create NPC entities from region data
@@ -647,6 +662,11 @@ export class SugarEngine {
         triggerDef.event
       ));
       state.triggerEntities.push(entity);
+
+      // Debug visualization
+      if (this.showTriggerDebug) {
+        this.createTriggerDebugMesh(triggerDef.bounds.min, triggerDef.bounds.max, worldOffset);
+      }
     }
 
     // Create NPC entities (offset by world position)
@@ -946,6 +966,37 @@ export class SugarEngine {
     const pos = this.world.getComponent<Position>(this.playerEntity, Position);
     if (!pos) return null;
     return { x: pos.x, y: pos.y, z: pos.z };
+  }
+
+  /**
+   * Create a debug visualization mesh for a trigger zone
+   */
+  private createTriggerDebugMesh(min: [number, number, number], max: [number, number, number], offset = { x: 0, y: 0, z: 0 }): void {
+    const centerX = (min[0] + max[0]) / 2 + offset.x;
+    const centerY = (min[1] + max[1]) / 2 + offset.y;
+    const centerZ = (min[2] + max[2]) / 2 + offset.z;
+
+    // Use a sphere at the center of the trigger zone
+    const radius = Math.max(
+      (max[0] - min[0]) / 2,
+      (max[1] - min[1]) / 2,
+      (max[2] - min[2]) / 2
+    ) * 0.3; // Scale down to be less intrusive
+
+    const geometry = new THREE.SphereGeometry(Math.max(radius, 0.5), 16, 16);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xffff00, // Yellow
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(centerX, centerY, centerZ);
+    mesh.renderOrder = 999; // Render on top
+
+    this.scene.add(mesh);
+    this.triggerDebugMeshes.push(mesh);
   }
 
   private applyRegionLighting(): void {

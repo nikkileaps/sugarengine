@@ -34,7 +34,7 @@ export function DialogueInspector({
 
   const nodeOptions = dialogueNodes
     .filter((n) => n.id !== node.id)
-    .map((n) => ({ value: n.id, label: n.displayName || n.id }));
+    .map((n) => ({ value: n.id, label: n.name || n.id }));
 
   const handleChange = <K extends keyof DialogueNode>(field: K, value: DialogueNode[K]) => {
     onChange({ ...node, [field]: value });
@@ -77,9 +77,9 @@ export function DialogueInspector({
       />
 
       <TextInput
-        label="Display Name"
-        value={node.displayName || ''}
-        onChange={(e) => handleChange('displayName', e.currentTarget.value || undefined)}
+        label="Name"
+        value={node.name || ''}
+        onChange={(e) => handleChange('name', e.currentTarget.value || undefined)}
         placeholder="Human-readable name"
       />
 

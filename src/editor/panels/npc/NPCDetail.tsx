@@ -20,7 +20,7 @@ import { NPCEntry } from './NPCPanel';
 
 interface NPCDetailProps {
   npc: NPCEntry;
-  dialogues: { id: string; displayName?: string; nodes?: { speaker?: string }[] }[];
+  dialogues: { id: string; name?: string; nodes?: { speaker?: string }[] }[];
   quests: { id: string; name: string; stages: { id: string; description: string; objectives: { type: string; target: string; description: string }[] }[] }[];
   onChange: (updated: NPCEntry) => void;
   onDelete: () => void;
@@ -41,7 +41,7 @@ export function NPCDetail({ npc, dialogues, quests, onChange, onDelete }: NPCDet
 
   const dialogueOptions = dialogues.map((d) => ({
     value: d.id,
-    label: d.displayName || d.id,
+    label: d.name || d.id,
   }));
 
   const handleChange = (field: keyof NPCEntry, value: string | null) => {
@@ -206,7 +206,7 @@ export function NPCDetail({ npc, dialogues, quests, onChange, onDelete }: NPCDet
                         radius="sm"
                         style={{ background: '#1e1e2e' }}
                       >
-                        <Text size="sm">{d.displayName || d.id}</Text>
+                        <Text size="sm">{d.name || d.id}</Text>
                       </Paper>
                     ))}
                   </Stack>

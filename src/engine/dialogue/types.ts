@@ -52,7 +52,7 @@ export interface DialogueNext {
  */
 export interface DialogueNode {
   id: string;
-  displayName?: string;     // Human-readable name shown in UI
+  name?: string;            // Human-readable name shown in UI
   speaker?: string;         // Who's talking (NPC name, "Player", etc.)
   text: string;             // The dialogue text
   next?: DialogueNext[];    // Connections to next node(s). Empty/undefined = end of dialogue
@@ -73,7 +73,7 @@ export interface DialogueChoice {
  */
 export interface DialogueTree {
   id: string;               // Dialogue ID (UUID for uniqueness)
-  displayName?: string;     // Human-readable name shown in UI
+  name?: string;            // Human-readable name shown in UI
   startNode: string;        // ID of first node
   nodes: DialogueNode[];    // All nodes in this dialogue
   episodeId?: string;       // UUID of the episode this dialogue belongs to

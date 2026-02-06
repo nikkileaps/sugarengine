@@ -267,7 +267,7 @@ export function validateForPublish(project: PublishableProject): string[] {
     if (dialogue.episodeId) {
       const episodeExists = project.episodes.some(e => e.id === dialogue.episodeId);
       if (!episodeExists) {
-        errors.push(`Dialogue "${dialogue.displayName || dialogue.id}" references non-existent episode`);
+        errors.push(`Dialogue "${dialogue.name || dialogue.id}" references non-existent episode`);
       }
     }
   }

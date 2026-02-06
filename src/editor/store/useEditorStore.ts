@@ -26,7 +26,7 @@ export interface NPCData {
 
 export interface DialogueData {
   id: string;
-  displayName?: string;
+  name?: string;
   nodes?: { speaker?: string }[];
 }
 
@@ -111,7 +111,7 @@ export interface RegionData {
   pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[];
   inspectables?: { id: string; position: { x: number; y: number; z: number }; inspectionId: string; promptText?: string }[];
   resonancePoints?: ResonancePointDefinition[];
-  triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[];
+  triggers?: { id: string; name?: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[];
   availability?: { fromEpisode?: string; untilEpisode?: string };
   environmentAnimations?: EnvironmentAnimationEntry[];
 }

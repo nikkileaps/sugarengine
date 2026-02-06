@@ -243,6 +243,13 @@ export function SpawnInspector({
         {spawn.type === 'trigger' && (
           <Stack gap="xs">
             <TextInput
+              label="Name"
+              placeholder="e.g., Town Square"
+              value={(spawn.data as TriggerDefinition).name || ''}
+              onChange={(e) => updateData({ name: e.currentTarget.value || undefined })}
+              size="sm"
+            />
+            <TextInput
               label="Event Type"
               value={(spawn.data as TriggerDefinition).event.type}
               onChange={(e) => updateData({ event: { ...(spawn.data as TriggerDefinition).event, type: e.currentTarget.value } })}

@@ -27,7 +27,7 @@ export interface DialogueNext {
 
 export interface DialogueNode {
   id: string;
-  displayName?: string;
+  name?: string;
   speaker?: string;
   text: string;
   next?: DialogueNext[];
@@ -36,7 +36,7 @@ export interface DialogueNode {
 
 export interface DialogueEntry {
   id: string;
-  displayName?: string;
+  name?: string;
   startNode: string;
   nodes: DialogueNode[];
 }
@@ -69,7 +69,7 @@ export function DialoguePanel({
 
   const filteredDialogues = dialogues.filter(
     (dialogue) =>
-      (dialogue.displayName || dialogue.id).toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (dialogue.name || dialogue.id).toLowerCase().includes(searchQuery.toLowerCase()) ||
       dialogue.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -78,12 +78,12 @@ export function DialoguePanel({
     const startNodeId = generateUUID();
     const newDialogue: DialogueEntry = {
       id,
-      displayName: 'New Dialogue',
+      name: 'New Dialogue',
       startNode: startNodeId,
       nodes: [
         {
           id: startNodeId,
-          displayName: 'Start',
+          name: 'Start',
           text: 'Hello!',
           speaker: npcs[0]?.id,
         },
@@ -129,7 +129,7 @@ export function DialoguePanel({
     const newId = generateUUID();
     const newNode: DialogueNode = {
       id: newId,
-      displayName: `Node ${dialogue.nodes.length + 1}`,
+      name: `Node ${dialogue.nodes.length + 1}`,
       text: 'New dialogue...',
     };
     const updatedDialogue = {
@@ -209,7 +209,7 @@ export function DialoguePanel({
                 <Text size="lg">💬</Text>
                 <Stack gap={0} style={{ flex: 1 }}>
                   <Text size="sm" fw={500}>
-                    {dialogue.displayName || dialogue.id}
+                    {dialogue.name || dialogue.id}
                   </Text>
                   <Text size="xs" c="dimmed">
                     {dialogue.nodes.length} nodes · {shortId(dialogue.id)}

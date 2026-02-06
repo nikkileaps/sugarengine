@@ -51,6 +51,7 @@ export interface ResonancePointDefinition {
 
 export interface TriggerDefinition {
   id: string;
+  name?: string;
   type: 'box';
   bounds: {
     min: [number, number, number];

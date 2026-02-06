@@ -35,7 +35,7 @@ export interface NPCPanelResult {
 interface NPCPanelProps {
   npcs: NPCEntry[];
   onNPCsChange: (npcs: NPCEntry[]) => void;
-  dialogues?: { id: string; displayName?: string; nodes?: { speaker?: string }[] }[];
+  dialogues?: { id: string; name?: string; nodes?: { speaker?: string }[] }[];
   quests?: { id: string; name: string; stages: { id: string; description: string; objectives: { type: string; target: string; description: string }[] }[] }[];
   children: (result: NPCPanelResult) => ReactNode;
 }

@@ -113,6 +113,7 @@ interface QuestPanelProps {
   npcs?: { id: string; name: string }[];
   items?: { id: string; name: string }[];
   dialogues?: { id: string; name: string }[];
+  triggers?: { id: string; name: string }[];
   children: (result: QuestPanelResult) => ReactNode;
 }
 
@@ -122,6 +123,7 @@ export function QuestPanel({
   npcs = [],
   items = [],
   dialogues = [],
+  triggers = [],
   children,
 }: QuestPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -244,6 +246,7 @@ export function QuestPanel({
         npcs={npcs}
         items={items}
         dialogues={dialogues}
+        triggers={triggers}
         onChange={handleUpdate}
         onDelete={() => handleDelete(selectedQuest.id)}
       />
