@@ -356,11 +356,11 @@ export class Game {
     // Dialogue System
     // ========================================
     this.dialogue.setOnStart(() => {
-      this.engine.setMovementEnabled(false);
+      this.engine.addMovementLock('dialogue');
     });
 
     this.dialogue.setOnEnd(() => {
-      this.engine.setMovementEnabled(true);
+      this.engine.removeMovementLock('dialogue');
       this.engine.consumeInteract();
 
       // If this was a quest dialogue that completes on dialogue end, complete the objective
@@ -422,11 +422,11 @@ export class Game {
     // Inspection System
     // ========================================
     this.inspection.setOnStart(() => {
-      this.engine.setMovementEnabled(false);
+      this.engine.addMovementLock('inspection');
     });
 
     this.inspection.setOnEnd(() => {
-      this.engine.setMovementEnabled(true);
+      this.engine.removeMovementLock('inspection');
       this.engine.consumeInteract();
     });
 
@@ -800,8 +800,7 @@ export class Game {
       return;
     }
 
-    // Disable movement during mini-game
-    this.engine.setMovementEnabled(false);
+    this.engine.addMovementLock('resonance');
 
     // Start the resonance game UI
     this.resonanceGameStartHandler(config);
@@ -811,8 +810,7 @@ export class Game {
    * Called by preview.ts when resonance game completes
    */
   handleResonanceGameComplete(success: boolean, resonanceGained: number): void {
-    // Re-enable movement
-    this.engine.setMovementEnabled(true);
+    this.engine.removeMovementLock('resonance');
     this.engine.consumeInteract();
 
     // Add resonance if successful

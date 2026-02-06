@@ -8,7 +8,9 @@ export class InputManager {
   private keysJustPressed: Set<string> = new Set();
   private gamepadIndex: number | null = null;
   private prevGamepadButtons: boolean[] = [];
-  private _movementEnabled = true;
+
+  // Movement lock system - movement is allowed only when no locks exist
+  private movementLocks = new Set<string>();
 
   constructor() {
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
@@ -39,8 +41,8 @@ export class InputManager {
   }
 
   getInput(): InputState {
-    // Return no movement if disabled
-    if (!this._movementEnabled) {
+    // Return no movement if any locks are active
+    if (this.movementLocks.size > 0) {
       return { moveX: 0, moveY: 0 };
     }
 
@@ -171,13 +173,25 @@ export class InputManager {
   }
 
   /**
-   * Enable or disable movement input
+   * Add a movement lock. Movement is disabled while any locks exist.
+   * @param reason - Identifier for the lock (e.g., 'dialogue', 'pause', 'inventory')
    */
-  set movementEnabled(enabled: boolean) {
-    this._movementEnabled = enabled;
+  addMovementLock(reason: string): void {
+    this.movementLocks.add(reason);
   }
 
-  get movementEnabled(): boolean {
-    return this._movementEnabled;
+  /**
+   * Remove a movement lock. Movement re-enables when all locks are removed.
+   * @param reason - Identifier for the lock to remove
+   */
+  removeMovementLock(reason: string): void {
+    this.movementLocks.delete(reason);
+  }
+
+  /**
+   * Check if movement is currently allowed (no locks active)
+   */
+  isMovementAllowed(): boolean {
+    return this.movementLocks.size === 0;
   }
 }

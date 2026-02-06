@@ -132,10 +132,10 @@ async function runGame(gameData: GameData) {
   let spellMenuWasPressed = false;
   let escapeWasPressed = false;
 
-  questJournal.setOnClose(() => game.engine.setMovementEnabled(true));
-  inventoryUI.setOnClose(() => game.engine.setMovementEnabled(true));
-  giftUI.setOnClose(() => game.engine.setMovementEnabled(true));
-  spellMenuUI.setOnClose(() => game.engine.setMovementEnabled(true));
+  questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
+  inventoryUI.setOnClose(() => game.engine.removeMovementLock('inventory'));
+  giftUI.setOnClose(() => game.engine.removeMovementLock('gift'));
+  spellMenuUI.setOnClose(() => game.engine.removeMovementLock('spellMenu'));
 
   const isUIBlocking = () =>
     game.isUIBlocking() ||
@@ -193,7 +193,7 @@ async function runGame(gameData: GameData) {
           questJournal.hide();
         } else {
           questJournal.show();
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('journal');
         }
       }
       journalWasPressed = journalPressed;
@@ -205,7 +205,7 @@ async function runGame(gameData: GameData) {
           inventoryUI.hide();
         } else {
           inventoryUI.show();
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('inventory');
         }
       }
       inventoryWasPressed = inventoryPressed;
@@ -217,7 +217,7 @@ async function runGame(gameData: GameData) {
           giftUI.hide();
         } else if (game.getNearbyNpcId()) {
           giftUI.show(game.getNearbyNpcId()!);
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('gift');
         }
       }
       giftWasPressed = giftPressed;
@@ -229,7 +229,7 @@ async function runGame(gameData: GameData) {
           spellMenuUI.hide();
         } else {
           spellMenuUI.show();
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('spellMenu');
         }
       }
       spellMenuWasPressed = spellMenuPressed;

@@ -190,11 +190,11 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   let spellMenuWasPressed = false;
   let escapeWasPressed = false;
 
-  // Disable movement when UIs are open
-  questJournal.setOnClose(() => game.engine.setMovementEnabled(true));
-  inventoryUI.setOnClose(() => game.engine.setMovementEnabled(true));
-  giftUI.setOnClose(() => game.engine.setMovementEnabled(true));
-  spellMenuUI.setOnClose(() => game.engine.setMovementEnabled(true));
+  // Remove movement locks when UIs close
+  questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
+  inventoryUI.setOnClose(() => game.engine.removeMovementLock('inventory'));
+  giftUI.setOnClose(() => game.engine.removeMovementLock('gift'));
+  spellMenuUI.setOnClose(() => game.engine.removeMovementLock('spellMenu'));
 
   // Helper to check if any UI is blocking
   const isUIBlocking = () =>
@@ -255,7 +255,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
           questJournal.hide();
         } else {
           questJournal.show();
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('journal');
         }
       }
       journalWasPressed = journalPressed;
@@ -267,7 +267,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
           inventoryUI.hide();
         } else {
           inventoryUI.show();
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('inventory');
         }
       }
       inventoryWasPressed = inventoryPressed;
@@ -279,7 +279,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
           giftUI.hide();
         } else if (game.getNearbyNpcId()) {
           giftUI.show(game.getNearbyNpcId()!);
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('gift');
         }
       }
       giftWasPressed = giftPressed;
@@ -291,7 +291,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
           spellMenuUI.hide();
         } else {
           spellMenuUI.show();
-          game.engine.setMovementEnabled(false);
+          game.engine.addMovementLock('spellMenu');
         }
       }
       spellMenuWasPressed = spellMenuPressed;

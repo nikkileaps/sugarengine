@@ -1261,7 +1261,7 @@ export class SugarEngine {
    */
   pause(): void {
     this.isPaused = true;
-    this.setMovementEnabled(false);
+    this.addMovementLock('pause');
   }
 
   /**
@@ -1269,7 +1269,7 @@ export class SugarEngine {
    */
   resume(): void {
     this.isPaused = false;
-    this.setMovementEnabled(true);
+    this.removeMovementLock('pause');
   }
 
   /**
@@ -1307,8 +1307,25 @@ export class SugarEngine {
     return this.interactionSystem.getNearestInteractable();
   }
 
-  setMovementEnabled(enabled: boolean): void {
-    this.input.movementEnabled = enabled;
+  /**
+   * Add a movement lock. Movement is disabled while any locks exist.
+   */
+  addMovementLock(reason: string): void {
+    this.input.addMovementLock(reason);
+  }
+
+  /**
+   * Remove a movement lock. Movement re-enables when all locks are removed.
+   */
+  removeMovementLock(reason: string): void {
+    this.input.removeMovementLock(reason);
+  }
+
+  /**
+   * Check if movement is currently allowed
+   */
+  isMovementAllowed(): boolean {
+    return this.input.isMovementAllowed();
   }
 
   /**
