@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted (Implemented, phase 5 polish pending)
 
 ## Context
 
