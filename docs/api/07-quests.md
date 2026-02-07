@@ -392,6 +392,25 @@ interface QuestReward {
 }
 ```
 
+## Condition Nodes and World State
+
+Beat graph stages can include **condition nodes** (`nodeType: 'condition'`) that gate flow until a condition is met. These conditions are evaluated by the [World State System](./014-world-state.md).
+
+Condition expressions use `ConditionExpression`:
+
+```typescript
+interface ConditionExpression {
+  operator: 'hasItem' | 'hasFlag' | 'questComplete' | 'stageComplete' | 'custom';
+  operand: string;        // Item ID, flag name, quest ID, "questId:stageId"
+  value?: unknown;        // For flag value comparisons
+  negate?: boolean;       // Invert the result
+}
+```
+
+When a condition node activates, it checks immediately. If not yet satisfied, it registers for re-evaluation. The world state notifier automatically re-evaluates all pending conditions whenever flags, inventory, or quest state changes - no manual wiring needed.
+
+See [World State - Adapters](./014-world-state.md#adapters) for how `ConditionExpression` maps to the unified `WorldStateCondition` type.
+
 ## Integration Example
 
 ```typescript

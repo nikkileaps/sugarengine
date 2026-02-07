@@ -80,6 +80,9 @@ export class QuestManager {
   private onNarrativeTrigger: NarrativeTriggerHandler | null = null;
   private conditionChecker: ConditionCheckHandler | null = null;
 
+  // State change callback (ADR-018) - notifies world state system
+  private onStateChange: (() => void) | null = null;
+
   constructor() {
     this.loader = new QuestLoader();
   }
@@ -145,6 +148,15 @@ export class QuestManager {
    */
   setConditionChecker(handler: ConditionCheckHandler): void {
     this.conditionChecker = handler;
+  }
+
+  /**
+   * Set callback for quest state changes (ADR-018)
+   * Called when quests complete or stages advance, so the world state
+   * notifier can re-evaluate conditions.
+   */
+  setOnStateChange(handler: () => void): void {
+    this.onStateChange = handler;
   }
 
   // ============================================
@@ -238,6 +250,7 @@ export class QuestManager {
     }
 
     this.fireEvent('quest-complete', questId);
+    this.onStateChange?.();
   }
 
   /**
@@ -440,6 +453,7 @@ export class QuestManager {
 
     // Stage complete!
     this.fireEvent('stage-complete', questId, state.currentStageId);
+    this.onStateChange?.();
 
     // Move to next stage or complete quest
     if (currentStage.next) {
@@ -643,46 +657,16 @@ export class QuestManager {
   }
 
   /**
-   * Check a condition expression against game state
+   * Check a condition expression against game state (ADR-018)
+   * Delegates entirely to the condition checker set by Game.ts.
+   * The checker handles negation via the adapter layer.
    */
   private checkCondition(condition: ConditionExpression): boolean {
-    if (this.conditionChecker) {
-      const result = this.conditionChecker(condition);
-      return condition.negate ? !result : result;
+    if (!this.conditionChecker) {
+      console.warn('[QuestManager] No condition checker set');
+      return false;
     }
-
-    // Fallback: built-in checks for quest state
-    let result = false;
-    switch (condition.operator) {
-      case 'questComplete':
-        result = this.completedQuests.has(condition.operand);
-        break;
-      case 'stageComplete': {
-        // operand format: "questId:stageId"
-        const parts = condition.operand.split(':');
-        const scQuestId = parts[0];
-        const scStageId = parts[1];
-        if (scQuestId && scStageId) {
-          const questState = this.activeQuests.get(scQuestId);
-          if (questState) {
-            // Stage is complete if we've moved past it
-            const loaded = this.loadedQuests.get(scQuestId);
-            if (loaded) {
-              const stageIndex = loaded.definition.stages.findIndex(s => s.id === scStageId);
-              const currentIndex = loaded.definition.stages.findIndex(s => s.id === questState.currentStageId);
-              result = currentIndex > stageIndex;
-            }
-          }
-        }
-        break;
-      }
-      default:
-        // hasItem, hasFlag, custom - require conditionChecker from Game.ts
-        console.warn(`[QuestManager] No condition checker for operator: ${condition.operator}`);
-        result = false;
-    }
-
-    return condition.negate ? !result : result;
+    return this.conditionChecker(condition);
   }
 
   /**

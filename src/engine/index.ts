@@ -159,5 +159,9 @@ export type { BehaviorMode } from './components/NPCBehavior';
 export { BehaviorTreeSystem } from './systems/BehaviorTreeSystem';
 export type { BTConditionChecker, BTActionHandler } from './systems/BehaviorTreeSystem';
 
+// World State (ADR-018)
+export { WorldStateEvaluator, WorldStateNotifier, FlagsManager } from './state';
+export type { WorldStateCondition, StateChange, StateChangeListener, StateNamespace } from './state';
+
 // Debug
 export { FreeCameraController } from './debug';

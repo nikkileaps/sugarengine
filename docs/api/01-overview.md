@@ -22,6 +22,8 @@ The engine uses an **Entity-Component-System (ECS)** architecture for maximum fl
 | `InspectionManager` | Examine world objects (newspapers, signs, lore) |
 | `SaveManager` | Save/load with multiple storage backends |
 | `SceneManager` | Title screen, pause menu, save/load screens |
+| `WorldStateEvaluator` | Unified condition evaluation across all systems |
+| `FlagsManager` | Typed key-value flags with change notification |
 
 ## Quick Start
 
@@ -124,3 +126,5 @@ The save system automatically detects the platform and uses the appropriate stor
 - [Scene Management](./10-scenes.md) - UI screens
 - [Data Formats](./11-data-formats.md) - JSON file formats
 - [Inspection System](./12-inspection.md) - Examining world objects
+- [NPC System](./013-npc.md) - NPC behavior trees and beat graph actions
+- [World State](./014-world-state.md) - Unified conditions, flags, and state notifications

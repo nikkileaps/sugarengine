@@ -11,8 +11,9 @@ import { AudioManager, AudioConfig, AmbientController } from '../audio';
 import { CasterManager, SpellLoader, SpellDefinition, SpellResult, SpellEffect, PlayerCasterConfig } from '../caster';
 import { CasterSystem } from '../systems/CasterSystem';
 import { Caster } from '../components/Caster';
-import { ObjectiveType, BeatAction, ConditionExpression } from '../quests/types';
+import { ObjectiveType, BeatAction } from '../quests/types';
 import type { BTAction, BTCondition } from '../behavior';
+import { FlagsManager, WorldStateEvaluator, WorldStateNotifier, conditionExpressionToWorldState, btConditionToWorldState } from '../state';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
@@ -87,8 +88,10 @@ export class Game {
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
   private fadeOverlay: FadeOverlay;
 
-  // Beat flags (ADR-016) - temporary key-value store until ADR-018 WorldState
-  private beatFlags: Map<string, unknown> = new Map();
+  // World state (ADR-018)
+  readonly flags: FlagsManager;
+  private worldStateEvaluator!: WorldStateEvaluator;
+  private worldStateNotifier: WorldStateNotifier;
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -137,6 +140,10 @@ export class Game {
     // Connect caster manager to the ECS world
     this.caster.setWorld(this.engine.world);
 
+    // World state (ADR-018)
+    this.flags = new FlagsManager();
+    this.worldStateNotifier = new WorldStateNotifier();
+
     // Create episode manager
     this.episodes = new EpisodeManager({
       developmentMode: config.mode === 'development',
@@ -151,6 +158,20 @@ export class Game {
    * Initialize all systems (call before run)
    */
   async init(): Promise<void> {
+    // Create world state evaluator now that all managers exist (ADR-018)
+    this.worldStateEvaluator = new WorldStateEvaluator(
+      this.quests, this.inventory, this.caster, this.flags,
+    );
+
+    // Wire flags → notifier → re-evaluate conditions
+    this.flags.setOnChange((change) => this.worldStateNotifier.notify(change));
+    this.worldStateNotifier.subscribe(() => this.quests.evaluateConditions());
+
+    // Wire quest state changes → notifier
+    this.quests.setOnStateChange(() => {
+      this.worldStateNotifier.notify({ namespace: 'quest', key: 'stateChange' });
+    });
+
     await this.inventory.init();
     await this.saveManager.init();
 
@@ -529,16 +550,16 @@ export class Game {
       }
     });
 
-    // Condition checker (ADR-016) - evaluate conditions against game state
-    this.quests.setConditionChecker((condition: ConditionExpression) => {
-      return this.evaluateCondition(condition);
+    // Condition checker (ADR-016 → ADR-018) - evaluate conditions via world state
+    this.quests.setConditionChecker((condition) => {
+      return this.worldStateEvaluator.check(conditionExpressionToWorldState(condition));
     });
 
     // ========================================
     // Behavior Tree System (ADR-017)
     // ========================================
-    this.engine.setBTConditionChecker((npcId: string, condition: BTCondition) => {
-      return this.evaluateBTCondition(npcId, condition);
+    this.engine.setBTConditionChecker((_npcId: string, condition: BTCondition) => {
+      return this.worldStateEvaluator.check(btConditionToWorldState(condition));
     });
 
     // Action handler for continuous behavior trees
@@ -555,13 +576,13 @@ export class Game {
       // Trigger collect objectives for this item
       this.quests.triggerObjective('collect', event.itemId);
 
-      // Re-evaluate condition nodes (ADR-016) - inventory state changed
-      this.quests.evaluateConditions();
+      // Notify world state (ADR-018) - triggers condition re-evaluation
+      this.worldStateNotifier.notify({ namespace: 'inventory', key: event.itemId, newValue: event.quantity });
     });
 
-    this.inventory.setOnItemRemoved(() => {
-      // Re-evaluate condition nodes (ADR-016) - inventory state changed
-      this.quests.evaluateConditions();
+    this.inventory.setOnItemRemoved((event) => {
+      // Notify world state (ADR-018) - triggers condition re-evaluation
+      this.worldStateNotifier.notify({ namespace: 'inventory', key: event.itemId, newValue: 0 });
     });
 
     // ========================================
@@ -692,7 +713,7 @@ export class Game {
       // Reset all state
       this.inventory.clear();
       this.quests.clearAllQuests();
-      this.beatFlags.clear();
+      this.flags.clear();
       this.saveManager.clearCollectedPickups();
 
       // Load starting region (geometry.path format, e.g., 'cafe-nollie')
@@ -1063,12 +1084,8 @@ export class Game {
   private executeBeatAction(action: BeatAction): void {
     switch (action.type) {
       case 'setFlag':
-        // Flags system not yet implemented (ADR-018) - store in a simple map for now
-        // TODO: Replace with WorldState flags namespace when ADR-018 is implemented
         if (action.target) {
-          this.beatFlags.set(action.target, action.value ?? true);
-          // Re-evaluate conditions since flags changed
-          this.quests.evaluateConditions();
+          this.flags.set(action.target, action.value ?? true);
         }
         break;
 
@@ -1142,86 +1159,6 @@ export class Game {
   }
 
   /**
-   * Evaluate a condition expression against current game state (ADR-016)
-   */
-  private evaluateCondition(condition: ConditionExpression): boolean {
-    switch (condition.operator) {
-      case 'hasItem':
-        return this.inventory.hasItem(condition.operand);
-
-      case 'hasFlag':
-        // Check beat flags (simple map until ADR-018 WorldState)
-        const flagValue = this.beatFlags.get(condition.operand);
-        if (condition.value !== undefined) {
-          return flagValue === condition.value;
-        }
-        return flagValue !== undefined && flagValue !== false && flagValue !== null;
-
-      case 'questComplete':
-        return this.quests.isQuestCompleted(condition.operand);
-
-      case 'stageComplete':
-        // Handled by QuestManager's built-in check
-        return false;
-
-      case 'custom':
-        console.warn(`[Game] Custom condition not yet implemented: ${condition.operand}`);
-        return false;
-
-      default:
-        return false;
-    }
-  }
-
-  // ============================================
-  // Behavior Tree Integration (ADR-017)
-  // ============================================
-
-  /**
-   * Evaluate a behavior tree condition against game state
-   */
-  private evaluateBTCondition(_npcId: string, condition: BTCondition): boolean {
-    switch (condition.type) {
-      case 'questStage': {
-        // If nodeId provided, check specific beat node within the stage
-        if (condition.nodeId) {
-          const nodeState = this.quests.getObjectiveState(condition.questId, condition.nodeId);
-          return nodeState === condition.state;
-        }
-        // Otherwise check stage-level state
-        const stageState = this.quests.getStageState(condition.questId, condition.stageId);
-        return stageState === condition.state;
-      }
-
-      case 'hasItem':
-        return this.inventory.hasItem(condition.itemId);
-
-      case 'hasFlag': {
-        const flagValue = this.beatFlags.get(condition.flag);
-        if (condition.value !== undefined) {
-          return flagValue === condition.value;
-        }
-        return flagValue !== undefined && flagValue !== false && flagValue !== null;
-      }
-
-      case 'timeOfDay':
-        // Time of day not yet implemented - always false
-        return false;
-
-      case 'atLocation':
-        // Location checks not yet implemented - always false
-        return false;
-
-      case 'custom':
-        console.warn(`[Game] Custom BT condition not implemented: ${condition.check}`);
-        return false;
-
-      default:
-        return false;
-    }
-  }
-
-  /**
    * Execute a behavior tree action result.
    * Called for both onInteraction and continuous modes.
    */
@@ -1232,8 +1169,7 @@ export class Game {
         break;
 
       case 'setFlag':
-        this.beatFlags.set(action.flag, action.value);
-        this.quests.evaluateConditions();
+        this.flags.set(action.flag, action.value);
         break;
 
       case 'emitEvent':
@@ -1263,23 +1199,6 @@ export class Game {
         console.warn(`[Game] Custom BT action: ${action.handler}`, action.params);
         break;
     }
-  }
-
-  /**
-   * Get a beat flag value (ADR-016)
-   * Temporary until ADR-018 WorldState is implemented
-   */
-  getBeatFlag(key: string): unknown {
-    return this.beatFlags.get(key);
-  }
-
-  /**
-   * Set a beat flag value (ADR-016)
-   * Temporary until ADR-018 WorldState is implemented
-   */
-  setBeatFlag(key: string, value: unknown): void {
-    this.beatFlags.set(key, value);
-    this.quests.evaluateConditions();
   }
 
   /**
