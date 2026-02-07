@@ -184,39 +184,65 @@ function MiniObjectiveGraph({
           />
         ))}
         {/* Nodes */}
-        {layout.nodes.map(({ x, y, obj }) => (
-          <Tooltip
-            key={obj.id}
-            label={`${OBJECTIVE_ICONS[obj.type] || '⭐'} ${obj.description}`}
-            position="top"
-            withArrow
-          >
-            <g>
-              <circle
-                cx={x}
-                cy={y}
-                r={layout.nodeSize! / 2}
-                fill={OBJECTIVE_COLORS[obj.type] || '#6c7086'}
-                stroke={obj.autoStart ? '#a6e3a1' : 'none'}
-                strokeWidth={2}
-              />
-              {obj.optional && (
-                <circle
-                  cx={x}
-                  cy={y}
-                  r={layout.nodeSize! / 2 - 3}
-                  fill="none"
-                  stroke="#f9e2af"
-                  strokeWidth={1}
-                  strokeDasharray="2,2"
-                />
-              )}
-            </g>
-          </Tooltip>
-        ))}
+        {layout.nodes.map(({ x, y, obj }) => {
+          const nt = obj.nodeType || 'objective';
+          const fillColor = nt === 'narrative' ? '#cba6f7'
+            : nt === 'condition' ? '#f9e2af'
+            : (OBJECTIVE_COLORS[obj.type] || '#89b4fa');
+          const icon = nt === 'narrative' ? 'N'
+            : nt === 'condition' ? '?'
+            : (OBJECTIVE_ICONS[obj.type] || '⭐');
+          const strokeColor = obj.autoStart ? '#a6e3a1' : 'none';
+          const r = layout.nodeSize! / 2;
+
+          return (
+            <Tooltip
+              key={obj.id}
+              label={`${icon} ${obj.description}`}
+              position="top"
+              withArrow
+            >
+              <g>
+                {nt === 'condition' ? (
+                  <rect
+                    x={x - r * 0.7}
+                    y={y - r * 0.7}
+                    width={r * 1.4}
+                    height={r * 1.4}
+                    fill={fillColor}
+                    stroke={strokeColor}
+                    strokeWidth={2}
+                    transform={`rotate(45 ${x} ${y})`}
+                    rx={2}
+                  />
+                ) : (
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={r}
+                    fill={fillColor}
+                    stroke={strokeColor}
+                    strokeWidth={2}
+                  />
+                )}
+                {obj.optional && (
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={r - 3}
+                    fill="none"
+                    stroke="#f9e2af"
+                    strokeWidth={1}
+                    strokeDasharray="2,2"
+                  />
+                )}
+              </g>
+            </Tooltip>
+          );
+        })}
       </svg>
       <Text size="xs" c="dimmed" ta="center" mt={4}>
-        {stage.objectives.length} objective{stage.objectives.length !== 1 ? 's' : ''} • Click to edit
+        {stage.objectives.length} node{stage.objectives.length !== 1 ? 's' : ''} • Click to edit
       </Text>
     </Box>
   );

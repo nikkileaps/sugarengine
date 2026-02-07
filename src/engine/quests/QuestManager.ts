@@ -5,13 +5,15 @@ import {
   QuestObjective,
   LoadedQuest,
   ObjectiveType,
-  ObjectiveAction,
+  BeatAction,
+  BeatNodeType,
+  ConditionExpression,
 } from './types';
 
 export type QuestEventHandler = (event: QuestEvent) => void;
 
 /**
- * Handler for auto-triggered objectives
+ * Handler for auto-triggered objectives (legacy: autoStart objectives)
  */
 export type ObjectiveTriggerHandler = (
   questId: string,
@@ -19,12 +21,33 @@ export type ObjectiveTriggerHandler = (
 ) => void;
 
 /**
- * Handler for objective completion actions
+ * Handler for beat actions - Game.ts implements this to execute side effects
  */
-export type ObjectiveActionHandler = (action: ObjectiveAction) => void;
+export type BeatActionHandler = (action: BeatAction) => void;
+
+/**
+ * Handler for narrative node triggers
+ * Game.ts implements this to play voiceovers, start dialogues, fire events
+ * Must call completeObjective() when the narrative content finishes
+ */
+export type NarrativeTriggerHandler = (
+  questId: string,
+  objective: QuestObjective
+) => void;
+
+/**
+ * Handler for condition evaluation - checks game state
+ * Game.ts implements this so QuestManager can check inventory, flags, etc.
+ */
+export type ConditionCheckHandler = (condition: ConditionExpression) => boolean;
 
 /**
  * Manages quest state, progression, and events
+ *
+ * Handles three node types (ADR-016):
+ * - objective: Player actions (shows in HUD, waits for player)
+ * - narrative: Auto-triggered system actions (voiceover, dialogue, event)
+ * - condition: State checks / gates (waits until condition is true)
  */
 export class QuestManager {
   private loader: QuestLoader;
@@ -39,6 +62,10 @@ export class QuestManager {
   // Map<questId, Set<objectiveId>>
   private activeObjectives: Map<string, Set<string>> = new Map();
 
+  // Track pending condition nodes that need evaluation
+  // Map<questId, Set<nodeId>>
+  private pendingConditions: Map<string, Set<string>> = new Map();
+
   // Event handlers
   private onQuestStart: QuestEventHandler | null = null;
   private onQuestComplete: QuestEventHandler | null = null;
@@ -47,7 +74,11 @@ export class QuestManager {
   private onObjectiveProgress: QuestEventHandler | null = null;
   private onObjectiveComplete: QuestEventHandler | null = null;
   private onObjectiveTrigger: ObjectiveTriggerHandler | null = null;
-  private onObjectiveAction: ObjectiveActionHandler | null = null;
+
+  // Beat system handlers (ADR-016)
+  private onBeatAction: BeatActionHandler | null = null;
+  private onNarrativeTrigger: NarrativeTriggerHandler | null = null;
+  private conditionChecker: ConditionCheckHandler | null = null;
 
   constructor() {
     this.loader = new QuestLoader();
@@ -82,7 +113,7 @@ export class QuestManager {
   }
 
   /**
-   * Set handler for auto-start objectives
+   * Set handler for auto-start objectives (legacy)
    * Called when an objective with autoStart=true becomes available
    */
   setOnObjectiveTrigger(handler: ObjectiveTriggerHandler): void {
@@ -90,10 +121,30 @@ export class QuestManager {
   }
 
   /**
-   * Set handler for objective completion actions (e.g., moveNpc)
+   * Set handler for beat action execution (ADR-016)
+   * Game.ts implements this to handle: setFlag, giveItem, removeItem,
+   * playSound, teleportNPC, setNPCState, emitEvent, moveNpc, etc.
    */
-  setOnObjectiveAction(handler: ObjectiveActionHandler): void {
-    this.onObjectiveAction = handler;
+  setOnBeatAction(handler: BeatActionHandler): void {
+    this.onBeatAction = handler;
+  }
+
+  /**
+   * Set handler for narrative node triggers (ADR-016)
+   * Game.ts implements this to play voiceovers, start dialogues, fire events.
+   * Handler MUST call completeObjective() when the content finishes.
+   */
+  setOnNarrativeTrigger(handler: NarrativeTriggerHandler): void {
+    this.onNarrativeTrigger = handler;
+  }
+
+  /**
+   * Set condition checker (ADR-016)
+   * Game.ts implements this so QuestManager can evaluate conditions
+   * against game state (inventory, flags, quest progress, etc.)
+   */
+  setConditionChecker(handler: ConditionCheckHandler): void {
+    this.conditionChecker = handler;
   }
 
   // ============================================
@@ -179,6 +230,7 @@ export class QuestManager {
 
     this.activeQuests.delete(questId);
     this.completedQuests.add(questId);
+    this.pendingConditions.delete(questId);
 
     // Untrack if this was the tracked quest
     if (this.trackedQuestId === questId) {
@@ -197,6 +249,7 @@ export class QuestManager {
 
     state.status = 'failed';
     this.activeQuests.delete(questId);
+    this.pendingConditions.delete(questId);
 
     // Untrack if this was the tracked quest
     if (this.trackedQuestId === questId) {
@@ -211,8 +264,27 @@ export class QuestManager {
    */
   abandonQuest(questId: string): void {
     this.activeQuests.delete(questId);
+    this.pendingConditions.delete(questId);
     if (this.trackedQuestId === questId) {
       this.trackedQuestId = this.getFirstActiveQuestId();
+    }
+  }
+
+  // ============================================
+  // Beat Actions (ADR-016)
+  // ============================================
+
+  /**
+   * Execute a list of beat actions (instant side effects)
+   * Called on node enter and node complete
+   */
+  private executeActions(actions: BeatAction[] | undefined): void {
+    if (!actions || actions.length === 0) return;
+
+    for (const action of actions) {
+      if (this.onBeatAction) {
+        this.onBeatAction(action);
+      }
     }
   }
 
@@ -223,6 +295,7 @@ export class QuestManager {
   /**
    * Trigger an objective by type and target ID
    * Called when player interacts with NPCs, enters triggers, etc.
+   * Only matches objective-type nodes (not narrative/condition)
    */
   triggerObjective(type: ObjectiveType, targetId: string): void {
     for (const [questId, state] of this.activeQuests) {
@@ -231,6 +304,11 @@ export class QuestManager {
 
       for (const [objId, objective] of state.objectiveProgress) {
         if (objective.completed) continue;
+
+        // Only match objective-type nodes (or legacy nodes without nodeType)
+        const nodeType = objective.nodeType ?? 'objective';
+        if (nodeType !== 'objective') continue;
+
         if (objective.type !== type) continue;
         if (objective.target !== targetId) continue;
 
@@ -271,7 +349,7 @@ export class QuestManager {
   }
 
   /**
-   * Mark an objective as complete
+   * Mark an objective/node as complete
    */
   completeObjective(questId: string, objectiveId: string): void {
     const state = this.activeQuests.get(questId);
@@ -293,15 +371,14 @@ export class QuestManager {
     // Remove from active set
     activeSet?.delete(objectiveId);
 
+    // Remove from pending conditions if it was a condition node
+    this.pendingConditions.get(questId)?.delete(objectiveId);
+
     // Fire event
     this.fireEvent('objective-complete', questId, objectiveId, objective);
 
-    // Fire completion actions
-    if (objective.onComplete && this.onObjectiveAction) {
-      for (const action of objective.onComplete) {
-        this.onObjectiveAction(action);
-      }
-    }
+    // Fire onComplete actions (ADR-016)
+    this.executeActions(objective.onComplete);
 
     // Cascade: check if this completion unlocks other objectives
     this.cascadeActivateObjectives(questId, objectiveId);
@@ -338,16 +415,7 @@ export class QuestManager {
       });
 
       if (allPrereqsMet) {
-        // Activate this objective
-        this.activateObjective(questId, obj.id);
-
-        // Fire auto-start if this objective has it enabled
-        if (obj.autoStart && this.onObjectiveTrigger) {
-          const progressObj = state.objectiveProgress.get(obj.id);
-          if (progressObj) {
-            this.onObjectiveTrigger(questId, progressObj);
-          }
-        }
+        this.activateNode(questId, obj);
       }
     }
   }
@@ -397,6 +465,9 @@ export class QuestManager {
 
     state.currentStageId = stageId;
 
+    // Clear pending conditions for this quest
+    this.pendingConditions.delete(questId);
+
     // Initialize objectives for new stage
     for (const obj of newStage.objectives) {
       state.objectiveProgress.set(obj.id, {
@@ -410,8 +481,12 @@ export class QuestManager {
     this.initializeStageObjectives(questId, newStage);
   }
 
+  // ============================================
+  // Node Activation (ADR-016)
+  // ============================================
+
   /**
-   * Initialize objectives for a stage - activate entry objectives (no prerequisites)
+   * Initialize objectives for a stage - activate entry nodes
    */
   private initializeStageObjectives(questId: string, stage: import('./types').QuestStage): void {
     // Clear and create fresh active set for this quest
@@ -434,33 +509,180 @@ export class QuestManager {
       }
     }
 
-    // Activate entry objectives
+    // Activate entry nodes
     for (const objId of entryObjectiveIds) {
-      this.activateObjective(questId, objId);
-    }
-
-    // Fire auto-start objectives (entry objectives with autoStart=true)
-    const activeSet = this.activeObjectives.get(questId);
-    const autoStartObjectives = stage.objectives.filter(
-      obj => obj.autoStart && activeSet?.has(obj.id)
-    );
-    for (const obj of autoStartObjectives) {
-      if (this.onObjectiveTrigger) {
-        this.onObjectiveTrigger(questId, obj);
+      const obj = stage.objectives.find(o => o.id === objId);
+      if (obj) {
+        this.activateNode(questId, obj);
       }
     }
   }
 
   /**
-   * Activate an objective (mark it as ready to be completed)
+   * Activate a node based on its type (ADR-016)
+   *
+   * - objective: Add to active set, show in HUD, wait for player action
+   * - narrative: Auto-fire trigger, complete when content finishes
+   * - condition: Register for evaluation, check immediately
    */
-  private activateObjective(questId: string, objectiveId: string): void {
+  private activateNode(questId: string, obj: QuestObjective): void {
+    const nodeType: BeatNodeType = obj.nodeType ?? 'objective';
+
+    // Mark as active
+    this.activateObjectiveTracking(questId, obj.id);
+
+    // Fire onEnter actions (before the node runs)
+    this.executeActions(obj.onEnter);
+
+    switch (nodeType) {
+      case 'objective':
+        this.activateObjectiveNode(questId, obj);
+        break;
+      case 'narrative':
+        this.activateNarrativeNode(questId, obj);
+        break;
+      case 'condition':
+        this.activateConditionNode(questId, obj);
+        break;
+    }
+  }
+
+  /**
+   * Activate an objective node (player action)
+   * Shows in HUD, waits for player to perform action
+   */
+  private activateObjectiveNode(questId: string, obj: QuestObjective): void {
+    // Fire auto-start for legacy compatibility
+    if (obj.autoStart && this.onObjectiveTrigger) {
+      const progressObj = this.activeQuests.get(questId)?.objectiveProgress.get(obj.id);
+      if (progressObj) {
+        this.onObjectiveTrigger(questId, progressObj);
+      }
+    }
+  }
+
+  /**
+   * Activate a narrative node (auto-triggered)
+   * Fires immediately, completes when content finishes
+   */
+  private activateNarrativeNode(questId: string, obj: QuestObjective): void {
+    if (this.onNarrativeTrigger) {
+      const progressObj = this.activeQuests.get(questId)?.objectiveProgress.get(obj.id);
+      if (progressObj) {
+        this.onNarrativeTrigger(questId, progressObj);
+      }
+    } else {
+      // No narrative handler - auto-complete so flow isn't blocked
+      console.warn(`[QuestManager] No narrative handler for node ${obj.id}, auto-completing`);
+      this.completeObjective(questId, obj.id);
+    }
+  }
+
+  /**
+   * Activate a condition node (state check / gate)
+   * Evaluates continuously, completes when condition is true
+   */
+  private activateConditionNode(questId: string, obj: QuestObjective): void {
+    // Check immediately - condition might already be satisfied
+    if (obj.condition && this.checkCondition(obj.condition)) {
+      this.completeObjective(questId, obj.id);
+      return;
+    }
+
+    // Register for continuous evaluation
+    let condSet = this.pendingConditions.get(questId);
+    if (!condSet) {
+      condSet = new Set();
+      this.pendingConditions.set(questId, condSet);
+    }
+    condSet.add(obj.id);
+  }
+
+  /**
+   * Add objective to active tracking set
+   */
+  private activateObjectiveTracking(questId: string, objectiveId: string): void {
     let activeSet = this.activeObjectives.get(questId);
     if (!activeSet) {
       activeSet = new Set();
       this.activeObjectives.set(questId, activeSet);
     }
     activeSet.add(objectiveId);
+  }
+
+  // ============================================
+  // Condition Evaluation (ADR-016)
+  // ============================================
+
+  /**
+   * Evaluate all pending condition nodes
+   * Called when game state changes (inventory, flags, quest progress, etc.)
+   */
+  evaluateConditions(): void {
+    // Collect completions first to avoid modifying the map during iteration
+    const completions: { questId: string; nodeId: string }[] = [];
+
+    for (const [questId, conditionIds] of this.pendingConditions) {
+      const state = this.activeQuests.get(questId);
+      if (!state) continue;
+
+      for (const nodeId of conditionIds) {
+        const obj = state.objectiveProgress.get(nodeId);
+        if (!obj || obj.completed) continue;
+
+        if (obj.condition && this.checkCondition(obj.condition)) {
+          completions.push({ questId, nodeId });
+        }
+      }
+    }
+
+    // Process completions
+    for (const { questId, nodeId } of completions) {
+      this.completeObjective(questId, nodeId);
+    }
+  }
+
+  /**
+   * Check a condition expression against game state
+   */
+  private checkCondition(condition: ConditionExpression): boolean {
+    if (this.conditionChecker) {
+      const result = this.conditionChecker(condition);
+      return condition.negate ? !result : result;
+    }
+
+    // Fallback: built-in checks for quest state
+    let result = false;
+    switch (condition.operator) {
+      case 'questComplete':
+        result = this.completedQuests.has(condition.operand);
+        break;
+      case 'stageComplete': {
+        // operand format: "questId:stageId"
+        const parts = condition.operand.split(':');
+        const scQuestId = parts[0];
+        const scStageId = parts[1];
+        if (scQuestId && scStageId) {
+          const questState = this.activeQuests.get(scQuestId);
+          if (questState) {
+            // Stage is complete if we've moved past it
+            const loaded = this.loadedQuests.get(scQuestId);
+            if (loaded) {
+              const stageIndex = loaded.definition.stages.findIndex(s => s.id === scStageId);
+              const currentIndex = loaded.definition.stages.findIndex(s => s.id === questState.currentStageId);
+              result = currentIndex > stageIndex;
+            }
+          }
+        }
+        break;
+      }
+      default:
+        // hasItem, hasFlag, custom - require conditionChecker from Game.ts
+        console.warn(`[QuestManager] No condition checker for operator: ${condition.operator}`);
+        result = false;
+    }
+
+    return condition.negate ? !result : result;
   }
 
   /**
@@ -527,8 +749,9 @@ export class QuestManager {
   }
 
   /**
-   * Get current objective for tracked quest
-   * Returns the first active (prerequisites met) incomplete objective
+   * Get current objective for tracked quest (HUD display)
+   * Returns the first active incomplete objective-type node
+   * Skips narrative and condition nodes (they're invisible to the player)
    */
   getTrackedObjective(): QuestObjective | null {
     if (!this.trackedQuestId) return null;
@@ -536,11 +759,19 @@ export class QuestManager {
     const state = this.activeQuests.get(this.trackedQuestId);
     if (!state) return null;
 
-    // Find first active incomplete objective
+    // Find first active incomplete objective node
     for (const objective of state.objectiveProgress.values()) {
-      if (!objective.completed && this.isObjectiveActive(this.trackedQuestId, objective.id)) {
-        return objective;
-      }
+      if (objective.completed) continue;
+      if (!this.isObjectiveActive(this.trackedQuestId, objective.id)) continue;
+
+      // Only show objective-type nodes in HUD (skip narrative/condition)
+      const nodeType = objective.nodeType ?? 'objective';
+      if (nodeType !== 'objective') continue;
+
+      // Respect showInHUD override
+      if (objective.showInHUD === false) continue;
+
+      return objective;
     }
 
     return null;
@@ -572,6 +803,10 @@ export class QuestManager {
         if (objective.type !== 'talk') continue;
         if (objective.target !== npcId) continue;
         if (!objective.dialogue) continue; // No specific dialogue = use NPC default
+
+        // Only match objective-type nodes
+        const nodeType = objective.nodeType ?? 'objective';
+        if (nodeType !== 'objective') continue;
 
         // Only return if objective is active (prerequisites met)
         if (!this.isObjectiveActive(questId, objId)) continue;
@@ -659,6 +894,7 @@ export class QuestManager {
     this.activeQuests.clear();
     this.completedQuests.clear();
     this.activeObjectives.clear();
+    this.pendingConditions.clear();
     this.trackedQuestId = null;
   }
 

@@ -15,12 +15,22 @@ import {
   ScrollArea,
   Select,
   Textarea,
+  TextInput,
   Checkbox,
   ActionIcon,
   NumberInput,
+  Menu,
 } from '@mantine/core';
 import { NodeCanvas, CanvasNode, CanvasConnection } from '../../components';
-import { QuestStage, QuestObjective, MoveNpcAction, ObjectiveAction } from './QuestPanel';
+import {
+  QuestStage,
+  QuestObjective,
+  BeatAction,
+  BeatNodeType,
+  NarrativeSubtype,
+  ConditionOperator,
+  ActionType,
+} from './QuestPanel';
 import { ObjectiveGraph } from '../../../engine/quests';
 
 // Edge color for prerequisite relationships
@@ -36,7 +46,7 @@ const OBJECTIVE_ICONS: Record<string, string> = {
   custom: '⭐',
 };
 
-// Objective type colors
+// Objective type colors (subtype colors for objective nodes)
 const OBJECTIVE_COLORS: Record<string, string> = {
   talk: '#89b4fa',
   voiceover: '#cba6f7',
@@ -46,9 +56,25 @@ const OBJECTIVE_COLORS: Record<string, string> = {
   custom: '#f5c2e7',
 };
 
-// Action types for onComplete
+// Node type colors (ADR-016)
+const NODE_TYPE_COLORS: Record<string, string> = {
+  objective: '#89b4fa',
+  narrative: '#cba6f7',
+  condition: '#f9e2af',
+};
+
+// Beat action types for onEnter/onComplete
 const ACTION_TYPES = [
+  { value: 'setFlag', label: 'Set Flag' },
+  { value: 'giveItem', label: 'Give Item' },
+  { value: 'removeItem', label: 'Remove Item' },
+  { value: 'playSound', label: 'Play Sound' },
+  { value: 'teleportNPC', label: 'Teleport NPC' },
   { value: 'moveNpc', label: 'Move NPC' },
+  { value: 'setNPCState', label: 'Set NPC State' },
+  { value: 'emitEvent', label: 'Emit Event' },
+  { value: 'spawnVFX', label: 'Spawn VFX' },
+  { value: 'custom', label: 'Custom' },
 ];
 
 interface ObjectiveNodeCanvasProps {
@@ -211,31 +237,44 @@ export function ObjectiveNodeCanvas({
         const currentStage = stageRef.current;
         const obj = currentStage.objectives.find((o) => o.id === canvasNode.id);
         if (!obj) {
-          element.innerHTML = '<div style="padding: 12px; color: #f38ba8;">Objective not found</div>';
+          element.innerHTML = '<div style="padding: 12px; color: #f38ba8;">Node not found</div>';
           return;
         }
 
+        const nodeType = obj.nodeType || 'objective';
         const isEntry = !obj.prerequisites || obj.prerequisites.length === 0;
         const isSelected = obj.id === selectedObjectiveIdRef.current;
-        const typeColor = OBJECTIVE_COLORS[obj.type] || '#89b4fa';
+        const nodeTypeColor = NODE_TYPE_COLORS[nodeType] || '#89b4fa';
 
-        // Determine border color
+        // For objectives, color by subtype; for others, color by node type
+        const typeColor = nodeType === 'objective'
+          ? (OBJECTIVE_COLORS[obj.type] || '#89b4fa')
+          : nodeTypeColor;
+
+        // Determine border color and style
         let borderColor = '#313244';
         if (isSelected) borderColor = '#89b4fa';
         else if (isEntry) borderColor = '#a6e3a1';
+        else if (nodeType !== 'objective') borderColor = nodeTypeColor;
+
+        const borderStyle = nodeType === 'condition' ? 'dashed' : 'solid';
 
         element.style.minWidth = '220px';
         element.style.maxWidth = '280px';
         element.style.background = '#181825';
-        element.style.border = `2px solid ${borderColor}`;
+        element.style.border = `2px ${borderStyle} ${borderColor}`;
         element.style.borderRadius = '8px';
         element.style.overflow = 'hidden';
 
         // Header
         const header = document.createElement('div');
+        const headerBg = isEntry ? '#a6e3a122'
+          : nodeType === 'narrative' ? '#cba6f722'
+          : nodeType === 'condition' ? '#f9e2af22'
+          : '#313244';
         header.style.cssText = `
           padding: 8px 12px;
-          background: ${isEntry ? '#a6e3a122' : '#313244'};
+          background: ${headerBg};
           border-bottom: 1px solid #313244;
           display: flex;
           align-items: center;
@@ -249,13 +288,32 @@ export function ObjectiveNodeCanvas({
           header.appendChild(icon);
         }
 
-        const typeIcon = document.createElement('span');
-        typeIcon.textContent = OBJECTIVE_ICONS[obj.type] || '⭐';
-        typeIcon.style.cssText = 'font-size: 14px;';
-        header.appendChild(typeIcon);
+        // Node type badge for narrative/condition, subtype icon for objectives
+        if (nodeType === 'narrative') {
+          const badge = document.createElement('span');
+          badge.textContent = 'N';
+          badge.style.cssText = `font-size: 11px; font-weight: 700; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: #cba6f733; color: #cba6f7; border-radius: 4px;`;
+          header.appendChild(badge);
+        } else if (nodeType === 'condition') {
+          const badge = document.createElement('span');
+          badge.textContent = '?';
+          badge.style.cssText = `font-size: 13px; font-weight: 700; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: #f9e2af33; color: #f9e2af; border-radius: 4px;`;
+          header.appendChild(badge);
+        } else {
+          const typeIcon = document.createElement('span');
+          typeIcon.textContent = OBJECTIVE_ICONS[obj.type] || '⭐';
+          typeIcon.style.cssText = 'font-size: 14px;';
+          header.appendChild(typeIcon);
+        }
 
+        // Type label - shows subtype for objectives, narrativeType/operator for others
+        const labelText = nodeType === 'objective'
+          ? obj.type
+          : nodeType === 'narrative'
+            ? (obj.narrativeType || 'narrative')
+            : (obj.condition?.operator || 'condition');
         const typeLabel = document.createElement('span');
-        typeLabel.textContent = obj.type;
+        typeLabel.textContent = labelText;
         typeLabel.style.cssText = `
           font-size: 11px;
           padding: 2px 6px;
@@ -276,8 +334,8 @@ export function ObjectiveNodeCanvas({
           : obj.description;
         element.appendChild(content);
 
-        // Target info
-        if (obj.target) {
+        // Target info (for objectives) or operand (for conditions) or dialogue (for narrative)
+        if (nodeType === 'objective' && obj.target) {
           const targetDiv = document.createElement('div');
           targetDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
 
@@ -289,6 +347,35 @@ export function ObjectiveNodeCanvas({
 
           targetDiv.textContent = `Target: ${targetName}`;
           element.appendChild(targetDiv);
+        } else if (nodeType === 'condition' && obj.condition) {
+          const operandDiv = document.createElement('div');
+          operandDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
+          const negatePrefix = obj.condition.negate ? 'NOT ' : '';
+          const operandLabel = obj.condition.operator === 'hasItem'
+            ? (items.find(i => i.id === obj.condition!.operand)?.name || obj.condition.operand)
+            : obj.condition.operand;
+          operandDiv.textContent = `${negatePrefix}${obj.condition.operator}: ${operandLabel || '(not set)'}`;
+          element.appendChild(operandDiv);
+        } else if (nodeType === 'narrative' && obj.dialogueId) {
+          const dlgDiv = document.createElement('div');
+          dlgDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
+          const dlgName = dialogues.find(d => d.id === obj.dialogueId)?.name || obj.dialogueId;
+          dlgDiv.textContent = `Dialogue: ${dlgName}`;
+          element.appendChild(dlgDiv);
+        }
+
+        // Action preview
+        const allActions = [...(obj.onEnter || []), ...(obj.onComplete || [])];
+        if (allActions.length > 0) {
+          const actionsDiv = document.createElement('div');
+          actionsDiv.style.cssText = 'padding: 4px 12px 8px; font-size: 10px; color: #585b70; line-height: 1.5;';
+          const previews = allActions.slice(0, 3).map(a => {
+            const target = a.target || a.npcId || '';
+            return target ? `${a.type}(${target})` : a.type;
+          });
+          if (allActions.length > 3) previews.push(`+${allActions.length - 3} more`);
+          actionsDiv.textContent = previews.join(' · ');
+          element.appendChild(actionsDiv);
         }
 
         // Badges
@@ -309,9 +396,16 @@ export function ObjectiveNodeCanvas({
           badges.appendChild(badge);
         }
 
+        if (obj.onEnter && obj.onEnter.length > 0) {
+          const badge = document.createElement('span');
+          badge.textContent = `${obj.onEnter.length} onEnter`;
+          badge.style.cssText = 'font-size: 9px; padding: 2px 4px; background: #a6e3a122; color: #a6e3a1; border-radius: 2px;';
+          badges.appendChild(badge);
+        }
+
         if (obj.onComplete && obj.onComplete.length > 0) {
           const badge = document.createElement('span');
-          badge.textContent = `${obj.onComplete.length} action${obj.onComplete.length > 1 ? 's' : ''}`;
+          badge.textContent = `${obj.onComplete.length} onComplete`;
           badge.style.cssText = 'font-size: 9px; padding: 2px 4px; background: #89b4fa22; color: #89b4fa; border-radius: 2px;';
           badges.appendChild(badge);
         }
@@ -379,16 +473,27 @@ export function ObjectiveNodeCanvas({
     ? stage.objectives.find((o) => o.id === selectedObjectiveId)
     : null;
 
-  const handleAddObjective = () => {
+  const handleAddNode = (nodeType: string, subtype: string) => {
     const id = `obj-${Date.now()}`;
     const newObj: QuestObjective = {
       id,
-      type: 'talk',
+      type: nodeType === 'objective' ? subtype as QuestObjective['type'] : 'custom',
       target: '',
-      description: 'New objective',
+      description: nodeType === 'objective' ? 'New objective'
+        : subtype === 'voiceover' ? 'Voiceover'
+        : nodeType === 'narrative' ? 'Narrative beat'
+        : 'Condition gate',
+      nodeType: nodeType as BeatNodeType,
+      ...(nodeType === 'narrative' ? {
+        narrativeType: (subtype === 'voiceover' ? 'dialogue' : subtype) as NarrativeSubtype,
+        autoStart: true,
+      } : {}),
+      ...(nodeType === 'condition' ? {
+        condition: { operator: subtype as ConditionOperator, operand: '' },
+      } : {}),
     };
 
-    // Position new objective
+    // Position new node
     let maxY = 0;
     for (const pos of nodePositions.values()) {
       maxY = Math.max(maxY, pos.y);
@@ -476,14 +581,33 @@ export function ObjectiveNodeCanvas({
             Stage: {stage.description || stage.id}
           </Text>
           <Badge size="sm" variant="light">
-            {stage.objectives.length} objective{stage.objectives.length !== 1 ? 's' : ''}
+            {stage.objectives.length} node{stage.objectives.length !== 1 ? 's' : ''}
           </Badge>
         </Group>
 
         <Group gap="xs">
-          <Button size="xs" variant="subtle" onClick={handleAddObjective}>
-            + Add Objective
-          </Button>
+          <Menu shadow="md" width={200}>
+            <Menu.Target>
+              <Button size="xs" variant="subtle">+ Add Node</Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Label>Objective</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('objective', 'talk')}>💬 Talk to NPC</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('objective', 'location')}>📍 Go to Location</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('objective', 'trigger')}>⚡ Trigger</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('objective', 'custom')}>⭐ Custom</Menu.Item>
+              <Menu.Divider />
+              <Menu.Label>Narrative</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('narrative', 'voiceover')}>🎤 Voiceover</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('narrative', 'cutscene')}>🎬 Cutscene</Menu.Item>
+              <Menu.Divider />
+              <Menu.Label>Condition</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('condition', 'hasItem')}>📦 Has Item</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('condition', 'hasFlag')}>🚩 Has Flag</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('condition', 'questComplete')}>✓ Quest Complete</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('condition', 'custom')}>⭐ Custom</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
           <Button
             size="xs"
             variant="subtle"
@@ -543,6 +667,223 @@ interface ObjectiveEditorPanelProps {
   onClose: () => void;
 }
 
+/** Renders fields for a single BeatAction based on its type */
+function BeatActionFields({
+  action,
+  index,
+  actions,
+  field,
+  objective,
+  onChange,
+  npcs,
+  items,
+}: {
+  action: BeatAction;
+  index: number;
+  actions: BeatAction[];
+  field: 'onEnter' | 'onComplete';
+  objective: QuestObjective;
+  onChange: (obj: QuestObjective) => void;
+  npcs: { id: string; name: string }[];
+  items: { id: string; name: string }[];
+}) {
+  const updateAction = (updated: BeatAction) => {
+    const updatedActions = [...actions];
+    updatedActions[index] = updated;
+    onChange({ ...objective, [field]: updatedActions });
+  };
+
+  const inputStyle = { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4' };
+  const labelStyle = { color: '#6c7086' };
+
+  switch (action.type) {
+    case 'setFlag':
+      return (
+        <>
+          <TextInput size="xs" label="Flag Name" value={action.target || ''}
+            onChange={(e) => updateAction({ ...action, target: e.currentTarget.value })}
+            styles={{ input: inputStyle, label: labelStyle }} />
+          <TextInput size="xs" label="Value" value={String(action.value ?? 'true')}
+            onChange={(e) => updateAction({ ...action, value: e.currentTarget.value })}
+            styles={{ input: inputStyle, label: labelStyle }} />
+        </>
+      );
+    case 'giveItem':
+    case 'removeItem':
+      return (
+        <>
+          <Select size="xs" label="Item"
+            data={items.map((i) => ({ value: i.id, label: i.name }))}
+            value={action.target || null}
+            onChange={(value) => updateAction({ ...action, target: value || '' })}
+            searchable styles={{ input: inputStyle, label: labelStyle }} />
+          <NumberInput size="xs" label="Count" value={Number(action.value) || 1}
+            onChange={(value) => updateAction({ ...action, value: Number(value) || 1 })}
+            styles={{ input: { ...inputStyle, width: 80 }, label: labelStyle }} />
+        </>
+      );
+    case 'playSound':
+      return (
+        <TextInput size="xs" label="Sound Path" value={action.target || ''}
+          onChange={(e) => updateAction({ ...action, target: e.currentTarget.value })}
+          placeholder="audio/sfx/..." styles={{ input: inputStyle, label: labelStyle }} />
+      );
+    case 'moveNpc':
+    case 'teleportNPC': {
+      const pos = (action.value as { x: number; y: number; z: number }) || action.position || { x: 0, y: 0, z: 0 };
+      return (
+        <>
+          <Select size="xs" label="NPC"
+            data={npcs.map((n) => ({ value: n.id, label: n.name }))}
+            value={action.target || action.npcId || null}
+            onChange={(value) => updateAction({ ...action, target: value || '', npcId: value || '' })}
+            searchable styles={{ input: inputStyle, label: labelStyle }} />
+          <Group gap="xs">
+            <NumberInput size="xs" label="X" value={pos.x}
+              onChange={(v) => updateAction({ ...action, value: { ...pos, x: Number(v) || 0 }, position: { ...pos, x: Number(v) || 0 } })}
+              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+            <NumberInput size="xs" label="Y" value={pos.y}
+              onChange={(v) => updateAction({ ...action, value: { ...pos, y: Number(v) || 0 }, position: { ...pos, y: Number(v) || 0 } })}
+              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+            <NumberInput size="xs" label="Z" value={pos.z}
+              onChange={(v) => updateAction({ ...action, value: { ...pos, z: Number(v) || 0 }, position: { ...pos, z: Number(v) || 0 } })}
+              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+          </Group>
+        </>
+      );
+    }
+    case 'setNPCState':
+      return (
+        <>
+          <Select size="xs" label="NPC"
+            data={npcs.map((n) => ({ value: n.id, label: n.name }))}
+            value={action.target || null}
+            onChange={(value) => updateAction({ ...action, target: value || '' })}
+            searchable styles={{ input: inputStyle, label: labelStyle }} />
+          <TextInput size="xs" label="State" value={String(action.value ?? '')}
+            onChange={(e) => updateAction({ ...action, value: e.currentTarget.value })}
+            placeholder="idle, patrol, etc." styles={{ input: inputStyle, label: labelStyle }} />
+        </>
+      );
+    case 'emitEvent':
+      return (
+        <TextInput size="xs" label="Event Name" value={action.target || ''}
+          onChange={(e) => updateAction({ ...action, target: e.currentTarget.value })}
+          styles={{ input: inputStyle, label: labelStyle }} />
+      );
+    case 'spawnVFX':
+      return (
+        <TextInput size="xs" label="VFX Name" value={action.target || ''}
+          onChange={(e) => updateAction({ ...action, target: e.currentTarget.value })}
+          styles={{ input: inputStyle, label: labelStyle }} />
+      );
+    case 'custom':
+      return (
+        <>
+          <TextInput size="xs" label="Target" value={action.target || ''}
+            onChange={(e) => updateAction({ ...action, target: e.currentTarget.value })}
+            styles={{ input: inputStyle, label: labelStyle }} />
+          <TextInput size="xs" label="Value" value={String(action.value ?? '')}
+            onChange={(e) => updateAction({ ...action, value: e.currentTarget.value })}
+            styles={{ input: inputStyle, label: labelStyle }} />
+        </>
+      );
+    default:
+      return null;
+  }
+}
+
+/** Reusable action list editor for onEnter/onComplete */
+function ActionListEditor({
+  label,
+  field,
+  objective,
+  onChange,
+  npcs,
+  items,
+}: {
+  label: string;
+  field: 'onEnter' | 'onComplete';
+  objective: QuestObjective;
+  onChange: (obj: QuestObjective) => void;
+  npcs: { id: string; name: string }[];
+  items: { id: string; name: string }[];
+}) {
+  const actions = (objective[field] || []) as BeatAction[];
+
+  return (
+    <Stack gap="xs">
+      <Group justify="space-between">
+        <Text size="sm" fw={500}>{label}</Text>
+        <Select
+          size="xs"
+          placeholder="+ Add"
+          data={ACTION_TYPES}
+          value={null}
+          onChange={(value) => {
+            if (!value) return;
+            const newAction: BeatAction = { type: value as ActionType };
+            onChange({ ...objective, [field]: [...actions, newAction] });
+          }}
+          styles={{
+            input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4', width: 120 },
+          }}
+        />
+      </Group>
+
+      {actions.map((action, index) => (
+        <Paper key={index} p="xs" style={{ background: '#181825', border: '1px solid #313244' }}>
+          <Stack gap="xs">
+            <Group justify="space-between">
+              <Select
+                size="xs"
+                data={ACTION_TYPES}
+                value={action.type}
+                onChange={(value) => {
+                  if (!value) return;
+                  const updated = [...actions];
+                  updated[index] = { type: value as ActionType };
+                  onChange({ ...objective, [field]: updated });
+                }}
+                styles={{
+                  input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 120 },
+                }}
+              />
+              <ActionIcon
+                size="xs"
+                variant="subtle"
+                color="red"
+                onClick={() => {
+                  const updated = [...actions];
+                  updated.splice(index, 1);
+                  onChange({ ...objective, [field]: updated.length > 0 ? updated : undefined });
+                }}
+              >
+                ×
+              </ActionIcon>
+            </Group>
+
+            <BeatActionFields
+              action={action}
+              index={index}
+              actions={actions}
+              field={field}
+              objective={objective}
+              onChange={onChange}
+              npcs={npcs}
+              items={items}
+            />
+          </Stack>
+        </Paper>
+      ))}
+
+      {actions.length === 0 && (
+        <Text size="xs" c="dimmed" fs="italic">No actions configured</Text>
+      )}
+    </Stack>
+  );
+}
+
 function ObjectiveEditorPanel({
   objective,
   allObjectives,
@@ -556,6 +897,8 @@ function ObjectiveEditorPanel({
   onClose,
 }: ObjectiveEditorPanelProps) {
   const isEntry = !objective.prerequisites || objective.prerequisites.length === 0;
+  const nodeType = objective.nodeType || 'objective';
+  const nodeTypeColor = NODE_TYPE_COLORS[nodeType] || '#89b4fa';
 
   const handleChange = <K extends keyof QuestObjective>(field: K, value: QuestObjective[K]) => {
     onChange({ ...objective, [field]: value });
@@ -565,15 +908,12 @@ function ObjectiveEditorPanel({
     { value: 'talk', label: '💬 Talk' },
     { value: 'voiceover', label: '🎤 Voiceover' },
     { value: 'location', label: '📍 Location' },
-    { value: 'collect', label: '📦 Collect' },
     { value: 'trigger', label: '⚡ Trigger' },
     { value: 'custom', label: '⭐ Custom' },
   ];
 
   const targetOptions = objective.type === 'talk' || objective.type === 'voiceover'
     ? npcs.map((n) => ({ value: n.id, label: n.name }))
-    : objective.type === 'collect'
-    ? items.map((i) => ({ value: i.id, label: i.name }))
     : objective.type === 'location' || objective.type === 'trigger'
     ? triggers.map((t) => ({ value: t.id, label: t.name }))
     : [];
@@ -602,7 +942,12 @@ function ObjectiveEditorPanel({
         style={{ borderBottom: '1px solid #313244', background: '#181825' }}
       >
         <Group gap="xs">
-          <Text size="sm" fw={500}>Objective</Text>
+          <Text size="sm" fw={500}>
+            {nodeType === 'narrative' ? 'Narrative' : nodeType === 'condition' ? 'Condition' : 'Objective'}
+          </Text>
+          <Badge size="xs" color={nodeTypeColor} variant="light">
+            {nodeType}
+          </Badge>
           {isEntry && (
             <Badge size="xs" color="green">Entry</Badge>
           )}
@@ -614,59 +959,169 @@ function ObjectiveEditorPanel({
 
       <ScrollArea style={{ flex: 1 }}>
         <Stack gap="md" p="sm">
+          {/* Node Type Selector */}
           <Select
-            label="Type"
-            data={typeOptions}
-            value={objective.type}
-            onChange={(value) => value && handleChange('type', value as QuestObjective['type'])}
+            label="Node Type"
+            data={[
+              { value: 'objective', label: 'Objective - player action' },
+              { value: 'narrative', label: 'Narrative - auto-trigger' },
+              { value: 'condition', label: 'Condition - gate/check' },
+            ]}
+            value={nodeType}
+            onChange={(value) => value && handleChange('nodeType', value as BeatNodeType)}
           />
 
           <Textarea
             label="Description"
             value={objective.description}
             onChange={(e) => handleChange('description', e.currentTarget.value)}
-            placeholder="What should the player do?"
+            placeholder={
+              nodeType === 'objective' ? 'What should the player do?'
+                : nodeType === 'narrative' ? 'What happens in this beat?'
+                : 'What condition must be true?'
+            }
             minRows={2}
             autosize
           />
 
-          {targetOptions.length > 0 && (
-            <Select
-              label="Target"
-              data={targetOptions}
-              value={objective.target || null}
-              onChange={(value) => handleChange('target', value || '')}
-              placeholder="Select target..."
-              searchable
-              clearable
-            />
+          {/* === Objective-specific fields === */}
+          {nodeType === 'objective' && (
+            <>
+              <Select
+                label="Type"
+                data={typeOptions}
+                value={objective.type}
+                onChange={(value) => value && handleChange('type', value as QuestObjective['type'])}
+              />
+
+              {targetOptions.length > 0 && (
+                <Select
+                  label="Target"
+                  data={targetOptions}
+                  value={objective.target || null}
+                  onChange={(value) => handleChange('target', value || '')}
+                  placeholder="Select target..."
+                  searchable
+                  clearable
+                />
+              )}
+
+              {objective.type !== 'location' && objective.type !== 'trigger' && (
+                <Select
+                  label="Dialogue"
+                  data={dialogueOptions}
+                  value={objective.dialogue || null}
+                  onChange={(value) => handleChange('dialogue', value || undefined)}
+                  placeholder="Select dialogue..."
+                  searchable
+                  clearable
+                  description="Override default NPC dialogue"
+                />
+              )}
+
+              {objective.dialogue && (
+                <Select
+                  label="Complete On"
+                  data={[
+                    { value: 'dialogueEnd', label: 'Dialogue End' },
+                    { value: 'interact', label: 'Interaction' },
+                  ]}
+                  value={objective.completeOn || 'dialogueEnd'}
+                  onChange={(value) => handleChange('completeOn', value || 'dialogueEnd')}
+                />
+              )}
+            </>
           )}
 
-          {objective.type !== 'location' && objective.type !== 'trigger' && (
-            <Select
-              label="Dialogue"
-              data={dialogueOptions}
-              value={objective.dialogue || null}
-              onChange={(value) => handleChange('dialogue', value || undefined)}
-              placeholder="Select dialogue..."
-              searchable
-              clearable
-              description="Override default NPC dialogue"
-            />
+          {/* === Narrative-specific fields === */}
+          {nodeType === 'narrative' && (
+            <>
+              <Select
+                label="Narrative Type"
+                data={[
+                  { value: 'dialogue', label: '💬 Dialogue' },
+                  { value: 'cutscene', label: '🎬 Cutscene' },
+                ]}
+                value={objective.narrativeType || 'dialogue'}
+                onChange={(value) => handleChange('narrativeType', (value as NarrativeSubtype) || 'dialogue')}
+              />
+
+              {(objective.narrativeType === 'dialogue' || !objective.narrativeType) && (
+                <Select
+                  label="Dialogue"
+                  data={dialogueOptions}
+                  value={objective.dialogueId || null}
+                  onChange={(value) => handleChange('dialogueId', value || undefined)}
+                  placeholder="Select dialogue..."
+                  searchable
+                  clearable
+                />
+              )}
+
+            </>
           )}
 
-          {objective.dialogue && (
-            <Select
-              label="Complete On"
-              data={[
-                { value: 'dialogueEnd', label: 'Dialogue End' },
-                { value: 'interact', label: 'Interaction' },
-              ]}
-              value={objective.completeOn || 'dialogueEnd'}
-              onChange={(value) => handleChange('completeOn', value || 'dialogueEnd')}
-            />
+          {/* === Condition-specific fields === */}
+          {nodeType === 'condition' && (
+            <Stack gap="xs">
+              <Select
+                label="Operator"
+                data={[
+                  { value: 'hasItem', label: '📦 Has Item' },
+                  { value: 'hasFlag', label: '🚩 Has Flag' },
+                  { value: 'questComplete', label: '✓ Quest Complete' },
+                  { value: 'stageComplete', label: '✓ Stage Complete' },
+                  { value: 'custom', label: '⭐ Custom' },
+                ]}
+                value={objective.condition?.operator || 'hasFlag'}
+                onChange={(value) => {
+                  const cond = objective.condition || { operator: 'hasFlag' as ConditionOperator, operand: '' };
+                  handleChange('condition', { ...cond, operator: (value as ConditionOperator) || 'hasFlag' });
+                }}
+              />
+
+              {objective.condition?.operator === 'hasItem' ? (
+                <Select
+                  label="Item"
+                  data={items.map((i) => ({ value: i.id, label: i.name }))}
+                  value={objective.condition?.operand || null}
+                  onChange={(value) => {
+                    const cond = objective.condition || { operator: 'hasItem' as ConditionOperator, operand: '' };
+                    handleChange('condition', { ...cond, operand: value || '' });
+                  }}
+                  placeholder="Select item..."
+                  searchable
+                  clearable
+                />
+              ) : (
+                <TextInput
+                  label="Operand"
+                  value={objective.condition?.operand || ''}
+                  onChange={(e) => {
+                    const cond = objective.condition || { operator: 'hasFlag' as ConditionOperator, operand: '' };
+                    handleChange('condition', { ...cond, operand: e.currentTarget.value });
+                  }}
+                  placeholder={
+                    objective.condition?.operator === 'hasFlag' ? 'flag-name'
+                      : objective.condition?.operator === 'questComplete' ? 'quest-id'
+                      : objective.condition?.operator === 'stageComplete' ? 'questId:stageId'
+                      : 'expression'
+                  }
+                />
+              )}
+
+              <Checkbox
+                label="Negate (NOT)"
+                checked={objective.condition?.negate ?? false}
+                onChange={(e) => {
+                  const cond = objective.condition || { operator: 'hasFlag' as ConditionOperator, operand: '' };
+                  handleChange('condition', { ...cond, negate: e.currentTarget.checked || undefined });
+                }}
+              />
+            </Stack>
           )}
 
+          {/* Common fields */}
           <Group>
             <Checkbox
               label="Optional"
@@ -685,151 +1140,63 @@ function ObjectiveEditorPanel({
             <Text size="sm" fw={500}>Prerequisites</Text>
             {prereqObjectives.length === 0 ? (
               <Text size="xs" c="dimmed" fs="italic">
-                No prerequisites - this is an entry objective
+                No prerequisites - this is an entry node
               </Text>
             ) : (
-              prereqObjectives.map((prereq) => (
-                <Paper key={prereq.id} p="xs" withBorder style={{ background: '#181825' }}>
-                  <Group justify="space-between">
-                    <Group gap="xs">
-                      <Text size="sm">{OBJECTIVE_ICONS[prereq.type]}</Text>
-                      <Text size="xs">{prereq.description}</Text>
+              prereqObjectives.map((prereq) => {
+                const prereqNodeType = prereq.nodeType || 'objective';
+                const prereqIcon = prereqNodeType === 'narrative' ? 'N'
+                  : prereqNodeType === 'condition' ? '?'
+                  : OBJECTIVE_ICONS[prereq.type] || '⭐';
+                return (
+                  <Paper key={prereq.id} p="xs" withBorder style={{ background: '#181825' }}>
+                    <Group justify="space-between">
+                      <Group gap="xs">
+                        <Text size="sm">{prereqIcon}</Text>
+                        <Text size="xs">{prereq.description}</Text>
+                      </Group>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        color="red"
+                        onClick={() => onRemovePrerequisite(prereq.id)}
+                        styles={{ root: { padding: '2px 6px' } }}
+                      >
+                        ✕
+                      </Button>
                     </Group>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      onClick={() => onRemovePrerequisite(prereq.id)}
-                      styles={{ root: { padding: '2px 6px' } }}
-                    >
-                      ✕
-                    </Button>
-                  </Group>
-                </Paper>
-              ))
+                  </Paper>
+                );
+              })
             )}
             <Text size="xs" c="dimmed">
-              Drag from another objective's output to add prerequisites
+              Drag from another node's output to add prerequisites
             </Text>
           </Stack>
 
+          {/* OnEnter Actions */}
+          <ActionListEditor
+            label="On Enter Actions"
+            field="onEnter"
+            objective={objective}
+            onChange={onChange}
+            npcs={npcs}
+            items={items}
+          />
+
           {/* OnComplete Actions */}
-          <Stack gap="xs">
-            <Group justify="space-between">
-              <Text size="sm" fw={500}>On Complete Actions</Text>
-              <Select
-                size="xs"
-                placeholder="+ Add"
-                data={ACTION_TYPES}
-                value={null}
-                onChange={(value) => {
-                  if (!value) return;
-                  const newAction: ObjectiveAction = { type: 'moveNpc', npcId: '', position: { x: 0, y: 0, z: 0 } };
-                  onChange({ ...objective, onComplete: [...(objective.onComplete || []), newAction] });
-                }}
-                styles={{
-                  input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4', width: 100 },
-                }}
-              />
-            </Group>
-
-            {(objective.onComplete || []).map((action, index) => (
-              <Paper key={index} p="xs" style={{ background: '#181825', border: '1px solid #313244' }}>
-                <Stack gap="xs">
-                  <Group justify="space-between">
-                    <Text size="xs" c="dimmed">{action.type}</Text>
-                    <ActionIcon
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      onClick={() => {
-                        const updated = [...(objective.onComplete || [])];
-                        updated.splice(index, 1);
-                        onChange({ ...objective, onComplete: updated.length > 0 ? updated : undefined });
-                      }}
-                    >
-                      ×
-                    </ActionIcon>
-                  </Group>
-
-                  {action.type === 'moveNpc' && (
-                    <>
-                      <Select
-                        size="xs"
-                        placeholder="Select NPC..."
-                        data={npcs.map((n) => ({ value: n.id, label: n.name }))}
-                        value={(action as MoveNpcAction).npcId || null}
-                        onChange={(value) => {
-                          const updated = [...(objective.onComplete || [])];
-                          updated[index] = { ...action, npcId: value || '' } as MoveNpcAction;
-                          onChange({ ...objective, onComplete: updated });
-                        }}
-                        searchable
-                        styles={{
-                          input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4' },
-                        }}
-                      />
-                      <Group gap="xs">
-                        <NumberInput
-                          size="xs"
-                          label="X"
-                          value={(action as MoveNpcAction).position?.x || 0}
-                          onChange={(value) => {
-                            const updated = [...(objective.onComplete || [])];
-                            const pos = (action as MoveNpcAction).position || { x: 0, y: 0, z: 0 };
-                            updated[index] = { ...action, position: { ...pos, x: Number(value) || 0 } } as MoveNpcAction;
-                            onChange({ ...objective, onComplete: updated });
-                          }}
-                          styles={{
-                            input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 60 },
-                            label: { color: '#6c7086' },
-                          }}
-                        />
-                        <NumberInput
-                          size="xs"
-                          label="Y"
-                          value={(action as MoveNpcAction).position?.y || 0}
-                          onChange={(value) => {
-                            const updated = [...(objective.onComplete || [])];
-                            const pos = (action as MoveNpcAction).position || { x: 0, y: 0, z: 0 };
-                            updated[index] = { ...action, position: { ...pos, y: Number(value) || 0 } } as MoveNpcAction;
-                            onChange({ ...objective, onComplete: updated });
-                          }}
-                          styles={{
-                            input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 60 },
-                            label: { color: '#6c7086' },
-                          }}
-                        />
-                        <NumberInput
-                          size="xs"
-                          label="Z"
-                          value={(action as MoveNpcAction).position?.z || 0}
-                          onChange={(value) => {
-                            const updated = [...(objective.onComplete || [])];
-                            const pos = (action as MoveNpcAction).position || { x: 0, y: 0, z: 0 };
-                            updated[index] = { ...action, position: { ...pos, z: Number(value) || 0 } } as MoveNpcAction;
-                            onChange({ ...objective, onComplete: updated });
-                          }}
-                          styles={{
-                            input: { background: '#11111b', border: '1px solid #313244', color: '#cdd6f4', width: 60 },
-                            label: { color: '#6c7086' },
-                          }}
-                        />
-                      </Group>
-                    </>
-                  )}
-                </Stack>
-              </Paper>
-            ))}
-
-            {(!objective.onComplete || objective.onComplete.length === 0) && (
-              <Text size="xs" c="dimmed" fs="italic">No actions configured</Text>
-            )}
-          </Stack>
+          <ActionListEditor
+            label="On Complete Actions"
+            field="onComplete"
+            objective={objective}
+            onChange={onChange}
+            npcs={npcs}
+            items={items}
+          />
 
           {/* Delete button */}
           <Button color="red" variant="subtle" onClick={onDelete} fullWidth mt="md">
-            Delete Objective
+            Delete Node
           </Button>
         </Stack>
       </ScrollArea>

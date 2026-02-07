@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { SugarEngine, EngineConfig } from './Engine';
 import { DialogueManager } from '../dialogue/DialogueManager';
 import { InspectionManager } from '../inspection/InspectionManager';
@@ -10,7 +11,7 @@ import { AudioManager, AudioConfig, AmbientController } from '../audio';
 import { CasterManager, SpellLoader, SpellDefinition, SpellResult, SpellEffect, PlayerCasterConfig } from '../caster';
 import { CasterSystem } from '../systems/CasterSystem';
 import { Caster } from '../components/Caster';
-import { ObjectiveType } from '../quests/types';
+import { ObjectiveType, BeatAction, ConditionExpression } from '../quests/types';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
@@ -84,6 +85,9 @@ export class Game {
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
   private fadeOverlay: FadeOverlay;
+
+  // Beat flags (ADR-016) - temporary key-value store until ADR-018 WorldState
+  private beatFlags: Map<string, unknown> = new Map();
 
   // Track active quest dialogue so we can complete objectives when dialogue ends
   private activeQuestDialogue: {
@@ -452,7 +456,7 @@ export class Game {
       this.eventHandlers.onObjectiveProgress?.();
     });
 
-    // Handle auto-start objectives
+    // Handle auto-start objectives (legacy: autoStart on objective nodes)
     this.quests.setOnObjectiveTrigger((questId, objective) => {
       // Handle 'talk' or 'voiceover' objectives - start the dialogue
       if ((objective.type === 'talk' || objective.type === 'voiceover') && objective.dialogue) {
@@ -467,15 +471,65 @@ export class Game {
       }
     });
 
-    // Handle objective completion side effects (e.g., moveNpc)
-    // Note: Triggering other objectives is handled via prerequisites, not actions
-    this.quests.setOnObjectiveAction((action) => {
-      switch (action.type) {
-        case 'moveNpc':
-          this.engine.moveNPCTo(action.npcId, action.position)
-            .catch((err) => console.error(`[Game] Failed to move NPC:`, err));
+    // Handle beat actions (ADR-016) - instant side effects on node enter/complete
+    this.quests.setOnBeatAction((action: BeatAction) => {
+      this.executeBeatAction(action);
+    });
+
+    // Handle narrative node triggers (ADR-016)
+    // Narrative nodes auto-fire and complete when content finishes
+    this.quests.setOnNarrativeTrigger((questId, objective) => {
+      const narrativeType = objective.narrativeType ?? 'event';
+
+      switch (narrativeType) {
+        case 'voiceover':
+          // Use dialogue system for voiceover (monologue)
+          if (objective.dialogueId || objective.dialogue) {
+            this.activeQuestDialogue = {
+              questId,
+              objectiveId: objective.id,
+              completeOn: objective.completeOn ?? 'dialogueEnd',
+            };
+            this.dialogue.start(objective.dialogueId || objective.dialogue!);
+          } else {
+            // No dialogue ID - auto-complete
+            this.quests.completeObjective(questId, objective.id);
+          }
+          break;
+
+        case 'dialogue':
+          // Auto-trigger a dialogue
+          if (objective.dialogueId || objective.dialogue) {
+            this.activeQuestDialogue = {
+              questId,
+              objectiveId: objective.id,
+              completeOn: objective.completeOn ?? 'dialogueEnd',
+            };
+            this.dialogue.start(objective.dialogueId || objective.dialogue!);
+          } else {
+            this.quests.completeObjective(questId, objective.id);
+          }
+          break;
+
+        case 'event':
+          // Fire event and complete immediately
+          if (objective.eventName) {
+            this.eventHandlers.onDialogueEvent?.(objective.eventName);
+          }
+          this.quests.completeObjective(questId, objective.id);
+          break;
+
+        case 'cutscene':
+          // Cutscenes not yet implemented - auto-complete for now
+          console.warn(`[Game] Cutscene narrative type not yet implemented, auto-completing node ${objective.id}`);
+          this.quests.completeObjective(questId, objective.id);
           break;
       }
+    });
+
+    // Condition checker (ADR-016) - evaluate conditions against game state
+    this.quests.setConditionChecker((condition: ConditionExpression) => {
+      return this.evaluateCondition(condition);
     });
 
     // ========================================
@@ -486,6 +540,14 @@ export class Game {
 
       // Trigger collect objectives for this item
       this.quests.triggerObjective('collect', event.itemId);
+
+      // Re-evaluate condition nodes (ADR-016) - inventory state changed
+      this.quests.evaluateConditions();
+    });
+
+    this.inventory.setOnItemRemoved(() => {
+      // Re-evaluate condition nodes (ADR-016) - inventory state changed
+      this.quests.evaluateConditions();
     });
 
     // ========================================
@@ -606,6 +668,7 @@ export class Game {
       // Reset all state
       this.inventory.clear();
       this.quests.clearAllQuests();
+      this.beatFlags.clear();
       this.saveManager.clearCollectedPickups();
 
       // Load starting region (geometry.path format, e.g., 'cafe-nollie')
@@ -965,6 +1028,143 @@ export class Game {
   //   }
   //   return null;
   // }
+
+  // ============================================
+  // Beat Action Execution (ADR-016)
+  // ============================================
+
+  /**
+   * Execute a beat action (instant side effect)
+   */
+  private executeBeatAction(action: BeatAction): void {
+    switch (action.type) {
+      case 'setFlag':
+        // Flags system not yet implemented (ADR-018) - store in a simple map for now
+        // TODO: Replace with WorldState flags namespace when ADR-018 is implemented
+        if (action.target) {
+          this.beatFlags.set(action.target, action.value ?? true);
+          // Re-evaluate conditions since flags changed
+          this.quests.evaluateConditions();
+        }
+        break;
+
+      case 'giveItem':
+        if (action.target) {
+          this.inventory.addItem(action.target, (action.value as number) ?? 1);
+        }
+        break;
+
+      case 'removeItem':
+        if (action.target) {
+          this.inventory.removeItem(action.target, (action.value as number) ?? 1);
+        }
+        break;
+
+      case 'playSound':
+        if (action.target) {
+          this.audio.play(action.target);
+        }
+        break;
+
+      case 'teleportNPC':
+        // Instant position change - use moveNPCTo with instant flag
+        // TODO: Add true instant teleport to Engine if needed
+        if (action.target && action.value) {
+          const pos = action.value as { x: number; y: number; z: number };
+          this.engine.moveNPCTo(action.target, pos)
+            .catch((err: unknown) => console.error(`[Game] Failed to teleport NPC:`, err));
+        }
+        break;
+
+      case 'moveNpc':
+        // Legacy animated movement (backward compat from ADR-015)
+        if (action.npcId && action.position) {
+          this.engine.moveNPCTo(action.npcId, action.position)
+            .catch((err: unknown) => console.error(`[Game] Failed to move NPC:`, err));
+        } else if (action.target && action.value) {
+          // Also support new format: target=npcId, value=position
+          const pos = action.value as { x: number; y: number; z: number };
+          this.engine.moveNPCTo(action.target, pos)
+            .catch((err: unknown) => console.error(`[Game] Failed to move NPC:`, err));
+        }
+        break;
+
+      case 'setNPCState':
+        // NPC state changes - will be more useful with ADR-017 behavior trees
+        if (action.target) {
+          console.warn(`[Game] setNPCState not yet fully implemented for NPC ${action.target}`);
+        }
+        break;
+
+      case 'emitEvent':
+        if (action.target) {
+          this.eventHandlers.onDialogueEvent?.(action.target);
+        }
+        break;
+
+      case 'spawnVFX':
+        // VFX spawning via engine
+        if (action.target && action.value) {
+          const pos = action.value as { x: number; y: number; z: number };
+          const vec = new THREE.Vector3(pos.x, pos.y, pos.z);
+          this.engine.createVFXEmitter(action.target, vec);
+        }
+        break;
+
+      case 'custom':
+        console.warn(`[Game] Custom beat action: ${action.target}`, action.value);
+        break;
+    }
+  }
+
+  /**
+   * Evaluate a condition expression against current game state (ADR-016)
+   */
+  private evaluateCondition(condition: ConditionExpression): boolean {
+    switch (condition.operator) {
+      case 'hasItem':
+        return this.inventory.hasItem(condition.operand);
+
+      case 'hasFlag':
+        // Check beat flags (simple map until ADR-018 WorldState)
+        const flagValue = this.beatFlags.get(condition.operand);
+        if (condition.value !== undefined) {
+          return flagValue === condition.value;
+        }
+        return flagValue !== undefined && flagValue !== false && flagValue !== null;
+
+      case 'questComplete':
+        return this.quests.isQuestCompleted(condition.operand);
+
+      case 'stageComplete':
+        // Handled by QuestManager's built-in check
+        return false;
+
+      case 'custom':
+        console.warn(`[Game] Custom condition not yet implemented: ${condition.operand}`);
+        return false;
+
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Get a beat flag value (ADR-016)
+   * Temporary until ADR-018 WorldState is implemented
+   */
+  getBeatFlag(key: string): unknown {
+    return this.beatFlags.get(key);
+  }
+
+  /**
+   * Set a beat flag value (ADR-016)
+   * Temporary until ADR-018 WorldState is implemented
+   */
+  setBeatFlag(key: string, value: unknown): void {
+    this.beatFlags.set(key, value);
+    this.quests.evaluateConditions();
+  }
 
   /**
    * Dispose all systems

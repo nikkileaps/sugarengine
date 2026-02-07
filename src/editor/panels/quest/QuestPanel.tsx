@@ -16,8 +16,19 @@ import {
 import { useEditorStore } from '../../store';
 import { QuestDetail } from './QuestDetail';
 import { generateUUID, shortId } from '../../utils';
+import type {
+  BeatNodeType,
+  NarrativeSubtype,
+  ConditionOperator,
+  ConditionExpression,
+  ActionType,
+  BeatAction,
+} from '../../../engine/quests';
 
-// Note: Triggering other objectives is done via prerequisites (graph edges), not actions
+// Re-export engine types for other editor files
+export type { BeatNodeType, NarrativeSubtype, ConditionOperator, ConditionExpression, ActionType, BeatAction };
+
+// Legacy types (kept for backward compat)
 export type ObjectiveActionType = 'moveNpc';
 
 export interface MoveNpcAction {
@@ -38,11 +49,27 @@ export interface QuestObjective {
   completed?: boolean;
   dialogue?: string;
   completeOn?: 'dialogueEnd' | string;
-  // Auto-start: fires automatically when available (at stage load or when prerequisites complete)
   autoStart?: boolean;
-  onComplete?: ObjectiveAction[];
-  // Graph structure - objective IDs that must complete before this one activates
+  onComplete?: BeatAction[];
   prerequisites?: string[];
+
+  // Beat node type (ADR-016) - defaults to 'objective'
+  nodeType?: BeatNodeType;
+
+  // Actions fired on node enter (ADR-016)
+  onEnter?: BeatAction[];
+
+  // Narrative-specific (ADR-016)
+  narrativeType?: NarrativeSubtype;
+  voiceoverText?: string;
+  dialogueId?: string;
+  eventName?: string;
+
+  // Condition-specific (ADR-016)
+  condition?: ConditionExpression;
+
+  // Display control (ADR-016)
+  showInHUD?: boolean;
 }
 
 export interface QuestStage {
@@ -94,13 +121,70 @@ export function validateQuest(quest: QuestEntry): string[] {
       warnings.push(`Stage "${stage.id}" references non-existent stage "${stage.next}"`);
     }
     if (stage.objectives.length === 0) {
-      warnings.push(`Stage "${stage.id}" has no objectives`);
+      warnings.push(`Stage "${stage.id}" has no nodes`);
     }
+
+    const stageObjIds = new Set(stage.objectives.map((o) => o.id));
+
     for (const obj of stage.objectives) {
-      // Voiceovers don't need a target
-      if (!obj.target && obj.type !== 'voiceover') {
-        warnings.push(`Objective in stage "${stage.id}" has no target`);
+      const nodeType = obj.nodeType || 'objective';
+      const label = `"${obj.description}" in stage "${stage.id}"`;
+
+      // Objective validation
+      if (nodeType === 'objective') {
+        if (!obj.target && obj.type !== 'voiceover') {
+          warnings.push(`Objective ${label} has no target`);
+        }
       }
+
+      // Narrative validation
+      if (nodeType === 'narrative') {
+        const nt = obj.narrativeType || 'dialogue';
+        if (nt === 'dialogue' && !obj.dialogueId) {
+          warnings.push(`Narrative node ${label} has no dialogue selected`);
+        }
+      }
+
+      // Condition validation
+      if (nodeType === 'condition') {
+        if (!obj.condition || !obj.condition.operand) {
+          warnings.push(`Condition node ${label} has no operand`);
+        }
+      }
+
+      // Prerequisite references
+      if (obj.prerequisites) {
+        for (const prereqId of obj.prerequisites) {
+          if (!stageObjIds.has(prereqId)) {
+            warnings.push(`Node ${label} references non-existent prerequisite "${prereqId}"`);
+          }
+        }
+      }
+
+      // Action validation (onEnter + onComplete)
+      const allActions = [...(obj.onEnter || []), ...(obj.onComplete || [])];
+      for (const action of allActions) {
+        if (['setFlag', 'playSound', 'emitEvent', 'spawnVFX'].includes(action.type) && !action.target) {
+          warnings.push(`${action.type} action on ${label} has no target`);
+        }
+        if (['giveItem', 'removeItem'].includes(action.type) && !action.target) {
+          warnings.push(`${action.type} action on ${label} has no item selected`);
+        }
+        if (['moveNpc', 'teleportNPC', 'setNPCState'].includes(action.type) && !action.target && !action.npcId) {
+          warnings.push(`${action.type} action on ${label} has no NPC selected`);
+        }
+      }
+    }
+
+    // Check for orphan nodes (not reachable from any entry point)
+    if (stage.objectives.length > 1) {
+      const entries = stage.objectives.filter(
+        (o) => !o.prerequisites || o.prerequisites.length === 0
+      );
+      if (entries.length === 0) {
+        warnings.push(`Stage "${stage.id}" has no entry nodes (all nodes have prerequisites)`);
+      }
+
     }
   }
 
