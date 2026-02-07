@@ -22,6 +22,8 @@ export interface NPCData {
   description?: string;
   defaultDialogue?: string;
   faction?: string;
+  behaviorTree?: import('../../engine/behavior/types').BTNode;
+  behaviorMode?: 'onInteraction' | 'continuous';
 }
 
 export interface DialogueData {
@@ -36,7 +38,7 @@ export interface QuestData {
   stages: {
     id: string;
     description: string;
-    objectives: { type: string; target: string; description: string }[];
+    objectives: { id: string; type: string; target: string; description: string }[];
   }[];
   episodeId?: string;
 }

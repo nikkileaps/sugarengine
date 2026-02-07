@@ -693,6 +693,27 @@ export class QuestManager {
     return activeSet?.has(objectiveId) ?? false;
   }
 
+  /**
+   * Get the state of a specific beat node / objective within a stage (ADR-017)
+   * Returns 'active' if prerequisites met and not completed, 'completed' if done, null if not found.
+   */
+  getObjectiveState(questId: string, objectiveId: string): 'active' | 'completed' | null {
+    const questState = this.activeQuests.get(questId);
+    if (!questState) {
+      if (this.completedQuests.has(questId)) return 'completed';
+      return null;
+    }
+
+    const objective = questState.objectiveProgress.get(objectiveId);
+    if (!objective) return null;
+
+    if (objective.completed) return 'completed';
+    if (this.isObjectiveActive(questId, objectiveId)) return 'active';
+
+    // Exists but prerequisites not met yet
+    return null;
+  }
+
   // ============================================
   // Queries
   // ============================================
@@ -730,6 +751,32 @@ export class QuestManager {
    */
   isQuestCompleted(questId: string): boolean {
     return this.completedQuests.has(questId);
+  }
+
+  /**
+   * Get stage state for behavior tree conditions (ADR-017)
+   * Returns 'active' if stage is current, 'completed' if past, null if not found.
+   */
+  getStageState(questId: string, stageId: string): 'active' | 'completed' | null {
+    const questState = this.activeQuests.get(questId);
+    if (!questState) {
+      // Quest might be completed
+      if (this.completedQuests.has(questId)) return 'completed';
+      return null;
+    }
+
+    // Current stage is active
+    if (questState.currentStageId === stageId) return 'active';
+
+    // Check if we've moved past it
+    const loaded = this.loadedQuests.get(questId);
+    if (loaded) {
+      const stageIndex = loaded.definition.stages.findIndex(s => s.id === stageId);
+      const currentIndex = loaded.definition.stages.findIndex(s => s.id === questState.currentStageId);
+      if (stageIndex >= 0 && currentIndex > stageIndex) return 'completed';
+    }
+
+    return null;
   }
 
   /**

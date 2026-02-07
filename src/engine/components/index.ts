@@ -5,6 +5,8 @@ export { PlayerControlled } from './PlayerControlled';
 export { TriggerZone } from './TriggerZone';
 export type { TriggerEvent } from './TriggerZone';
 export { NPC } from './NPC';
+export { NPCBehavior } from './NPCBehavior';
+export type { BehaviorMode } from './NPCBehavior';
 export { ItemPickup } from './ItemPickup';
 export { NPCMovement } from './NPCMovement';
 export type { Waypoint, MovementBehavior } from './NPCMovement';

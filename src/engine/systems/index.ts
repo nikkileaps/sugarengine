@@ -5,6 +5,8 @@ export type { TriggerHandler } from './TriggerSystem';
 export { InteractionSystem } from './InteractionSystem';
 export type { InteractionHandler, InspectionHandler, ResonanceHandler, InteractableType, NearbyInteractable } from './InteractionSystem';
 export { NPCMovementSystem } from './NPCMovementSystem';
+export { BehaviorTreeSystem } from './BehaviorTreeSystem';
+export type { BTConditionChecker, BTActionHandler } from './BehaviorTreeSystem';
 export { WorldLabelSystem } from './WorldLabelSystem';
 export { LODSystem } from './LODSystem';
 export type { LODStats } from './LODSystem';

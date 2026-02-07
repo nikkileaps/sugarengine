@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
-import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, ItemPickup, NPCMovement, Waypoint, Inspectable, ResonancePoint, WorldLabel, SurfacePatchLOD } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem } from '../systems';
+import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, NPCBehavior, ItemPickup, NPCMovement, Waypoint, Inspectable, ResonancePoint, WorldLabel, SurfacePatchLOD } from '../components';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem, BehaviorTreeSystem, BTConditionChecker, BTActionHandler } from '../systems';
 import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
@@ -32,6 +32,8 @@ export interface NPCDatabaseEntry {
   name: string;
   portrait?: string;
   dialogue?: string;
+  behaviorTree?: import('../behavior').BTNode;
+  behaviorMode?: import('../components').BehaviorMode;
 }
 
 /**
@@ -79,6 +81,7 @@ export class SugarEngine {
 
   private triggerSystem: TriggerSystem;
   private interactionSystem: InteractionSystem;
+  private behaviorTreeSystem: BehaviorTreeSystem;
   private movementSystem: MovementSystem;
   private lodSystem: LODSystem;
   private raycaster: THREE.Raycaster;
@@ -147,6 +150,9 @@ export class SugarEngine {
 
     this.interactionSystem = new InteractionSystem(this.input);
     this.world.addSystem(this.interactionSystem);
+
+    this.behaviorTreeSystem = new BehaviorTreeSystem();
+    this.world.addSystem(this.behaviorTreeSystem);
 
     // World label system for floating NPC names (pure Three.js)
     this.worldLabelSystem = new WorldLabelSystem(this.scene, this.camera.getThreeCamera());
@@ -377,6 +383,14 @@ export class SugarEngine {
         displayName,
         dialogueId
       ));
+
+      // Add behavior tree if defined in NPC database (ADR-017)
+      if (npcInfo?.behaviorTree) {
+        this.world.addComponent(entity, new NPCBehavior(
+          npcInfo.behaviorTree,
+          npcInfo.behaviorMode ?? 'onInteraction'
+        ));
+      }
 
       // Add movement components if movement is defined
       if (npcDef.movement) {
@@ -683,6 +697,14 @@ export class SugarEngine {
       const dialogueId = npcInfo?.dialogue;
 
       this.world.addComponent(entity, new NPC(npcDef.id, displayName, dialogueId));
+
+      // Add behavior tree if defined in NPC database (ADR-017)
+      if (npcInfo?.behaviorTree) {
+        this.world.addComponent(entity, new NPCBehavior(
+          npcInfo.behaviorTree,
+          npcInfo.behaviorMode ?? 'onInteraction'
+        ));
+      }
 
       if (npcDef.movement) {
         this.world.addComponent(entity, new Velocity());
@@ -1597,6 +1619,36 @@ export class SugarEngine {
   }
 
   // ============================================
+  // Behavior Tree System (ADR-017)
+  // ============================================
+
+  /**
+   * Register a condition checker for behavior tree evaluation.
+   * Called from Game.ts to wire BT conditions to game state.
+   */
+  setBTConditionChecker(checker: BTConditionChecker): void {
+    this.behaviorTreeSystem.setConditionChecker(checker);
+  }
+
+  /**
+   * Register an action handler for continuous behavior tree actions.
+   * Called from Game.ts to execute BT actions (moveTo, setFlag, etc.)
+   */
+  setBTActionHandler(handler: BTActionHandler): void {
+    this.behaviorTreeSystem.setActionHandler(handler);
+  }
+
+  /**
+   * Evaluate an NPC's behavior tree for interaction.
+   * Returns the action the NPC wants to take, or null if no BT or no match.
+   */
+  evaluateNPCBehavior(npcId: string): import('../behavior').BTAction | null {
+    const entity = this.findNPCEntity(npcId);
+    if (entity === null) return null;
+    return this.behaviorTreeSystem.evaluateForInteraction(entity, this.world);
+  }
+
+  // ============================================
   // LOD System
   // ============================================
 
@@ -1687,8 +1739,15 @@ export class SugarEngine {
   /**
    * Register an NPC directly (for development mode)
    */
-  registerNPC(id: string, name: string, dialogue?: string): void {
-    this.npcDatabase.set(id, { id, name, dialogue });
+  registerNPC(id: string, name: string, dialogue?: string, behaviorTree?: import('../behavior').BTNode, behaviorMode?: import('../components').BehaviorMode): void {
+    this.npcDatabase.set(id, { id, name, dialogue, behaviorTree, behaviorMode });
+  }
+
+  /**
+   * Check if a registered NPC has a behavior tree.
+   */
+  hasNPCBehaviorTree(npcId: string): boolean {
+    return !!this.npcDatabase.get(npcId)?.behaviorTree;
   }
 
   /**

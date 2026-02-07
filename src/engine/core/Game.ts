@@ -12,6 +12,7 @@ import { CasterManager, SpellLoader, SpellDefinition, SpellResult, SpellEffect, 
 import { CasterSystem } from '../systems/CasterSystem';
 import { Caster } from '../components/Caster';
 import { ObjectiveType, BeatAction, ConditionExpression } from '../quests/types';
+import type { BTAction, BTCondition } from '../behavior';
 import { PLAYER, NARRATOR } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
@@ -175,7 +176,7 @@ export class Game {
     const project = projectData as {
       dialogues?: { id: string }[];
       quests?: { id: string }[];
-      npcs?: { id: string; name: string; defaultDialogue?: string }[];
+      npcs?: { id: string; name: string; defaultDialogue?: string; behaviorTree?: import('../behavior').BTNode; behaviorMode?: import('../components').BehaviorMode }[];
       items?: { id: string; name: string }[];
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
       regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; resonancePoints?: { id: string; resonancePointId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; vfxSpawns?: { id: string; vfxId: string; position: { x: number; y: number; z: number }; scale?: number; autoPlay?: boolean }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
@@ -221,7 +222,7 @@ export class Game {
     // Register NPCs
     if (project.npcs) {
       for (const npc of project.npcs) {
-        this.engine.registerNPC(npc.id, npc.name);
+        this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode);
       }
     }
 
@@ -325,15 +326,16 @@ export class Game {
 
     const { type, id, promptText, dialogueId } = this.nearbyInteractable;
 
-    // For NPCs, only available if there's dialogue to trigger
+    // For NPCs, available if there's dialogue or a behavior tree to evaluate
     if (type === 'npc') {
       const hasQuestDialogue = this.quests.getQuestDialogueForNpc(id) !== null;
       const hasDefaultDialogue = !!dialogueId;
+      const hasBehaviorTree = this.engine.hasNPCBehaviorTree(id);
       return {
         type,
         id,
         promptText,
-        available: hasQuestDialogue || hasDefaultDialogue,
+        available: hasQuestDialogue || hasDefaultDialogue || hasBehaviorTree,
       };
     }
 
@@ -533,6 +535,18 @@ export class Game {
     });
 
     // ========================================
+    // Behavior Tree System (ADR-017)
+    // ========================================
+    this.engine.setBTConditionChecker((npcId: string, condition: BTCondition) => {
+      return this.evaluateBTCondition(npcId, condition);
+    });
+
+    // Action handler for continuous behavior trees
+    this.engine.setBTActionHandler((npcId: string, action: BTAction) => {
+      this.executeBTAction(action, npcId);
+    });
+
+    // ========================================
     // Inventory System
     // ========================================
     this.inventory.setOnItemAdded((event) => {
@@ -581,30 +595,40 @@ export class Game {
       }
     });
 
-    // NPC interaction → dialogue + quest trigger
+    // NPC interaction → quest dialogue → behavior tree → default dialogue
     this.engine.onInteract((npcId, npcDefaultDialogue) => {
       if (this.isUIBlocking()) return;
       this.audio.play('interact');
 
-      // Check if any active quest has a specific dialogue for this NPC
+      // 1. Check if any active quest has a specific dialogue for this NPC
       const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
 
       if (questDialogue) {
         // Use quest-specific dialogue
+        console.log(`[Game] Interact ${npcId}: quest dialogue intercepted (quest=${questDialogue.questId}, obj=${questDialogue.objectiveId})`);
         this.activeQuestDialogue = {
           questId: questDialogue.questId,
           objectiveId: questDialogue.objectiveId,
           completeOn: questDialogue.completeOn
         };
         this.dialogue.start(questDialogue.dialogue);
-      } else {
-        // No quest dialogue - use NPC's default (if any)
-        // Also trigger generic "talk" objectives that don't specify a dialogue
-        this.quests.triggerObjective('talk', npcId);
+        return;
+      }
 
-        if (npcDefaultDialogue) {
-          this.dialogue.start(npcDefaultDialogue);
-        }
+      // 2. Evaluate behavior tree (ADR-017)
+      const btAction = this.engine.evaluateNPCBehavior(npcId);
+      console.log(`[Game] Interact ${npcId}: BT result =`, btAction);
+      if (btAction) {
+        this.executeBTAction(btAction, npcId);
+        return;
+      }
+
+      // 3. Fallback to default dialogue + trigger generic talk objectives
+      console.log(`[Game] Interact ${npcId}: fallback (defaultDialogue=${npcDefaultDialogue || 'none'})`);
+      this.quests.triggerObjective('talk', npcId);
+
+      if (npcDefaultDialogue) {
+        this.dialogue.start(npcDefaultDialogue);
       }
     });
 
@@ -1146,6 +1170,98 @@ export class Game {
 
       default:
         return false;
+    }
+  }
+
+  // ============================================
+  // Behavior Tree Integration (ADR-017)
+  // ============================================
+
+  /**
+   * Evaluate a behavior tree condition against game state
+   */
+  private evaluateBTCondition(_npcId: string, condition: BTCondition): boolean {
+    switch (condition.type) {
+      case 'questStage': {
+        // If nodeId provided, check specific beat node within the stage
+        if (condition.nodeId) {
+          const nodeState = this.quests.getObjectiveState(condition.questId, condition.nodeId);
+          return nodeState === condition.state;
+        }
+        // Otherwise check stage-level state
+        const stageState = this.quests.getStageState(condition.questId, condition.stageId);
+        return stageState === condition.state;
+      }
+
+      case 'hasItem':
+        return this.inventory.hasItem(condition.itemId);
+
+      case 'hasFlag': {
+        const flagValue = this.beatFlags.get(condition.flag);
+        if (condition.value !== undefined) {
+          return flagValue === condition.value;
+        }
+        return flagValue !== undefined && flagValue !== false && flagValue !== null;
+      }
+
+      case 'timeOfDay':
+        // Time of day not yet implemented - always false
+        return false;
+
+      case 'atLocation':
+        // Location checks not yet implemented - always false
+        return false;
+
+      case 'custom':
+        console.warn(`[Game] Custom BT condition not implemented: ${condition.check}`);
+        return false;
+
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Execute a behavior tree action result.
+   * Called for both onInteraction and continuous modes.
+   */
+  private executeBTAction(action: BTAction, npcId?: string): void {
+    switch (action.type) {
+      case 'dialogue':
+        this.dialogue.start(action.dialogueId);
+        break;
+
+      case 'setFlag':
+        this.beatFlags.set(action.flag, action.value);
+        this.quests.evaluateConditions();
+        break;
+
+      case 'emitEvent':
+        this.eventHandlers.onDialogueEvent?.(action.event);
+        break;
+
+      case 'moveTo':
+        if (npcId) {
+          const target = typeof action.target === 'string'
+            ? { x: 0, y: 0, z: 0 } // Named targets not yet resolved - would need location registry
+            : action.target;
+          this.engine.moveNPCTo(npcId, target)
+            .catch((err: unknown) => console.error(`[Game] BT moveTo failed:`, err));
+        }
+        break;
+
+      case 'wait':
+        // Wait is handled by BehaviorTreeSystem timer - nothing to do here
+        break;
+
+      case 'animate':
+      case 'lookAt':
+        // Animation/lookAt not yet implemented
+        break;
+
+      case 'custom':
+        console.warn(`[Game] Custom BT action: ${action.handler}`, action.params);
+        break;
     }
   }
 

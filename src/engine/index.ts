@@ -136,5 +136,28 @@ export type {
   ResonanceGameResult,
 } from './resonance';
 
+// Behavior Trees (ADR-017)
+export { BehaviorTreeEvaluator } from './behavior';
+export type {
+  BTNode,
+  BTNodeType,
+  BTAction,
+  BTActionType,
+  BTCondition,
+  BTConditionType,
+  BTStatus,
+  BTResult,
+  BTContext,
+  BTControlNode,
+  BTParallelNode,
+  BTDecoratorNode,
+  BTConditionNode,
+  BTActionNode,
+} from './behavior';
+export { NPCBehavior } from './components/NPCBehavior';
+export type { BehaviorMode } from './components/NPCBehavior';
+export { BehaviorTreeSystem } from './systems/BehaviorTreeSystem';
+export type { BTConditionChecker, BTActionHandler } from './systems/BehaviorTreeSystem';
+
 // Debug
 export { FreeCameraController } from './debug';

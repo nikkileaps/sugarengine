@@ -2,6 +2,7 @@
  * NPCDetail - Main content view for a selected NPC
  */
 
+import { useState } from 'react';
 import {
   Stack,
   Text,
@@ -17,16 +18,20 @@ import {
   Avatar,
 } from '@mantine/core';
 import { NPCEntry } from './NPCPanel';
+import { BehaviorTreeCanvas } from './BehaviorTreeCanvas';
 
 interface NPCDetailProps {
   npc: NPCEntry;
   dialogues: { id: string; name?: string; nodes?: { speaker?: string }[] }[];
-  quests: { id: string; name: string; stages: { id: string; description: string; objectives: { type: string; target: string; description: string }[] }[] }[];
+  quests: { id: string; name: string; stages: { id: string; description: string; objectives: { id: string; type: string; target: string; description: string }[] }[] }[];
+  items?: { id: string; name: string }[];
   onChange: (updated: NPCEntry) => void;
   onDelete: () => void;
 }
 
-export function NPCDetail({ npc, dialogues, quests, onChange, onDelete }: NPCDetailProps) {
+export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDelete }: NPCDetailProps) {
+  const [showBehaviorTree, setShowBehaviorTree] = useState(false);
+
   // Find dialogues where this NPC speaks
   const npcDialogues = dialogues.filter((d) =>
     d.nodes?.some((node) => node.speaker === npc.id)
@@ -47,6 +52,38 @@ export function NPCDetail({ npc, dialogues, quests, onChange, onDelete }: NPCDet
   const handleChange = (field: keyof NPCEntry, value: string | null) => {
     onChange({ ...npc, [field]: value || undefined });
   };
+
+  // If showing behavior tree editor, render that instead
+  if (showBehaviorTree) {
+    return (
+      <BehaviorTreeCanvas
+        tree={npc.behaviorTree}
+        onChange={(tree) => onChange({ ...npc, behaviorTree: tree })}
+        dialogues={dialogues.map(d => ({ id: d.id, name: d.name || d.id }))}
+        items={items}
+        quests={quests}
+        onClose={() => setShowBehaviorTree(false)}
+      />
+    );
+  }
+
+  // Count nodes in behavior tree
+  const countNodes = (tree: typeof npc.behaviorTree): number => {
+    if (!tree) return 0;
+    let count = 1;
+    if (tree.type === 'selector' || tree.type === 'sequence' || tree.type === 'parallel') {
+      const controlNode = tree as any;
+      for (const child of controlNode.children) {
+        count += countNodes(child);
+      }
+    } else if (tree.type === 'inverter' || tree.type === 'repeater' || tree.type === 'succeeder' || tree.type === 'untilFail') {
+      const decoratorNode = tree as any;
+      count += countNodes(decoratorNode.child);
+    }
+    return count;
+  };
+
+  const nodeCount = countNodes(npc.behaviorTree);
 
   return (
     <ScrollArea h="100%" type="auto">
@@ -176,6 +213,70 @@ export function NPCDetail({ npc, dialogues, quests, onChange, onDelete }: NPCDet
                     autosize
                     size="sm"
                   />
+                </Stack>
+              </Paper>
+
+              {/* Behavior Tree Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="md">
+                  Behavior Tree
+                </Text>
+                <Stack gap="sm">
+                  <Select
+                    label="Behavior Mode"
+                    placeholder="Select mode..."
+                    data={[
+                      { value: 'onInteraction', label: 'On Interaction - runs when player interacts' },
+                      { value: 'continuous', label: 'Continuous - runs constantly' },
+                    ]}
+                    value={npc.behaviorMode || null}
+                    onChange={(value) => onChange({ ...npc, behaviorMode: value as 'onInteraction' | 'continuous' | undefined })}
+                    size="sm"
+                  />
+
+                  {npc.behaviorTree ? (
+                    <Stack gap="xs">
+                      <Group gap="xs">
+                        <Badge size="sm" variant="light" color="green">
+                          {nodeCount} node{nodeCount !== 1 ? 's' : ''}
+                        </Badge>
+                        <Badge size="sm" variant="light" color="blue">
+                          {npc.behaviorTree.type}
+                        </Badge>
+                      </Group>
+                      <Group gap="xs">
+                        <Button
+                          size="sm"
+                          variant="light"
+                          fullWidth
+                          onClick={() => setShowBehaviorTree(true)}
+                        >
+                          Edit Behavior Tree
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="subtle"
+                          color="red"
+                          onClick={() => onChange({ ...npc, behaviorTree: undefined })}
+                        >
+                          Remove
+                        </Button>
+                      </Group>
+                    </Stack>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="light"
+                      fullWidth
+                      onClick={() => setShowBehaviorTree(true)}
+                    >
+                      Create Behavior Tree
+                    </Button>
+                  )}
                 </Stack>
               </Paper>
             </Stack>

@@ -3,6 +3,7 @@
  */
 
 import { useState, ReactNode } from 'react';
+import type { BTNode } from '../../../engine/behavior/types';
 import {
   Stack,
   TextInput,
@@ -24,6 +25,8 @@ export interface NPCEntry {
   description?: string;
   defaultDialogue?: string;
   faction?: string;
+  behaviorTree?: BTNode;
+  behaviorMode?: 'onInteraction' | 'continuous';
 }
 
 export interface NPCPanelResult {
@@ -36,11 +39,12 @@ interface NPCPanelProps {
   npcs: NPCEntry[];
   onNPCsChange: (npcs: NPCEntry[]) => void;
   dialogues?: { id: string; name?: string; nodes?: { speaker?: string }[] }[];
-  quests?: { id: string; name: string; stages: { id: string; description: string; objectives: { type: string; target: string; description: string }[] }[] }[];
+  quests?: { id: string; name: string; stages: { id: string; description: string; objectives: { id: string; type: string; target: string; description: string }[] }[] }[];
+  items?: { id: string; name: string }[];
   children: (result: NPCPanelResult) => ReactNode;
 }
 
-export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], children }: NPCPanelProps) {
+export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], items = [], children }: NPCPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const setDirty = useEditorStore((s) => s.setDirty);
@@ -139,6 +143,7 @@ export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], chil
         npc={selectedNPC}
         dialogues={dialogues}
         quests={quests}
+        items={items}
         onChange={handleUpdate}
         onDelete={() => handleDelete(selectedNPC.id)}
       />

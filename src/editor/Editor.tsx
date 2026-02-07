@@ -494,6 +494,7 @@ export function Editor() {
                 onNPCsChange={setNPCs as any}
                 dialogues={dialogues}
                 quests={quests}
+                items={itemList}
               >
                 {(npcPanel) => (
                   <ItemPanel
