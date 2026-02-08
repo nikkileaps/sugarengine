@@ -36,6 +36,10 @@ export function conditionExpressionToWorldState(expr: ConditionExpression): Worl
       break;
     }
 
+    case 'canCastSpell':
+      condition = { type: 'canCastSpell', spellId: expr.operand };
+      break;
+
     case 'custom':
       console.warn(`[adapters] Custom condition not supported: ${expr.operand}`);
       condition = { type: 'flag', key: `__unsupported_custom_${expr.operand}` };

@@ -266,62 +266,83 @@ interface BloomDefinition {
 
 **Location**: `/public/dialogue/{dialogueId}.json`
 
+See [Dialogue System](06-dialogue.md) for full documentation including conditional connections.
+
 ```typescript
 interface DialogueTree {
-  id: string;
-  startNode: string;
+  id: string;               // UUID
+  name?: string;            // Human-readable name
+  startNode: string;        // ID of first node
   nodes: DialogueNode[];
+  episodeId?: string;       // Episode this dialogue belongs to
 }
 
 interface DialogueNode {
   id: string;
-  speaker?: string;
+  name?: string;            // Human-readable name (editor)
+  speaker?: string;         // Speaker UUID (resolved at runtime)
   text: string;
-  choices?: DialogueChoice[];
-  next?: string;
-  onEnter?: string;
+  next?: DialogueNext[];    // Connections to next node(s)
+  onEnter?: string;         // Event fired when node is shown
 }
 
-interface DialogueChoice {
-  text: string;
-  next: string;
-  condition?: string;
+interface DialogueNext {
+  nodeId: string;                    // Target node ID
+  text?: string;                     // Choice label (when multiple connections)
+  condition?: WorldStateCondition;   // Hidden if condition is false (ADR-019)
 }
 ```
+
+- **One `next` entry**: linear flow (player clicks to continue)
+- **Multiple `next` entries with `text`**: player choice
+- **Multiple `next` entries without `text`**: conditional routing (first passing connection auto-advances)
+- **No `next`**: end of dialogue
 
 ### Example Dialogue
 
 ```json
 {
   "id": "shopkeeper-dialogue",
+  "name": "Shopkeeper Chat",
   "startNode": "greeting",
   "nodes": [
     {
       "id": "greeting",
-      "speaker": "Shopkeeper",
+      "speaker": "<shopkeeper-uuid>",
       "text": "Welcome! What can I do for you?",
-      "choices": [
-        { "text": "What do you sell?", "next": "wares" },
-        { "text": "Heard any rumors?", "next": "rumors" },
-        { "text": "Goodbye", "next": "farewell" }
+      "next": [
+        {
+          "nodeId": "secret-wares",
+          "text": "Show me the good stuff",
+          "condition": { "type": "flag", "key": "knows-secret" }
+        },
+        { "nodeId": "wares", "text": "What do you sell?" },
+        { "nodeId": "rumors", "text": "Heard any rumors?" },
+        { "nodeId": "farewell", "text": "Goodbye" }
       ]
     },
     {
       "id": "wares",
-      "speaker": "Shopkeeper",
+      "speaker": "<shopkeeper-uuid>",
       "text": "I have bread, potions, and various supplies.",
-      "next": "greeting"
+      "next": [{ "nodeId": "greeting" }]
+    },
+    {
+      "id": "secret-wares",
+      "speaker": "<shopkeeper-uuid>",
+      "text": "Ah, a connoisseur. Take a look at these...",
+      "next": [{ "nodeId": "greeting" }]
     },
     {
       "id": "rumors",
-      "speaker": "Shopkeeper",
+      "speaker": "<shopkeeper-uuid>",
       "text": "Strange lights in the forest... be careful out there.",
       "onEnter": "heard-rumor",
-      "next": "greeting"
+      "next": [{ "nodeId": "greeting" }]
     },
     {
       "id": "farewell",
-      "speaker": "Shopkeeper",
+      "speaker": "<shopkeeper-uuid>",
       "text": "Come back soon!"
     }
   ]

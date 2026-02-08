@@ -172,6 +172,17 @@ export class Game {
       this.worldStateNotifier.notify({ namespace: 'quest', key: 'stateChange' });
     });
 
+    // Wire spell availability changes → notifier
+    // CasterManager tracks which spells are castable; only fires when that set changes
+    this.caster.setOnSpellAvailabilityChange(() => {
+      this.worldStateNotifier.notify({ namespace: 'caster', key: 'spellAvailability' });
+    });
+    // CasterSystem frame-by-frame battery recharge (bypasses CasterManager) —
+    // tell CasterManager to recheck spell availability after each tick
+    this.casterSystem.setOnBatteryChanged(() => {
+      this.caster.checkSpellAvailability();
+    });
+
     await this.inventory.init();
     await this.saveManager.init();
 
@@ -418,6 +429,11 @@ export class Game {
       }
 
       this.eventHandlers.onDialogueEvent?.(eventName);
+    });
+
+    // Condition checker for conditional dialogue connections (ADR-019)
+    this.dialogue.setConditionChecker((condition) => {
+      return this.worldStateEvaluator.check(condition);
     });
 
     // Resolve speaker IDs to display names
@@ -925,7 +941,7 @@ export class Game {
     this.engine.removeMovementLock('resonance');
     this.engine.consumeInteract();
 
-    // Add resonance if successful
+    // Add resonance if successful (checkSpellAvailability fires automatically)
     if (success && resonanceGained > 0) {
       this.caster.addResonance(resonanceGained);
     }

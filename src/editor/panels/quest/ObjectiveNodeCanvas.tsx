@@ -61,7 +61,11 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   objective: '#89b4fa',
   narrative: '#cba6f7',
   condition: '#f9e2af',
+  branch: '#fab387',
 };
+
+// Fail connection color
+const FAIL_EDGE_COLOR = '#f38ba8';
 
 // Beat action types for onEnter/onComplete
 const ACTION_TYPES = [
@@ -77,12 +81,63 @@ const ACTION_TYPES = [
   { value: 'custom', label: 'Custom' },
 ];
 
+/** Build canvas nodes, adding pass/fail output ports where needed */
+function buildCanvasNodes(
+  objectives: QuestObjective[],
+  positions: Map<string, { x: number; y: number }>,
+): CanvasNode[] {
+  return objectives.map((obj) => {
+    const nodeType = obj.nodeType || 'objective';
+    const node: CanvasNode = {
+      id: obj.id,
+      position: positions.get(obj.id) || { x: 50, y: 50 },
+    };
+    // Only branch nodes get pass/fail ports (routing is the whole point)
+    // Gate/condition nodes have a single output — they just wait until true
+    if (nodeType === 'branch') {
+      node.outputs = [
+        { name: 'pass', color: '#a6e3a1', hoverColor: '#a6e3a1', yPercent: 0.35 },
+        { name: 'fail', color: '#f38ba8', hoverColor: '#f38ba8', yPercent: 0.65 },
+      ];
+    }
+    return node;
+  });
+}
+
+/** Build connections including both prerequisite (pass) and fail target connections */
+function buildAllConnections(objectives: QuestObjective[]): CanvasConnection[] {
+  const graph = ObjectiveGraph.fromObjectives(objectives);
+  const connections: CanvasConnection[] = graph.edges.map(edge => ({
+    fromId: edge.fromId,
+    toId: edge.toId,
+    color: EDGE_COLOR,
+  }));
+
+  // Add fail target connections
+  for (const obj of objectives) {
+    if (obj.failTargets) {
+      for (const targetId of obj.failTargets) {
+        connections.push({
+          fromId: obj.id,
+          toId: targetId,
+          fromPort: 'fail',
+          color: FAIL_EDGE_COLOR,
+          dashed: true,
+        });
+      }
+    }
+  }
+
+  return connections;
+}
+
 interface ObjectiveNodeCanvasProps {
   stage: QuestStage;
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
   triggers: { id: string; name: string }[];
+  spells: { id: string; name: string }[];
   onStageChange: (stage: QuestStage) => void;
   onClose: () => void;
 }
@@ -93,6 +148,7 @@ export function ObjectiveNodeCanvas({
   items,
   dialogues,
   triggers,
+  spells,
   onStageChange,
   onClose,
 }: ObjectiveNodeCanvasProps) {
@@ -161,27 +217,8 @@ export function ObjectiveNodeCanvas({
     if (!canvasRef.current) return;
 
     const currentStage = stageRef.current;
-    const positions = nodePositions;
-
-    // Create canvas nodes
-    const canvasNodes: CanvasNode[] = currentStage.objectives.map((obj) => ({
-      id: obj.id,
-      position: positions.get(obj.id) || { x: 50, y: 50 },
-    }));
-
-    // Create connections (prerequisites -> objective)
-    const connections: CanvasConnection[] = [];
-    for (const obj of currentStage.objectives) {
-      if (obj.prerequisites) {
-        for (const prereqId of obj.prerequisites) {
-          connections.push({
-            fromId: prereqId,
-            toId: obj.id,
-            color: '#45475a',
-          });
-        }
-      }
-    }
+    const canvasNodes = buildCanvasNodes(currentStage.objectives, nodePositions);
+    const connections = buildAllConnections(currentStage.objectives);
 
     canvasRef.current.setNodes(canvasNodes);
     canvasRef.current.setConnections(connections);
@@ -219,19 +256,33 @@ export function ObjectiveNodeCanvas({
         });
       },
       onCanvasClick: () => setSelectedObjectiveId(null),
-      onConnect: (fromId, toId) => {
-        // Adding a connection means: toId now has fromId as a prerequisite
+      onConnect: (fromId, toId, fromPort) => {
         const currentStage = stageRef.current;
-        const updatedObjectives = currentStage.objectives.map((obj) => {
-          if (obj.id === toId) {
-            const prereqs = obj.prerequisites || [];
-            if (!prereqs.includes(fromId)) {
-              return { ...obj, prerequisites: [...prereqs, fromId] };
+        if (fromPort === 'fail') {
+          // Fail port connection: add toId to fromNode's failTargets
+          const updatedObjectives = currentStage.objectives.map((obj) => {
+            if (obj.id === fromId) {
+              const failTargets = obj.failTargets || [];
+              if (!failTargets.includes(toId)) {
+                return { ...obj, failTargets: [...failTargets, toId] };
+              }
             }
-          }
-          return obj;
-        });
-        onStageChange({ ...currentStage, objectives: updatedObjectives });
+            return obj;
+          });
+          onStageChange({ ...currentStage, objectives: updatedObjectives });
+        } else {
+          // Pass port (default): add fromId as prerequisite of toId
+          const updatedObjectives = currentStage.objectives.map((obj) => {
+            if (obj.id === toId) {
+              const prereqs = obj.prerequisites || [];
+              if (!prereqs.includes(fromId)) {
+                return { ...obj, prerequisites: [...prereqs, fromId] };
+              }
+            }
+            return obj;
+          });
+          onStageChange({ ...currentStage, objectives: updatedObjectives });
+        }
       },
       renderNode: (canvasNode, element) => {
         const currentStage = stageRef.current;
@@ -271,6 +322,7 @@ export function ObjectiveNodeCanvas({
         const headerBg = isEntry ? '#a6e3a122'
           : nodeType === 'narrative' ? '#cba6f722'
           : nodeType === 'condition' ? '#f9e2af22'
+          : nodeType === 'branch' ? '#fab38722'
           : '#313244';
         header.style.cssText = `
           padding: 8px 12px;
@@ -299,6 +351,11 @@ export function ObjectiveNodeCanvas({
           badge.textContent = '?';
           badge.style.cssText = `font-size: 13px; font-weight: 700; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: #f9e2af33; color: #f9e2af; border-radius: 4px;`;
           header.appendChild(badge);
+        } else if (nodeType === 'branch') {
+          const badge = document.createElement('span');
+          badge.textContent = '⑂';
+          badge.style.cssText = `font-size: 13px; font-weight: 700; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: #fab38733; color: #fab387; border-radius: 4px;`;
+          header.appendChild(badge);
         } else {
           const typeIcon = document.createElement('span');
           typeIcon.textContent = OBJECTIVE_ICONS[obj.type] || '⭐';
@@ -311,7 +368,7 @@ export function ObjectiveNodeCanvas({
           ? obj.type
           : nodeType === 'narrative'
             ? (obj.narrativeType || 'narrative')
-            : (obj.condition?.operator || 'condition');
+            : (obj.condition?.operator || (nodeType === 'branch' ? 'branch' : 'condition'));
         const typeLabel = document.createElement('span');
         typeLabel.textContent = labelText;
         typeLabel.style.cssText = `
@@ -347,7 +404,7 @@ export function ObjectiveNodeCanvas({
 
           targetDiv.textContent = `Target: ${targetName}`;
           element.appendChild(targetDiv);
-        } else if (nodeType === 'condition' && obj.condition) {
+        } else if ((nodeType === 'condition' || nodeType === 'branch') && obj.condition) {
           const operandDiv = document.createElement('div');
           operandDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
           const negatePrefix = obj.condition.negate ? 'NOT ' : '';
@@ -420,18 +477,8 @@ export function ObjectiveNodeCanvas({
     canvasRef.current = canvas;
 
     // Set initial nodes directly (don't use updateCanvas which relies on state)
-    const canvasNodes: CanvasNode[] = currentStage.objectives.map((obj) => ({
-      id: obj.id,
-      position: positions.get(obj.id) || { x: 50, y: 50 },
-    }));
-
-    // Build connections from ObjectiveGraph
-    const graph = ObjectiveGraph.fromObjectives(currentStage.objectives);
-    const connections: CanvasConnection[] = graph.edges.map(edge => ({
-      fromId: edge.fromId,
-      toId: edge.toId,
-      color: EDGE_COLOR,
-    }));
+    const canvasNodes = buildCanvasNodes(currentStage.objectives, positions);
+    const connections = buildAllConnections(currentStage.objectives);
 
     canvas.setNodes(canvasNodes);
     canvas.setConnections(connections);
@@ -443,20 +490,8 @@ export function ObjectiveNodeCanvas({
     if (!canvasRef.current) return;
 
     const currentStage = stageRef.current;
-
-    // Create canvas nodes using current positions
-    const canvasNodes: CanvasNode[] = currentStage.objectives.map((obj) => ({
-      id: obj.id,
-      position: nodePositions.get(obj.id) || { x: 50, y: 50 },
-    }));
-
-    // Build connections from ObjectiveGraph
-    const graph = ObjectiveGraph.fromObjectives(currentStage.objectives);
-    const connections: CanvasConnection[] = graph.edges.map(edge => ({
-      fromId: edge.fromId,
-      toId: edge.toId,
-      color: EDGE_COLOR,
-    }));
+    const canvasNodes = buildCanvasNodes(currentStage.objectives, nodePositions);
+    const connections = buildAllConnections(currentStage.objectives);
 
     canvasRef.current.setNodes(canvasNodes);
     canvasRef.current.setConnections(connections);
@@ -482,13 +517,14 @@ export function ObjectiveNodeCanvas({
       description: nodeType === 'objective' ? 'New objective'
         : subtype === 'voiceover' ? 'Voiceover'
         : nodeType === 'narrative' ? 'Narrative beat'
+        : nodeType === 'branch' ? 'Branch route'
         : 'Condition gate',
       nodeType: nodeType as BeatNodeType,
       ...(nodeType === 'narrative' ? {
         narrativeType: (subtype === 'voiceover' ? 'dialogue' : subtype) as NarrativeSubtype,
         autoStart: true,
       } : {}),
-      ...(nodeType === 'condition' ? {
+      ...((nodeType === 'condition' || nodeType === 'branch') ? {
         condition: { operator: subtype as ConditionOperator, operand: '' },
       } : {}),
     };
@@ -526,12 +562,13 @@ export function ObjectiveNodeCanvas({
   };
 
   const handleDeleteObjective = (id: string) => {
-    // Remove objective and any references to it in prerequisites
+    // Remove objective and any references to it in prerequisites or failTargets
     const updatedObjectives = stage.objectives
       .filter((o) => o.id !== id)
       .map((o) => ({
         ...o,
         prerequisites: o.prerequisites?.filter((p) => p !== id),
+        failTargets: o.failTargets?.filter((t) => t !== id),
       }));
 
     // Remove position
@@ -550,6 +587,19 @@ export function ObjectiveNodeCanvas({
     });
 
     setSelectedObjectiveId(null);
+  };
+
+  const handleRemoveFailTarget = (objectiveId: string, failTargetId: string) => {
+    const updatedObjectives = stage.objectives.map((o) => {
+      if (o.id === objectiveId) {
+        return {
+          ...o,
+          failTargets: o.failTargets?.filter((t) => t !== failTargetId),
+        };
+      }
+      return o;
+    });
+    onStageChange({ ...stage, objectives: updatedObjectives });
   };
 
   const handleRemovePrerequisite = (objectiveId: string, prereqId: string) => {
@@ -601,11 +651,19 @@ export function ObjectiveNodeCanvas({
               <Menu.Item onClick={() => handleAddNode('narrative', 'voiceover')}>🎤 Voiceover</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('narrative', 'cutscene')}>🎬 Cutscene</Menu.Item>
               <Menu.Divider />
-              <Menu.Label>Condition</Menu.Label>
+              <Menu.Label>Condition (gate)</Menu.Label>
               <Menu.Item onClick={() => handleAddNode('condition', 'hasItem')}>📦 Has Item</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('condition', 'hasFlag')}>🚩 Has Flag</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('condition', 'questComplete')}>✓ Quest Complete</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('condition', 'canCastSpell')}>✨ Can Cast Spell</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('condition', 'custom')}>⭐ Custom</Menu.Item>
+              <Menu.Divider />
+              <Menu.Label>Branch (route)</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('branch', 'hasItem')}>📦 Has Item</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'hasFlag')}>🚩 Has Flag</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'questComplete')}>✓ Quest Complete</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'canCastSpell')}>✨ Can Cast Spell</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'custom')}>⭐ Custom</Menu.Item>
             </Menu.Dropdown>
           </Menu>
           <Button
@@ -642,9 +700,11 @@ export function ObjectiveNodeCanvas({
               items={items}
               dialogues={dialogues}
               triggers={triggers}
+              spells={spells}
               onChange={handleObjectiveChange}
               onDelete={() => handleDeleteObjective(selectedObjective.id)}
               onRemovePrerequisite={(prereqId) => handleRemovePrerequisite(selectedObjective.id, prereqId)}
+              onRemoveFailTarget={(targetId) => handleRemoveFailTarget(selectedObjective.id, targetId)}
               onClose={() => setSelectedObjectiveId(null)}
             />
           </div>
@@ -661,9 +721,11 @@ interface ObjectiveEditorPanelProps {
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
   triggers: { id: string; name: string }[];
+  spells: { id: string; name: string }[];
   onChange: (objective: QuestObjective) => void;
   onDelete: () => void;
   onRemovePrerequisite: (prereqId: string) => void;
+  onRemoveFailTarget: (targetId: string) => void;
   onClose: () => void;
 }
 
@@ -736,7 +798,15 @@ function BeatActionFields({
           <Select size="xs" label="NPC"
             data={npcs.map((n) => ({ value: n.id, label: n.name }))}
             value={action.target || action.npcId || null}
-            onChange={(value) => updateAction({ ...action, target: value || '', npcId: value || '' })}
+            onChange={(value) => {
+              const defaultPos = { x: 0, y: 0, z: 0 };
+              updateAction({
+                ...action,
+                target: value || '', npcId: value || '',
+                value: action.value || defaultPos,
+                position: action.position || defaultPos,
+              });
+            }}
             searchable styles={{ input: inputStyle, label: labelStyle }} />
           <Group gap="xs">
             <NumberInput size="xs" label="X" value={pos.x}
@@ -823,6 +893,10 @@ function ActionListEditor({
           onChange={(value) => {
             if (!value) return;
             const newAction: BeatAction = { type: value as ActionType };
+            if (value === 'moveNpc' || value === 'teleportNPC') {
+              newAction.value = { x: 0, y: 0, z: 0 };
+              newAction.position = { x: 0, y: 0, z: 0 };
+            }
             onChange({ ...objective, [field]: [...actions, newAction] });
           }}
           styles={{
@@ -842,7 +916,12 @@ function ActionListEditor({
                 onChange={(value) => {
                   if (!value) return;
                   const updated = [...actions];
-                  updated[index] = { type: value as ActionType };
+                  const newAction: BeatAction = { type: value as ActionType };
+                  if (value === 'moveNpc' || value === 'teleportNPC') {
+                    newAction.value = { x: 0, y: 0, z: 0 };
+                    newAction.position = { x: 0, y: 0, z: 0 };
+                  }
+                  updated[index] = newAction;
                   onChange({ ...objective, [field]: updated });
                 }}
                 styles={{
@@ -891,14 +970,22 @@ function ObjectiveEditorPanel({
   items,
   dialogues,
   triggers,
+  spells,
   onChange,
   onDelete,
   onRemovePrerequisite,
+  onRemoveFailTarget,
   onClose,
 }: ObjectiveEditorPanelProps) {
   const isEntry = !objective.prerequisites || objective.prerequisites.length === 0;
   const nodeType = objective.nodeType || 'objective';
   const nodeTypeColor = NODE_TYPE_COLORS[nodeType] || '#89b4fa';
+
+  // Fail targets (condition and branch nodes)
+  const failTargets = objective.failTargets || [];
+  const failTargetObjectives = failTargets
+    .map((id) => allObjectives.find((o) => o.id === id))
+    .filter((o): o is QuestObjective => o !== undefined);
 
   const handleChange = <K extends keyof QuestObjective>(field: K, value: QuestObjective[K]) => {
     onChange({ ...objective, [field]: value });
@@ -943,7 +1030,7 @@ function ObjectiveEditorPanel({
       >
         <Group gap="xs">
           <Text size="sm" fw={500}>
-            {nodeType === 'narrative' ? 'Narrative' : nodeType === 'condition' ? 'Condition' : 'Objective'}
+            {nodeType === 'narrative' ? 'Narrative' : nodeType === 'condition' ? 'Condition' : nodeType === 'branch' ? 'Branch' : 'Objective'}
           </Text>
           <Badge size="xs" color={nodeTypeColor} variant="light">
             {nodeType}
@@ -965,7 +1052,8 @@ function ObjectiveEditorPanel({
             data={[
               { value: 'objective', label: 'Objective - player action' },
               { value: 'narrative', label: 'Narrative - auto-trigger' },
-              { value: 'condition', label: 'Condition - gate/check' },
+              { value: 'condition', label: 'Condition - gate (waits)' },
+              { value: 'branch', label: 'Branch - route (one-shot)' },
             ]}
             value={nodeType}
             onChange={(value) => value && handleChange('nodeType', value as BeatNodeType)}
@@ -1061,8 +1149,8 @@ function ObjectiveEditorPanel({
             </>
           )}
 
-          {/* === Condition-specific fields === */}
-          {nodeType === 'condition' && (
+          {/* === Condition/Branch-specific fields === */}
+          {(nodeType === 'condition' || nodeType === 'branch') && (
             <Stack gap="xs">
               <Select
                 label="Operator"
@@ -1071,6 +1159,7 @@ function ObjectiveEditorPanel({
                   { value: 'hasFlag', label: '🚩 Has Flag' },
                   { value: 'questComplete', label: '✓ Quest Complete' },
                   { value: 'stageComplete', label: '✓ Stage Complete' },
+                  { value: 'canCastSpell', label: '✨ Can Cast Spell' },
                   { value: 'custom', label: '⭐ Custom' },
                 ]}
                 value={objective.condition?.operator || 'hasFlag'}
@@ -1090,6 +1179,19 @@ function ObjectiveEditorPanel({
                     handleChange('condition', { ...cond, operand: value || '' });
                   }}
                   placeholder="Select item..."
+                  searchable
+                  clearable
+                />
+              ) : objective.condition?.operator === 'canCastSpell' ? (
+                <Select
+                  label="Spell"
+                  data={spells.map((s) => ({ value: s.id, label: s.name }))}
+                  value={objective.condition?.operand || null}
+                  onChange={(value) => {
+                    const cond = objective.condition || { operator: 'canCastSpell' as ConditionOperator, operand: '' };
+                    handleChange('condition', { ...cond, operand: value || '' });
+                  }}
+                  placeholder="Select spell..."
                   searchable
                   clearable
                 />
@@ -1173,6 +1275,50 @@ function ObjectiveEditorPanel({
               Drag from another node's output to add prerequisites
             </Text>
           </Stack>
+
+          {/* Fail Targets (branch nodes only) */}
+          {nodeType === 'branch' && (
+            <Stack gap="xs">
+              <Text size="sm" fw={500} c="#f38ba8">
+                Fail Targets (false path)
+              </Text>
+              {failTargetObjectives.length === 0 ? (
+                <Text size="xs" c="dimmed" fs="italic">
+                  No fail targets — branch only routes to pass path
+                </Text>
+              ) : (
+                failTargetObjectives.map((target) => {
+                  const targetNodeType = target.nodeType || 'objective';
+                  const targetIcon = targetNodeType === 'narrative' ? 'N'
+                    : targetNodeType === 'condition' ? '?'
+                    : targetNodeType === 'branch' ? '⑂'
+                    : OBJECTIVE_ICONS[target.type] || '⭐';
+                  return (
+                    <Paper key={target.id} p="xs" withBorder style={{ background: '#181825' }}>
+                      <Group justify="space-between">
+                        <Group gap="xs">
+                          <Text size="sm">{targetIcon}</Text>
+                          <Text size="xs">{target.description}</Text>
+                        </Group>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          onClick={() => onRemoveFailTarget(target.id)}
+                          styles={{ root: { padding: '2px 6px' } }}
+                        >
+                          ✕
+                        </Button>
+                      </Group>
+                    </Paper>
+                  );
+                })
+              )}
+              <Text size="xs" c="dimmed">
+                Drag from the red port to add fail targets
+              </Text>
+            </Stack>
+          )}
 
           {/* OnEnter Actions */}
           <ActionListEditor

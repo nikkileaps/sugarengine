@@ -478,6 +478,8 @@ export function Editor() {
         dialogues={dialogues as any}
         onDialoguesChange={setDialogues as any}
         npcs={npcList}
+        items={itemList}
+        quests={quests as any}
       >
         {(dialoguePanel) => (
           <QuestPanel
@@ -487,6 +489,7 @@ export function Editor() {
             items={itemList}
             dialogues={dialogues.map((d) => ({ id: d.id, name: d.name || d.id }))}
             triggers={triggerList}
+            spells={spells.map((s) => ({ id: s.id, name: s.name }))}
           >
             {(questPanel) => (
               <NPCPanel

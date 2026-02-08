@@ -20,6 +20,7 @@ export interface CasterManagerLike {
   getResonance(): number;
   getBattery(): number;
   getSpell(spellId: string): unknown | undefined;
+  canCastSpell(spellId: string): { canCast: boolean; reason?: string };
 }
 
 // ============================================
@@ -65,6 +66,14 @@ export class WorldStateEvaluator {
 
       case 'hasSpell':
         return this.caster.getSpell(condition.spellId) !== undefined;
+
+      case 'canCastSpell': {
+        const result = this.caster.canCastSpell(condition.spellId);
+        if (!result.canCast) {
+          console.log(`[WorldStateEvaluator] canCastSpell("${condition.spellId}") → false, reason: ${result.reason}`);
+        }
+        return result.canCast;
+      }
 
       case 'flag': {
         const flagValue = this.flags.get(condition.key);

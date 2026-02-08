@@ -1,6 +1,7 @@
 import { DialogueLoader } from './DialogueLoader';
 import { DialogueNode, DialogueNext, LoadedDialogue } from './types';
 import { DialoguePanel } from '../ui/DialoguePanel';
+import type { WorldStateCondition } from '../state';
 
 export type DialogueEventHandler = (eventName: string) => void;
 export type DialogueNodeHandler = (nodeId: string) => void;
@@ -22,6 +23,7 @@ export class DialogueManager {
   private onEvent: DialogueEventHandler | null = null;
   private onNodeEnter: DialogueNodeHandler | null = null;
   private speakerNameResolver: SpeakerNameResolver | null = null;
+  private conditionChecker: ((condition: WorldStateCondition) => boolean) | null = null;
 
   constructor(container: HTMLElement) {
     this.loader = new DialogueLoader();
@@ -64,6 +66,13 @@ export class DialogueManager {
   }
 
   /**
+   * Set condition checker for filtering conditional connections (ADR-019)
+   */
+  setConditionChecker(checker: (condition: WorldStateCondition) => boolean): void {
+    this.conditionChecker = checker;
+  }
+
+  /**
    * Start a dialogue by ID
    */
   async start(dialogueId: string): Promise<void> {
@@ -102,7 +111,12 @@ export class DialogueManager {
    * Show a dialogue node
    */
   private showNode(node: DialogueNode): void {
-    this.currentNode = node;
+    // Filter connections through condition checker (ADR-019)
+    const filteredNext = (node.next ?? []).filter(n => {
+      if (!n.condition || !this.conditionChecker) return true;
+      return this.conditionChecker(n.condition);
+    });
+    this.currentNode = { ...node, next: filteredNext };
 
     // Fire node enter callback (for quest tracking)
     if (this.onNodeEnter) {
@@ -115,15 +129,15 @@ export class DialogueManager {
     }
 
     // Resolve speaker name if we have a resolver
-    let displayNode = node;
-    if (node.speaker && this.speakerNameResolver) {
-      const resolvedName = this.speakerNameResolver(node.speaker);
+    let displayNode = this.currentNode;
+    if (displayNode.speaker && this.speakerNameResolver) {
+      const resolvedName = this.speakerNameResolver(displayNode.speaker);
       if (resolvedName) {
-        displayNode = { ...node, speaker: resolvedName };
+        displayNode = { ...displayNode, speaker: resolvedName };
       }
     }
 
-    // Show in UI
+    // Show in UI (with filtered connections)
     this.dialoguePanel.show(
       displayNode,
       (selected?: DialogueNext) => {

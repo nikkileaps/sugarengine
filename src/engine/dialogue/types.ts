@@ -1,3 +1,5 @@
+import type { WorldStateCondition } from '../state';
+
 /**
  * Base speaker interface - all speaker types share this shape
  */
@@ -44,7 +46,7 @@ export type Speaker = Player | Narrator | NPCSpeaker;
 export interface DialogueNext {
   nodeId: string;           // ID of the target node
   text?: string;            // Choice text (only needed when multiple options)
-  condition?: string;       // Optional condition (for future use)
+  condition?: WorldStateCondition;  // Optional condition - connection hidden if false (ADR-019)
 }
 
 /**
@@ -65,7 +67,7 @@ export interface DialogueNode {
 export interface DialogueChoice {
   text: string;
   next: string;
-  condition?: string;
+  condition?: WorldStateCondition;
 }
 
 /**

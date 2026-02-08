@@ -30,6 +30,7 @@ interface QuestDetailProps {
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
   triggers: { id: string; name: string }[];
+  spells: { id: string; name: string }[];
   onChange: (quest: QuestEntry) => void;
   onDelete: () => void;
 }
@@ -188,9 +189,11 @@ function MiniObjectiveGraph({
           const nt = obj.nodeType || 'objective';
           const fillColor = nt === 'narrative' ? '#cba6f7'
             : nt === 'condition' ? '#f9e2af'
+            : nt === 'branch' ? '#fab387'
             : (OBJECTIVE_COLORS[obj.type] || '#89b4fa');
           const icon = nt === 'narrative' ? 'N'
             : nt === 'condition' ? '?'
+            : nt === 'branch' ? '⑂'
             : (OBJECTIVE_ICONS[obj.type] || '⭐');
           const strokeColor = obj.autoStart ? '#a6e3a1' : 'none';
           const r = layout.nodeSize! / 2;
@@ -203,7 +206,7 @@ function MiniObjectiveGraph({
               withArrow
             >
               <g>
-                {nt === 'condition' ? (
+                {(nt === 'condition' || nt === 'branch') ? (
                   <rect
                     x={x - r * 0.7}
                     y={y - r * 0.7}
@@ -254,6 +257,7 @@ export function QuestDetail({
   items,
   dialogues,
   triggers,
+  spells,
   onChange,
   onDelete,
 }: QuestDetailProps) {
@@ -358,6 +362,7 @@ export function QuestDetail({
         items={items}
         dialogues={dialogues}
         triggers={triggers}
+        spells={spells}
         onStageChange={handleStageChange}
         onClose={() => setGraphStageId(null)}
       />

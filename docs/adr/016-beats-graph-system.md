@@ -20,7 +20,8 @@ We're not building an "objective graph" - we're building a **beats graph**. A be
 
 - **Player does something** (objective)
 - **System triggers something** (narrative)
-- **System checks something** (condition/gate)
+- **System gates on something** (condition) — waits until state is true
+- **System routes on something** (branch) — one-shot if/else based on current state
 
 ### Industry Research
 
@@ -28,7 +29,7 @@ We analyzed implementations across game engines and narrative tools:
 
 | System | Approach | Strengths | Fit for Us |
 |--------|----------|-----------|------------|
-| Unreal Blueprints | Typed execution pins, flow control nodes | Extremely flexible | Too complex |
+| Unreal Blueprints | Typed execution pins, separate Gate/Branch nodes | Extremely flexible, Gate/Branch model adopted | Key influence |
 | Unity Visual Scripting | Flow graphs with control nodes | Designer-friendly | Medium fit |
 | Yarn Spinner / Ink | Text-first with branches/conditions | Writer-friendly | Good for dialogue |
 | Behavior Trees | Sequence/Selector/Parallel composites | Proven for AI | Wrong semantics |
@@ -48,6 +49,27 @@ Evolve the objective graph (ADR-015) into a **beats graph** by introducing **nod
 | **objective** | Based on subtype | Shows in HUD, waits for player | Player performs action | "Talk to Ethan" |
 | **narrative** | `N` | Auto-fires immediately | Playback/trigger completes | "Holly voiceover plays" |
 | **condition** | `?` | Evaluates continuously | Condition becomes true | "Has key in inventory" |
+| **branch** | `⑂` | Evaluates once, then done | Immediately (routes to pass or fail) | "Did player choose dark path?" |
+
+#### Gate vs Branch (Unreal Model)
+
+Condition and branch nodes both evaluate a `ConditionExpression`, but differ in behavior — following the same distinction Unreal Engine makes between Gate and Branch nodes:
+
+- **Condition (gate)**: Blocks flow until the condition becomes true. Re-evaluates on every state change. Single output. Good for "wait until the player does X." Any hints while the gate is waiting (e.g., "you need the rug" dialogue) should use conditional dialogue (ADR-019) driven by world state, not the gate itself.
+- **Branch (route)**: Evaluates once when activated, routes to pass OR fail path, then completes. Two outputs. Good for "did the player already do X? If yes go here, if no go there." The branch node itself is done regardless of which path fires.
+
+Only branch nodes support **fail targets** — node IDs that activate when the condition is false:
+
+```
+Condition (gate):                            Branch with fail targets:
+
+  ┌──────────┐                                ┌──────────┐
+  │ ? Gate   │── pass ──▶ [next nodes]        │ ⑂ Branch │── pass ──▶ [path A]
+  │          │                                │          │
+  └──────────┘  (waits until true,            │          │╌╌ fail ╌╌▶ [path B]
+                 single output)               └──────────┘  (evaluates once,
+                                                             branch is done)
+```
 
 ### Nodes vs Actions: The Principle
 
@@ -164,7 +186,7 @@ Most actions go in `onComplete`. Use `onEnter` for setup that must happen before
 
 ```typescript
 // Beat node types
-type BeatNodeType = 'objective' | 'narrative' | 'condition';
+type BeatNodeType = 'objective' | 'narrative' | 'condition' | 'branch';
 
 // Objective subtypes (player actions)
 type ObjectiveSubtype = 'talk' | 'collect' | 'location' | 'interact' | 'custom';
@@ -231,8 +253,9 @@ interface BeatNode {
   dialogueId?: string;          // For dialogue trigger
   eventName?: string;           // For custom events
 
-  // === Condition-specific ===
+  // === Condition/Branch-specific ===
   condition?: ConditionExpression;
+  failTargets?: string[];           // Node IDs activated on condition failure
 
   // === Common ===
   optional?: boolean;
@@ -267,13 +290,22 @@ interface CompoundCondition {
 - Complete when the triggered content finishes
 - Never show in HUD
 
-**Condition nodes**:
+**Condition nodes** (gate):
 - Activate when all prerequisites complete
-- **Continuously evaluate** their condition
+- **Continuously evaluate** their condition on state changes
 - Complete instantly when condition is true
 - If condition already true when activated, complete immediately
+- If condition is false, keep waiting — no fail path (use conditional dialogue via ADR-019 for hints)
 - Never show in HUD
 - Re-evaluate on relevant state changes (inventory, flags, quest state)
+
+**Branch nodes** (route):
+- Activate when all prerequisites complete
+- **Evaluate once** immediately
+- If true: complete normally → dependent nodes (pass targets) activate via prerequisites
+- If false: activate `failTargets`, then complete **without cascading** to pass dependents
+- Never show in HUD
+- Do not re-evaluate — the branch is a one-shot decision
 
 ### Visual Representation
 
@@ -306,10 +338,12 @@ interface CompoundCondition {
 Legend:
 ▶ = Entry point (no prerequisites)
 N = Narrative node (auto-triggers)
-? = Condition node (gate/check)
+? = Condition node (gate — waits until true)
+⑂ = Branch node (route — evaluates once, pass or fail)
 📦 = Collect objective
 📍 = Location objective
-→ = Prerequisite relationship
+── = Pass connection (prerequisite)
+╌╌ = Fail connection (activates when condition is false)
 ```
 
 ### Key Patterns
@@ -384,6 +418,28 @@ When dialogue ends, player gets map (UUID reference), flag is set (string key), 
 ```
 
 Choose based on whether the player should experience the movement as a moment.
+
+**Pattern 7: Gate Chain with Conditional Dialogue Hints**
+```
+[? Has Rug] ──pass──▶ [? Has Resonance] ──pass──▶ [💬 Talk to Ethan]
+```
+Gate nodes block flow until conditions are met. While gates are waiting, use conditional dialogue (ADR-019) driven by world state to show context-sensitive hints (e.g., "You need the rug" or "You need more resonance"). The gates themselves have no fail path — they just wait.
+
+**Pattern 8: Story Branch (Permanent Choice)**
+```
+[⑂ Chose Dark Path?] ──pass──▶ [💬 Dark Mentor Dialogue] ──▶ [📍 Go to Shadow Temple]
+         ╲
+          ╌╌ fail ╌╌▶ [💬 Light Mentor Dialogue] ──▶ [📍 Go to Sun Temple]
+```
+Branch evaluates once. Player's earlier choice permanently routes the quest. Both paths are valid — only one activates.
+
+**Pattern 9: Branch + Gate Combo**
+```
+[⑂ Has Lockpick?] ──pass──▶ [📍 Pick the lock]  ───┐
+         ╲                                          ├──▶ [📍 Enter Tower]
+          ╌╌ fail ╌╌▶ [💬 Talk to Locksmith] ──▶ [? Has Key] ──pass──┘
+```
+Branch routes immediately: if player already has a lockpick, they can pick the lock. Otherwise, they need to find the locksmith and get a key (gate waits until they have it). Both paths converge.
 
 ## Architecture
 
@@ -645,6 +701,19 @@ class QuestManager {
         if (this.checkCondition(questId, node.id)) {
           this.completeNode(questId, node.id);
         }
+        // Otherwise keeps waiting — no fail path (hints via ADR-019)
+        break;
+
+      case 'branch':
+        // Evaluate once, route to pass or fail, then done
+        if (this.checkCondition(questId, node.id)) {
+          // True: complete normally (cascades to pass dependents)
+          this.completeNode(questId, node.id);
+        } else {
+          // False: activate fail targets, complete without cascading
+          this.activateFailTargets(questId, node);
+          this.completeNode(questId, node.id, { skipCascade: true });
+        }
         break;
     }
   }
@@ -703,11 +772,14 @@ this.quests.setOnNarrativeTrigger((questId, node) => {
 
 **Visual node styling by type**:
 
-| Type | Shape | Color | Icon |
-|------|-------|-------|------|
-| Objective | Rounded rect | Blue (#89b4fa) | Subtype icon |
-| Narrative | Rounded rect | Purple (#cba6f7) | `N` badge |
-| Condition | Diamond | Yellow (#f9e2af) | `?` badge |
+| Type | Shape | Color | Icon | Ports |
+|------|-------|-------|------|-------|
+| Objective | Rounded rect | Blue (#89b4fa) | Subtype icon | 1 in, 1 out |
+| Narrative | Rounded rect | Purple (#cba6f7) | `N` badge | 1 in, 1 out |
+| Condition | Dashed border rect | Yellow (#f9e2af) | `?` badge | 1 in, 2 out (pass ✓ green, fail ✗ red) |
+| Branch | Rounded rect | Orange (#fab387) | `⑂` badge | 1 in, 2 out (pass ✓ green, fail ✗ red) |
+
+Fail connections render as **dashed red lines** to visually distinguish them from pass connections (solid blue lines).
 
 **Node creation menu**:
 ```
@@ -721,7 +793,12 @@ this.quests.setOnNarrativeTrigger((questId, node) => {
 │   ├── Voiceover
 │   ├── Trigger Dialogue
 │   └── Fire Event
-└── Condition
+├── Condition (gate)
+│   ├── Has Item
+│   ├── Has Flag
+│   ├── Quest Complete
+│   └── Custom Expression
+└── Branch (route)
     ├── Has Item
     ├── Has Flag
     ├── Quest Complete
@@ -745,17 +822,22 @@ this.quests.setOnNarrativeTrigger((questId, node) => {
 4. Call `executeActions(onComplete)` on node completion
 
 ### Phase 3: Engine - Node Types
-1. Update `activateNode()` to handle all three node types
+1. Update `activateNode()` to handle all four node types (objective, narrative, condition, branch)
 2. Add condition evaluation and `evaluateConditions()`
 3. Hook state changes (inventory, flags) to condition re-evaluation
 4. Add narrative trigger handler with completion callbacks
+5. Implement fail target activation for condition and branch nodes
+6. Implement branch one-shot evaluation with `skipCascade` on false path
 
 ### Phase 4: Editor - Visual Updates
 1. Different node shapes/colors by node type
 2. Action list editor (onEnter/onComplete)
 3. Condition expression editor UI
-4. Updated node creation menu with all types
+4. Updated node creation menu with all types (including branch)
 5. Type-specific property panels
+6. Pass/fail output ports on condition and branch nodes
+7. Dashed red fail connections, solid blue pass connections
+8. Fail targets section in editor panel
 
 ### Phase 5: Polish
 1. Condition preview (show current state in editor)
@@ -802,7 +884,7 @@ Existing objectives migrate cleanly:
 4. **Condition editor**: Visual builder vs expression syntax
 
 ### Flow Control
-5. **Branch nodes**: Split flow based on condition (true → A, false → B)
+5. ~~**Branch nodes**: Split flow based on condition (true → A, false → B)~~ — Implemented (see Gate vs Branch above)
 6. **Loop nodes**: Repeat a subgraph until condition met
 7. **Random selector**: Pick one of N paths randomly
 

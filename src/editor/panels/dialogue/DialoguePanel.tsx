@@ -22,7 +22,7 @@ import { generateUUID, shortId } from '../../utils';
 export interface DialogueNext {
   nodeId: string;
   text?: string;
-  condition?: string;
+  condition?: import('../../../engine/state').WorldStateCondition;
 }
 
 export interface DialogueNode {
@@ -47,10 +47,18 @@ export interface DialoguePanelResult {
   inspector: ReactNode;
 }
 
+export type DialogueQuestRef = {
+  id: string;
+  name: string;
+  stages: { id: string; description: string; objectives: { id: string; description: string }[] }[];
+};
+
 interface DialoguePanelProps {
   dialogues: DialogueEntry[];
   onDialoguesChange: (dialogues: DialogueEntry[]) => void;
   npcs?: { id: string; name: string }[];
+  items?: { id: string; name: string }[];
+  quests?: DialogueQuestRef[];
   children: (result: DialoguePanelResult) => ReactNode;
 }
 
@@ -58,6 +66,8 @@ export function DialoguePanel({
   dialogues,
   onDialoguesChange,
   npcs = [],
+  items = [],
+  quests = [],
   children,
 }: DialoguePanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -228,6 +238,8 @@ export function DialoguePanel({
         dialogue={selectedDialogue}
         selectedNodeId={selectedNodeId}
         npcs={npcs}
+        items={items}
+        quests={quests}
         onNodeSelect={handleNodeSelect}
         onDialogueChange={handleUpdate}
         onNodeChange={handleNodeChange}

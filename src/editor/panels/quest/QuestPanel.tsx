@@ -65,8 +65,9 @@ export interface QuestObjective {
   dialogueId?: string;
   eventName?: string;
 
-  // Condition-specific (ADR-016)
+  // Condition/Branch-specific (ADR-016)
   condition?: ConditionExpression;
+  failTargets?: string[];           // Node IDs activated on condition failure
 
   // Display control (ADR-016)
   showInHUD?: boolean;
@@ -198,6 +199,7 @@ interface QuestPanelProps {
   items?: { id: string; name: string }[];
   dialogues?: { id: string; name: string }[];
   triggers?: { id: string; name: string }[];
+  spells?: { id: string; name: string }[];
   children: (result: QuestPanelResult) => ReactNode;
 }
 
@@ -208,6 +210,7 @@ export function QuestPanel({
   items = [],
   dialogues = [],
   triggers = [],
+  spells = [],
   children,
 }: QuestPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -331,6 +334,7 @@ export function QuestPanel({
         items={items}
         dialogues={dialogues}
         triggers={triggers}
+        spells={spells}
         onChange={handleUpdate}
         onDelete={() => handleDelete(selectedQuest.id)}
       />

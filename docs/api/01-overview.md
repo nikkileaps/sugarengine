@@ -16,7 +16,7 @@ The engine uses an **Entity-Component-System (ECS)** architecture for maximum fl
 |--------|-------------|
 | `SugarEngine` | Main engine class - rendering, input, region loading |
 | `World` | ECS world managing entities, components, and systems |
-| `DialogueManager` | Branching dialogue trees with choices |
+| `DialogueManager` | Branching dialogue trees with choices and conditional connections |
 | `QuestManager` | Multi-stage quests with objectives |
 | `InventoryManager` | Item collection and management |
 | `InspectionManager` | Examine world objects (newspapers, signs, lore) |

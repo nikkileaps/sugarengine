@@ -13,7 +13,7 @@ export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'tri
  * - narrative: System auto-triggers something (voiceover, dialogue, event)
  * - condition: System checks something (gate/wait until state is true)
  */
-export type BeatNodeType = 'objective' | 'narrative' | 'condition';
+export type BeatNodeType = 'objective' | 'narrative' | 'condition' | 'branch';
 
 /**
  * Narrative subtypes (auto-triggered system actions)
@@ -23,7 +23,7 @@ export type NarrativeSubtype = 'voiceover' | 'dialogue' | 'cutscene' | 'event';
 /**
  * Condition operators for condition beat nodes
  */
-export type ConditionOperator = 'hasItem' | 'hasFlag' | 'questComplete' | 'stageComplete' | 'custom';
+export type ConditionOperator = 'hasItem' | 'hasFlag' | 'questComplete' | 'stageComplete' | 'canCastSpell' | 'custom';
 
 /**
  * Condition expression - evaluated by condition nodes to gate flow
@@ -142,6 +142,7 @@ export interface QuestObjective {
 
   // === Condition-specific (ADR-016) ===
   condition?: ConditionExpression;    // Expression evaluated by condition nodes
+  failTargets?: string[];            // Node IDs activated when condition is false (fail edge)
 
   // === Display control (ADR-016) ===
   showInHUD?: boolean;                // Default true for objectives, false for others

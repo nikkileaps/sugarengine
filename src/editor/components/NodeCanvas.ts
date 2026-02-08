@@ -18,6 +18,7 @@ export interface CanvasNode {
   position: NodePosition;
   width?: number;
   height?: number;
+  outputs?: { name: string; color?: string; hoverColor?: string; yPercent?: number }[];
 }
 
 export interface CanvasConnection {
@@ -25,13 +26,14 @@ export interface CanvasConnection {
   toId: string;
   fromPort?: string;  // For multiple output ports (e.g., choices)
   color?: string;
+  dashed?: boolean;   // Dashed line for conditional connections
 }
 
 export interface NodeCanvasConfig {
   onNodeSelect?: (nodeId: string) => void;
   onNodeMove?: (nodeId: string, position: NodePosition) => void;
   onCanvasClick?: () => void;
-  onConnect?: (fromNodeId: string, toNodeId: string) => void;
+  onConnect?: (fromNodeId: string, toNodeId: string, fromPort?: string) => void;
   renderNode: (node: CanvasNode, element: HTMLElement) => void;
   showMinimap?: boolean;
   showPorts?: boolean;
@@ -76,6 +78,8 @@ export class NodeCanvas {
   private connectionFromNodeId: string | null = null;
   private connectionMouseX = 0;
   private connectionMouseY = 0;
+  private connectionFromPort: string | null = null;
+  private connectionFromPortYPercent = 0.5;
 
   private config: NodeCanvasConfig;
 
@@ -221,6 +225,8 @@ export class NodeCanvas {
         const nodeId = target.dataset.nodeId!;
         this.isDraggingConnection = true;
         this.connectionFromNodeId = nodeId;
+        this.connectionFromPort = target.dataset.portName || null;
+        this.connectionFromPortYPercent = parseFloat(target.dataset.portYPercent || '0.5');
         this.connectionMouseX = e.clientX;
         this.connectionMouseY = e.clientY;
         this.element.style.cursor = 'crosshair';
@@ -300,11 +306,13 @@ export class NodeCanvas {
           const toNodeId = target.dataset.nodeId!;
           // Don't allow self-connections
           if (toNodeId !== this.connectionFromNodeId) {
-            this.config.onConnect?.(this.connectionFromNodeId, toNodeId);
+            this.config.onConnect?.(this.connectionFromNodeId, toNodeId, this.connectionFromPort || undefined);
           }
         }
         this.isDraggingConnection = false;
         this.connectionFromNodeId = null;
+        this.connectionFromPort = null;
+        this.connectionFromPortYPercent = 0.5;
         this.renderConnections();
         this.element.style.cursor = 'grab';
         return;
@@ -323,6 +331,8 @@ export class NodeCanvas {
       if (this.isDraggingConnection) {
         this.isDraggingConnection = false;
         this.connectionFromNodeId = null;
+        this.connectionFromPort = null;
+        this.connectionFromPortYPercent = 0.5;
         this.renderConnections();
       }
 
@@ -441,36 +451,77 @@ export class NodeCanvas {
         };
         nodeEl.appendChild(inputPort);
 
-        // Output port (right side)
-        const outputPort = document.createElement('div');
-        outputPort.className = 'node-port node-port-output';
-        outputPort.dataset.portType = 'output';
-        outputPort.dataset.nodeId = node.id;
-        outputPort.style.cssText = `
-          position: absolute;
-          right: -6px;
-          top: 50%;
-          transform: translateY(-50%);
-          width: 12px;
-          height: 12px;
-          background: #313244;
-          border: 2px solid #45475a;
-          border-radius: 50%;
-          cursor: crosshair;
-          z-index: 10;
-          transition: all 0.15s;
-        `;
-        outputPort.onmouseenter = () => {
-          outputPort.style.background = '#a6e3a1';
-          outputPort.style.borderColor = '#a6e3a1';
-          outputPort.style.transform = 'translateY(-50%) scale(1.3)';
-        };
-        outputPort.onmouseleave = () => {
-          outputPort.style.background = '#313244';
-          outputPort.style.borderColor = '#45475a';
-          outputPort.style.transform = 'translateY(-50%) scale(1)';
-        };
-        nodeEl.appendChild(outputPort);
+        // Output port(s) (right side)
+        if (node.outputs && node.outputs.length > 0) {
+          // Custom output ports (e.g., pass/fail on condition/branch nodes)
+          for (const output of node.outputs) {
+            const port = document.createElement('div');
+            port.className = 'node-port node-port-output';
+            port.dataset.portType = 'output';
+            port.dataset.nodeId = node.id;
+            port.dataset.portName = output.name;
+            port.dataset.portYPercent = String(output.yPercent ?? 0.5);
+            const portColor = output.color || '#313244';
+            const portBorder = output.color || '#45475a';
+            const portHover = output.hoverColor || output.color || '#a6e3a1';
+            port.style.cssText = `
+              position: absolute;
+              right: -6px;
+              top: ${(output.yPercent ?? 0.5) * 100}%;
+              transform: translateY(-50%);
+              width: 12px;
+              height: 12px;
+              background: ${portColor};
+              border: 2px solid ${portBorder};
+              border-radius: 50%;
+              cursor: crosshair;
+              z-index: 10;
+              transition: all 0.15s;
+            `;
+            port.onmouseenter = () => {
+              port.style.background = portHover;
+              port.style.borderColor = portHover;
+              port.style.transform = 'translateY(-50%) scale(1.3)';
+            };
+            port.onmouseleave = () => {
+              port.style.background = portColor;
+              port.style.borderColor = portBorder;
+              port.style.transform = 'translateY(-50%) scale(1)';
+            };
+            nodeEl.appendChild(port);
+          }
+        } else {
+          // Default single output port
+          const outputPort = document.createElement('div');
+          outputPort.className = 'node-port node-port-output';
+          outputPort.dataset.portType = 'output';
+          outputPort.dataset.nodeId = node.id;
+          outputPort.style.cssText = `
+            position: absolute;
+            right: -6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 12px;
+            height: 12px;
+            background: #313244;
+            border: 2px solid #45475a;
+            border-radius: 50%;
+            cursor: crosshair;
+            z-index: 10;
+            transition: all 0.15s;
+          `;
+          outputPort.onmouseenter = () => {
+            outputPort.style.background = '#a6e3a1';
+            outputPort.style.borderColor = '#a6e3a1';
+            outputPort.style.transform = 'translateY(-50%) scale(1.3)';
+          };
+          outputPort.onmouseleave = () => {
+            outputPort.style.background = '#313244';
+            outputPort.style.borderColor = '#45475a';
+            outputPort.style.transform = 'translateY(-50%) scale(1)';
+          };
+          nodeEl.appendChild(outputPort);
+        }
       }
 
       this.nodesContainer.appendChild(nodeEl);
@@ -512,9 +563,14 @@ export class NodeCanvas {
       const toEl = this.nodeElements.get(conn.toId);
       if (!fromEl || !toEl) continue;
 
-      // Calculate connection points
+      // Calculate connection points (use port yPercent if fromPort specified)
+      let fromYPercent = 0.5;
+      if (conn.fromPort && fromNode.outputs) {
+        const portDef = fromNode.outputs.find(o => o.name === conn.fromPort);
+        if (portDef?.yPercent !== undefined) fromYPercent = portDef.yPercent;
+      }
       const fromX = fromNode.position.x + (fromNode.width ?? 180);
-      const fromY = fromNode.position.y + (fromNode.height ?? 50) / 2;
+      const fromY = fromNode.position.y + (fromNode.height ?? 50) * fromYPercent;
       const toX = toNode.position.x;
       const toY = toNode.position.y + (toNode.height ?? 50) / 2;
 
@@ -522,6 +578,7 @@ export class NodeCanvas {
       this.ctx.beginPath();
       this.ctx.strokeStyle = conn.color ?? '#45475a';
       this.ctx.lineWidth = 2;
+      if (conn.dashed) this.ctx.setLineDash([6, 4]);
 
       const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
       this.ctx.moveTo(fromX, fromY);
@@ -531,6 +588,7 @@ export class NodeCanvas {
         toX, toY
       );
       this.ctx.stroke();
+      if (conn.dashed) this.ctx.setLineDash([]);
 
       // Draw arrow at end
       const angle = Math.atan2(toY - (toY), toX - (toX - controlOffset));
@@ -555,16 +613,17 @@ export class NodeCanvas {
       const fromNode = this.nodes.get(this.connectionFromNodeId);
       if (fromNode) {
         const fromX = fromNode.position.x + (fromNode.width ?? 180);
-        const fromY = fromNode.position.y + (fromNode.height ?? 50) / 2;
+        const fromY = fromNode.position.y + (fromNode.height ?? 50) * this.connectionFromPortYPercent;
 
         // Convert mouse position to canvas coordinates
         const rect = this.element.getBoundingClientRect();
         const toX = (this.connectionMouseX - rect.left - this.panX) / this.zoom;
         const toY = (this.connectionMouseY - rect.top - this.panY) / this.zoom;
 
-        // Draw dashed bezier curve
+        // Draw dashed bezier curve (use port color if dragging from a named port)
         this.ctx.beginPath();
-        this.ctx.strokeStyle = '#89b4fa';
+        const dragColor = this.connectionFromPort === 'fail' ? '#f38ba8' : '#89b4fa';
+        this.ctx.strokeStyle = dragColor;
         this.ctx.lineWidth = 2;
         this.ctx.setLineDash([5, 5]);
 
