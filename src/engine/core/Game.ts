@@ -1124,27 +1124,41 @@ export class Game {
         break;
 
       case 'teleportNPC':
-        // Instant position change - use moveNPCTo with instant flag
-        // TODO: Add true instant teleport to Engine if needed
-        if (action.target && action.value) {
-          const pos = action.value as { x: number; y: number; z: number };
-          this.engine.moveNPCTo(action.target, pos)
-            .catch((err: unknown) => console.error(`[Game] Failed to teleport NPC:`, err));
-        }
-        break;
+      case 'moveNpc': {
+        const npcId = action.target || action.npcId;
+        if (!npcId) break;
 
-      case 'moveNpc':
-        // Legacy animated movement (backward compat from ADR-015)
-        if (action.npcId && action.position) {
-          this.engine.moveNPCTo(action.npcId, action.position)
-            .catch((err: unknown) => console.error(`[Game] Failed to move NPC:`, err));
-        } else if (action.target && action.value) {
-          // Also support new format: target=npcId, value=position
-          const pos = action.value as { x: number; y: number; z: number };
-          this.engine.moveNPCTo(action.target, pos)
+        let pos: { x: number; y: number; z: number } | null = null;
+        if (action.moveTarget === 'player') {
+          const playerPos = this.engine.getPlayerPosition();
+          if (playerPos) {
+            const offset = action.moveOffset ?? 1.5;
+            const npcPos = this.engine.getNPCPosition(npcId);
+            if (npcPos && offset > 0) {
+              // Offset toward NPC's current position so they stop short of the player
+              const dx = npcPos.x - playerPos.x;
+              const dz = npcPos.z - playerPos.z;
+              const dist = Math.sqrt(dx * dx + dz * dz);
+              if (dist > 0.01) {
+                pos = { x: playerPos.x + (dx / dist) * offset, y: playerPos.y, z: playerPos.z + (dz / dist) * offset };
+              } else {
+                // NPC already at player position — offset on X
+                pos = { x: playerPos.x + offset, y: playerPos.y, z: playerPos.z };
+              }
+            } else {
+              pos = playerPos;
+            }
+          }
+        } else {
+          pos = (action.value as { x: number; y: number; z: number }) || action.position || null;
+        }
+
+        if (pos) {
+          this.engine.moveNPCTo(npcId, pos)
             .catch((err: unknown) => console.error(`[Game] Failed to move NPC:`, err));
         }
         break;
+      }
 
       case 'setNPCState':
         // NPC state changes - will be more useful with ADR-017 behavior trees

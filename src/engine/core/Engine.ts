@@ -1580,6 +1580,17 @@ export class SugarEngine {
   }
 
   /**
+   * Get current position of an NPC.
+   */
+  getNPCPosition(npcId: string): { x: number; y: number; z: number } | null {
+    const entity = this.findNPCEntity(npcId);
+    if (entity === null) return null;
+
+    const pos = this.world.getComponent<Position>(entity, Position);
+    return pos ? { x: pos.x, y: pos.y, z: pos.z } : null;
+  }
+
+  /**
    * Stop NPC movement (pause patrol).
    */
   stopNPC(npcId: string): void {

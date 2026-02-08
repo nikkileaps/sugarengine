@@ -69,6 +69,11 @@ export interface BeatAction {
   target?: string;              // Flag name, item ID, NPC ID, sound path, etc.
   value?: unknown;              // Flag value, quantity, position, state, etc.
 
+  // moveNpc/teleportNPC destination — 'position' (fixed XYZ) or 'player' (resolve at runtime)
+  moveTarget?: 'position' | 'player';
+  // Distance to stop from the player when moveTarget='player' (default: 1.5)
+  moveOffset?: number;
+
   // Legacy fields for moveNpc backward compat (ADR-015)
   npcId?: string;
   position?: { x: number; y: number; z: number };

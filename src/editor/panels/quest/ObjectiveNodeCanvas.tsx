@@ -792,6 +792,7 @@ function BeatActionFields({
       );
     case 'moveNpc':
     case 'teleportNPC': {
+      const moveTarget = action.moveTarget || 'position';
       const pos = (action.value as { x: number; y: number; z: number }) || action.position || { x: 0, y: 0, z: 0 };
       return (
         <>
@@ -808,17 +809,33 @@ function BeatActionFields({
               });
             }}
             searchable styles={{ input: inputStyle, label: labelStyle }} />
-          <Group gap="xs">
-            <NumberInput size="xs" label="X" value={pos.x}
-              onChange={(v) => updateAction({ ...action, value: { ...pos, x: Number(v) || 0 }, position: { ...pos, x: Number(v) || 0 } })}
-              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
-            <NumberInput size="xs" label="Y" value={pos.y}
-              onChange={(v) => updateAction({ ...action, value: { ...pos, y: Number(v) || 0 }, position: { ...pos, y: Number(v) || 0 } })}
-              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
-            <NumberInput size="xs" label="Z" value={pos.z}
-              onChange={(v) => updateAction({ ...action, value: { ...pos, z: Number(v) || 0 }, position: { ...pos, z: Number(v) || 0 } })}
-              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
-          </Group>
+          <Select size="xs" label="Destination"
+            data={[
+              { value: 'player', label: 'Player Location' },
+              { value: 'position', label: 'Fixed Position' },
+            ]}
+            value={moveTarget}
+            onChange={(value) => updateAction({ ...action, moveTarget: (value as 'position' | 'player') || 'position' })}
+            styles={{ input: inputStyle, label: labelStyle }} />
+          {moveTarget === 'player' && (
+            <NumberInput size="xs" label="Stop Distance" value={action.moveOffset ?? 1.5}
+              onChange={(v) => updateAction({ ...action, moveOffset: Number(v) || 1.5 })}
+              step={0.5} min={0} decimalScale={1}
+              styles={{ input: { ...inputStyle, width: 80 }, label: labelStyle }} />
+          )}
+          {moveTarget === 'position' && (
+            <Group gap="xs">
+              <NumberInput size="xs" label="X" value={pos.x}
+                onChange={(v) => updateAction({ ...action, value: { ...pos, x: Number(v) || 0 }, position: { ...pos, x: Number(v) || 0 } })}
+                styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+              <NumberInput size="xs" label="Y" value={pos.y}
+                onChange={(v) => updateAction({ ...action, value: { ...pos, y: Number(v) || 0 }, position: { ...pos, y: Number(v) || 0 } })}
+                styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+              <NumberInput size="xs" label="Z" value={pos.z}
+                onChange={(v) => updateAction({ ...action, value: { ...pos, z: Number(v) || 0 }, position: { ...pos, z: Number(v) || 0 } })}
+                styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+            </Group>
+          )}
         </>
       );
     }
