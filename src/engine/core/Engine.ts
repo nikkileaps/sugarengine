@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, NPCBehavior, ItemPickup, NPCMovement, Waypoint, Inspectable, ResonancePoint, WorldLabel, SurfacePatchLOD } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem, BehaviorTreeSystem, BTConditionChecker, BTActionHandler } from '../systems';
-import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem, BehaviorTreeSystem, BTConditionChecker, BTActionHandler, AnimationSystem } from '../systems';
+import { Animator } from '../components/Animator';
+import { ModelLoader, CharacterLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
@@ -98,9 +99,12 @@ export class SugarEngine {
   private worldLabelSystem: WorldLabelSystem;
   private environmentAnimation: EnvironmentAnimation;
   private vfxManager: VFXManager;
+  private playerModelPath: string = 'models/player.glb';
+  private playerAnimationPaths: Record<string, string> = {};
 
   readonly world: World;
   readonly models: ModelLoader;
+  readonly characters: CharacterLoader;
   readonly regions: RegionLoader;
 
   constructor(config: EngineConfig) {
@@ -133,6 +137,7 @@ export class SugarEngine {
 
     // Loaders
     this.models = new ModelLoader();
+    this.characters = new CharacterLoader(this.models);
     this.regions = new RegionLoader(this.models);
 
     // ECS World
@@ -144,6 +149,7 @@ export class SugarEngine {
     this.movementSystem = new MovementSystem(this.input, this.scene);
     this.movementSystem.setCameraYawProvider(() => this.camera.getYaw());
     this.world.addSystem(this.movementSystem);
+    this.world.addSystem(new AnimationSystem());
     this.world.addSystem(new RenderSystem(this.scene));
     this.triggerSystem = new TriggerSystem();
     this.world.addSystem(this.triggerSystem);
@@ -1127,29 +1133,29 @@ export class SugarEngine {
   private async createPlayer(x: number = 0, y: number = 0, z: number = 0): Promise<number> {
     const entity = this.world.createEntity();
 
-    // Position component (slightly above ground)
     this.world.addComponent(entity, new Position(x, y + 0.75, z));
-
-    // Velocity component
     this.world.addComponent(entity, new Velocity());
-
-    // Player controlled component
     this.world.addComponent(entity, new PlayerControlled(5));
 
-    // Try to load a model, fall back to cube
+    // Load character model, fall back to cube
     let mesh: THREE.Object3D;
+    let clips = new Map<string, THREE.AnimationClip>();
     try {
-      mesh = await this.models.load(import.meta.env.BASE_URL + 'models/player.glb');
+      const baseUrl = import.meta.env.BASE_URL + this.playerModelPath;
+      const animPaths = Object.fromEntries(
+        Object.entries(this.playerAnimationPaths).map(([k, v]) => [k, import.meta.env.BASE_URL + v])
+      );
+      const character = await this.characters.load(baseUrl, animPaths);
+      mesh = character.mesh;
+      clips = character.clips;
       mesh.name = 'player';
-      mesh.castShadow = true;
+      // Name all child meshes so collision system excludes them
       mesh.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          child.castShadow = true;
           child.name = 'player-mesh';
         }
       });
     } catch {
-      // Fallback to cube if no model exists
       const geometry = new THREE.BoxGeometry(1, 1.5, 1);
       const material = new THREE.MeshStandardMaterial({ color: 0xe07a5f });
       mesh = new THREE.Mesh(geometry, material);
@@ -1158,6 +1164,19 @@ export class SugarEngine {
     }
 
     this.world.addComponent(entity, new Renderable(mesh));
+
+    if (clips.size > 0) {
+      const animator = new Animator(mesh);
+      for (const [name, clip] of clips) {
+        animator.addClip(name, clip);
+      }
+      if (animator.hasClip('idle')) {
+        animator.play('idle', 0);
+      } else if (animator.hasClip('walk')) {
+        animator.play('walk', 0);
+      }
+      this.world.addComponent(entity, animator);
+    }
 
     return entity;
   }
@@ -1205,6 +1224,12 @@ export class SugarEngine {
     this.scene.add(directionalLight);
     this.regionLights.push(directionalLight);
   }
+
+  /**
+   * Infer a standard clip name from FBX/GLTF clip names.
+   * Handles Mixamo names ("mixamo.com"), generic names ("Take 001"),
+   * and Blender-style names ("Armature|Walk").
+   */
 
   private onResize(container: HTMLElement): void {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
@@ -1766,6 +1791,19 @@ export class SugarEngine {
    */
   getPlayerEntity(): number {
     return this.playerEntity;
+  }
+
+  /**
+   * Set the player model path. Must be called before the player is spawned (i.e. before loadRegion).
+   * Supports .glb and .fbx formats.
+   */
+  setPlayerModel(path: string): void {
+    this.playerModelPath = path;
+  }
+
+  /** Set additional animation clip paths (e.g. { idle: 'models/idle.fbx' }). */
+  setPlayerAnimations(anims: Record<string, string>): void {
+    this.playerAnimationPaths = anims;
   }
 
   /**

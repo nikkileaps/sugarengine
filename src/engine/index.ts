@@ -30,6 +30,7 @@ export {
   NPC,
   ItemPickup,
   Inspectable,
+  Animator,
 } from './components';
 export { NPCMovement } from './components/NPCMovement';
 export type { MovementBehavior, Waypoint } from './components/NPCMovement';
@@ -41,6 +42,7 @@ export {
   TriggerSystem,
   InteractionSystem,
   NPCMovementSystem,
+  AnimationSystem,
 } from './systems';
 export type {
   TriggerHandler,
@@ -51,6 +53,8 @@ export type {
 
 // Loaders
 export { ModelLoader } from './loaders/ModelLoader';
+export { CharacterLoader } from './loaders/CharacterLoader';
+export type { CharacterModel } from './loaders/CharacterLoader';
 export { RegionLoader } from './loaders/RegionLoader';
 export type { RegionData, LoadedRegion, RegionStreamingConfig, GridPosition, Vec3 } from './loaders/RegionLoader';
 

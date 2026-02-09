@@ -115,7 +115,7 @@ export class Game {
       camera: config.engine?.camera ?? {
         style: 'isometric',
         zoom: { min: 0.5, max: 2.0, default: 1.0 }
-      }
+      },
     });
 
     // Create systems
@@ -213,8 +213,18 @@ export class Game {
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
       regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; resonancePoints?: { id: string; resonancePointId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; vfxSpawns?: { id: string; vfxId: string; position: { x: number; y: number; z: number }; scale?: number; autoPlay?: boolean }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
       playerCaster?: unknown;
+      playerModel?: string;
+      playerAnimations?: Record<string, string>;
       spells?: unknown[];
     };
+
+    // Set player model if specified in project data
+    if (project.playerModel) {
+      this.engine.setPlayerModel(project.playerModel);
+    }
+    if (project.playerAnimations) {
+      this.engine.setPlayerAnimations(project.playerAnimations);
+    }
 
     // Pre-register regions (must happen before loadRegion)
     if (project.regions) {

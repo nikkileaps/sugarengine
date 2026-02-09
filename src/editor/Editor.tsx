@@ -85,6 +85,10 @@ export function Editor() {
   const setRegions = useEditorStore((s) => s.setRegions);
   const playerCaster = useEditorStore((s) => s.playerCaster);
   const setPlayerCaster = useEditorStore((s) => s.setPlayerCaster);
+  const playerModel = useEditorStore((s) => s.playerModel);
+  const setPlayerModel = useEditorStore((s) => s.setPlayerModel);
+  const playerAnimations = useEditorStore((s) => s.playerAnimations);
+  const setPlayerAnimations = useEditorStore((s) => s.setPlayerAnimations);
   const spells = useEditorStore((s) => s.spells);
   const setSpells = useEditorStore((s) => s.setSpells);
   const resonancePoints = useEditorStore((s) => s.resonancePoints);
@@ -143,6 +147,8 @@ export function Editor() {
       inspections,
       regions,
       playerCaster,
+      playerModel,
+      playerAnimations,
       spells,
       resonancePoints,
       vfxDefinitions,
@@ -250,6 +256,8 @@ export function Editor() {
       inspections,
       regions,
       playerCaster,
+      playerModel,
+      playerAnimations,
       spells,
       resonancePoints,
       vfxDefinitions,
@@ -307,6 +315,8 @@ export function Editor() {
       inspections,
       regions,
       playerCaster,
+      playerModel,
+      playerAnimations,
       spells,
       resonancePoints,
       vfxDefinitions,
@@ -433,6 +443,8 @@ export function Editor() {
       setInspections(data.inspections || []);
       setRegions(data.regions || []);
       setPlayerCaster(data.playerCaster || null);
+      setPlayerModel(data.playerModel || null);
+      setPlayerAnimations(data.playerAnimations || {});
       setSpells(data.spells || []);
       setResonancePoints(data.resonancePoints || []);
       setVFXDefinitions(data.vfxDefinitions || []);
@@ -530,6 +542,10 @@ export function Editor() {
                                       <PlayerPanel
                                         playerCaster={playerCaster}
                                         onPlayerCasterChange={setPlayerCaster}
+                                        playerModel={playerModel}
+                                        onPlayerModelChange={setPlayerModel}
+                                        playerAnimations={playerAnimations}
+                                        onPlayerAnimationsChange={setPlayerAnimations}
                                       >
                                         {(playerPanel) => (
                                       <RegionPanel
