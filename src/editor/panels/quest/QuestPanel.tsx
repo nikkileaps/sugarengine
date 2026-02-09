@@ -41,7 +41,7 @@ export type ObjectiveAction = MoveNpcAction;
 
 export interface QuestObjective {
   id: string;
-  type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
+  type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'castSpell' | 'custom';
   target: string;
   description: string;
   count?: number;

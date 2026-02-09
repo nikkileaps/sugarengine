@@ -391,8 +391,12 @@ export class NodeCanvas {
       maxY = Math.max(maxY, node.position.y + (node.height ?? 100) + 500);
     }
 
-    this.connectionsCanvas.width = Math.max(maxX, 2000);
-    this.connectionsCanvas.height = Math.max(maxY, 2000);
+    const w = Math.max(maxX, 2000);
+    const h = Math.max(maxY, 2000);
+    this.connectionsCanvas.width = w;
+    this.connectionsCanvas.height = h;
+    this.connectionsCanvas.style.width = `${w}px`;
+    this.connectionsCanvas.style.height = `${h}px`;
   }
 
   private renderNodes(): void {
@@ -526,17 +530,23 @@ export class NodeCanvas {
 
       this.nodesContainer.appendChild(nodeEl);
       this.nodeElements.set(node.id, nodeEl);
-
-      // Store actual dimensions after render
-      requestAnimationFrame(() => {
-        node.width = nodeEl.offsetWidth;
-        node.height = nodeEl.offsetHeight;
-        this.renderConnections();
-      });
     }
 
     this.updateNodeSelection();
     this.resizeConnectionsCanvas();
+
+    // Single rAF to measure all node dimensions after DOM layout, then re-render connections
+    requestAnimationFrame(() => {
+      for (const [nodeId, nodeEl] of this.nodeElements) {
+        const node = this.nodes.get(nodeId);
+        if (node) {
+          node.width = nodeEl.offsetWidth;
+          node.height = nodeEl.offsetHeight;
+        }
+      }
+      this.resizeConnectionsCanvas();
+      this.renderConnections();
+    });
   }
 
   private updateNodeSelection(): void {

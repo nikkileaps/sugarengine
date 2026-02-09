@@ -1,7 +1,7 @@
 /**
  * Quest objective types (subtypes for objective beat nodes)
  */
-export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
+export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'castSpell' | 'custom';
 
 // ============================================
 // Beat Node Types (ADR-016)

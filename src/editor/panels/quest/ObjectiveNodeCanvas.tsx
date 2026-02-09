@@ -43,6 +43,7 @@ const OBJECTIVE_ICONS: Record<string, string> = {
   location: '📍',
   collect: '📦',
   trigger: '⚡',
+  castSpell: '🔮',
   custom: '⭐',
 };
 
@@ -53,6 +54,7 @@ const OBJECTIVE_COLORS: Record<string, string> = {
   location: '#a6e3a1',
   collect: '#f9e2af',
   trigger: '#fab387',
+  castSpell: '#94e2d5',
   custom: '#f5c2e7',
 };
 
@@ -397,12 +399,17 @@ export function ObjectiveNodeCanvas({
           targetDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
 
           let targetName = obj.target;
+          let targetLabel = 'Target';
           if (obj.type === 'talk' || obj.type === 'voiceover') {
             const npc = npcs.find(n => n.id === obj.target);
             targetName = npc?.name || obj.target;
+          } else if (obj.type === 'castSpell') {
+            const spell = spells.find(s => s.id === obj.target);
+            targetName = spell?.name || obj.target;
+            targetLabel = 'Spell';
           }
 
-          targetDiv.textContent = `Target: ${targetName}`;
+          targetDiv.textContent = `${targetLabel}: ${targetName}`;
           element.appendChild(targetDiv);
         } else if ((nodeType === 'condition' || nodeType === 'branch') && obj.condition) {
           const operandDiv = document.createElement('div');
@@ -645,6 +652,7 @@ export function ObjectiveNodeCanvas({
               <Menu.Item onClick={() => handleAddNode('objective', 'talk')}>💬 Talk to NPC</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'location')}>📍 Go to Location</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'trigger')}>⚡ Trigger</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('objective', 'castSpell')}>🔮 Cast Spell</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'custom')}>⭐ Custom</Menu.Item>
               <Menu.Divider />
               <Menu.Label>Narrative</Menu.Label>
@@ -1013,6 +1021,7 @@ function ObjectiveEditorPanel({
     { value: 'voiceover', label: '🎤 Voiceover' },
     { value: 'location', label: '📍 Location' },
     { value: 'trigger', label: '⚡ Trigger' },
+    { value: 'castSpell', label: '🔮 Cast Spell' },
     { value: 'custom', label: '⭐ Custom' },
   ];
 
@@ -1020,6 +1029,8 @@ function ObjectiveEditorPanel({
     ? npcs.map((n) => ({ value: n.id, label: n.name }))
     : objective.type === 'location' || objective.type === 'trigger'
     ? triggers.map((t) => ({ value: t.id, label: t.name }))
+    : objective.type === 'castSpell'
+    ? spells.map((s) => ({ value: s.id, label: s.name }))
     : [];
 
   const dialogueOptions = dialogues.map((d) => ({ value: d.id, label: d.name }));
@@ -1101,11 +1112,11 @@ function ObjectiveEditorPanel({
 
               {targetOptions.length > 0 && (
                 <Select
-                  label="Target"
+                  label={objective.type === 'castSpell' ? 'Spell' : 'Target'}
                   data={targetOptions}
                   value={objective.target || null}
                   onChange={(value) => handleChange('target', value || '')}
-                  placeholder="Select target..."
+                  placeholder={objective.type === 'castSpell' ? 'Select spell...' : 'Select target...'}
                   searchable
                   clearable
                 />

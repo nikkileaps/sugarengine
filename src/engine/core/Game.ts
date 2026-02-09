@@ -483,6 +483,20 @@ export class Game {
     this.quests.setOnQuestComplete((event) => {
       this.eventHandlers.onQuestComplete?.(event.questName);
       this.saveManager.autoSave('quest-complete');
+
+      // If no more active quests, return to title screen
+      if (this.quests.getActiveQuests().length === 0) {
+        const goToTitle = async () => {
+          // Fade to black if not already faded (e.g., cutscene already faded)
+          if (!this.fadeOverlay.isBlack()) {
+            await this.fadeOverlay.fadeToBlack(1000);
+          }
+          await this.showTitle();
+          await this.fadeOverlay.fadeFromBlack(500);
+        };
+        // Defer so quest completion callbacks finish first
+        setTimeout(() => goToTitle(), 500);
+      }
     });
 
     this.quests.setOnObjectiveComplete((event) => {
@@ -558,11 +572,17 @@ export class Game {
           this.quests.completeObjective(questId, objective.id);
           break;
 
-        case 'cutscene':
-          // Cutscenes not yet implemented - auto-complete for now
-          console.warn(`[Game] Cutscene narrative type not yet implemented, auto-completing node ${objective.id}`);
-          this.quests.completeObjective(questId, objective.id);
+        case 'cutscene': {
+          // Fire event so game code can handle custom visuals
+          if (objective.eventName) {
+            this.eventHandlers.onDialogueEvent?.(objective.eventName);
+          }
+          // Fade to black, then complete the node
+          this.fadeOverlay.fadeToBlack(1000).then(() => {
+            this.quests.completeObjective(questId, objective.id);
+          });
           break;
+        }
       }
     });
 
@@ -606,6 +626,9 @@ export class Game {
     // ========================================
     this.caster.setOnSpellCast((spell, result) => {
       this.eventHandlers.onSpellCast?.(spell, result);
+
+      // Trigger castSpell objective (quest system)
+      this.quests.triggerObjective('castSpell', spell.id);
 
       // Handle spell effects
       for (const effect of result.effects) {
