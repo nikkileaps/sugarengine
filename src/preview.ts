@@ -19,6 +19,7 @@ import {
   CasterHUD,
   ResonanceGameUI,
   FreeCameraController,
+  LoadingScreen,
 } from './engine';
 
 interface ProjectMessage {
@@ -327,7 +328,19 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   // Start Game
   // ========================================
 
+  const loadingScreen = new LoadingScreen(container);
+  loadingScreen.show();
+
   await game.loadRegion(startRegionPath);
+
+  // Wait for all NPC/inspectable models to finish loading
+  await game.engine.waitForPendingModelLoads((loaded, total) => {
+    loadingScreen.setProgress(loaded, total);
+  });
+
+  loadingScreen.hide();
+  loadingScreen.dispose();
+
   game.run();
   game.pause();
   await game.showTitle();

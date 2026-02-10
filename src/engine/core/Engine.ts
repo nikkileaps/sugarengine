@@ -97,6 +97,7 @@ export class SugarEngine {
   private cameraFollowsPlayer: boolean = true;
   private cameraUpdateEnabled: boolean = true;
   private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
+  private inspectionModelDatabase: Map<string, { model: string; modelScale?: number }> = new Map();
   private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
   private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
   private worldLabelSystem: WorldLabelSystem;
@@ -104,6 +105,7 @@ export class SugarEngine {
   private vfxManager: VFXManager;
   private playerModelPath: string = 'models/player.glb';
   private playerAnimationPaths: Record<string, string> = {};
+  private pendingModelLoads: Promise<void>[] = [];
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -322,6 +324,9 @@ export class SugarEngine {
     }
     this.inspectableEntities = [];
 
+    // Discard any pending model loads from previous region
+    this.pendingModelLoads = [];
+
     // Remove old resonance point entities (and their meshes)
     for (const entityId of this.resonancePointEntities) {
       const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
@@ -425,11 +430,13 @@ export class SugarEngine {
         this.world.addComponent(entity, npcMovement);
       }
 
-      // Load model or fallback to purple capsule
-      const { mesh, clips } = await this.createNPCMesh(
-        npcDef.id, npcInfo,
-        npcDef.position.x, npcDef.position.y, npcDef.position.z,
-      );
+      // Placeholder capsule (always created synchronously)
+      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(npcDef.position.x, npcDef.position.y + 0.7, npcDef.position.z);
+      mesh.name = `npc-${npcDef.id}`;
       mesh.userData.npcId = npcDef.id;
       mesh.userData.entityId = entity;
       this.scene.add(mesh);
@@ -438,19 +445,14 @@ export class SugarEngine {
       this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
 
       this.world.addComponent(entity, new Renderable(mesh));
-
-      if (clips.size > 0) {
-        const animator = new Animator(mesh);
-        for (const [name, clip] of clips) {
-          animator.addClip(name, clip);
-        }
-        if (animator.hasClip('idle')) {
-          animator.play('idle', 0);
-        }
-        this.world.addComponent(entity, animator);
-      }
-
       this.npcEntities.push(entity);
+
+      // Fire-and-forget: upgrade placeholder to loaded model in the background
+      if (npcInfo?.model) {
+        this.pendingModelLoads.push(
+          this.upgradeNPCModel(entity, npcDef.id, npcInfo, npcDef.position.x, npcDef.position.y, npcDef.position.z),
+        );
+      }
     }
     // Create pickup entities from region data (skip already collected ones)
     const pickups = this.currentRegion.data.pickups ?? [];
@@ -519,19 +521,19 @@ export class SugarEngine {
         inspectableDef.promptText
       ));
 
-      // Placeholder mesh (small box to indicate inspectable object)
+      // Placeholder box (always created synchronously)
       const geometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
-      const material = new THREE.MeshStandardMaterial({
+      const boxMaterial = new THREE.MeshStandardMaterial({
         color: 0x8888ff,
         emissive: 0x4444aa,
-        emissiveIntensity: 0.3
+        emissiveIntensity: 0.3,
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new THREE.Mesh(geometry, boxMaterial);
       mesh.castShadow = true;
       mesh.position.set(
         inspectableDef.position.x,
         inspectableDef.position.y + 0.2,
-        inspectableDef.position.z
+        inspectableDef.position.z,
       );
       mesh.name = `inspectable-${inspectableDef.id}`;
       mesh.userData.inspectableId = inspectableDef.id;
@@ -540,6 +542,17 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       this.inspectableEntities.push(entity);
+
+      // Fire-and-forget: upgrade placeholder to loaded model in the background
+      const modelInfo = this.inspectionModelDatabase.get(inspectableDef.inspectionId);
+      if (modelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradeInspectableModel(
+            entity, inspectableDef.id, modelInfo,
+            inspectableDef.position.x, inspectableDef.position.y, inspectableDef.position.z,
+          ),
+        );
+      }
     }
     // Create resonance point entities from region data
     const resonancePoints = this.currentRegion.data.resonancePoints ?? [];
@@ -742,9 +755,12 @@ export class SugarEngine {
         this.world.addComponent(entity, npcMovement);
       }
 
-      const { mesh, clips } = await this.createNPCMesh(
-        npcDef.id, npcInfo, worldX, worldY, worldZ,
-      );
+      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(worldX, worldY + 0.7, worldZ);
+      mesh.name = `npc-${npcDef.id}`;
       mesh.userData.npcId = npcDef.id;
       mesh.userData.entityId = entity;
       mesh.userData.regionId = regionId;
@@ -752,19 +768,13 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
       this.world.addComponent(entity, new Renderable(mesh));
-
-      if (clips.size > 0) {
-        const animator = new Animator(mesh);
-        for (const [name, clip] of clips) {
-          animator.addClip(name, clip);
-        }
-        if (animator.hasClip('idle')) {
-          animator.play('idle', 0);
-        }
-        this.world.addComponent(entity, animator);
-      }
-
       state.npcEntities.push(entity);
+
+      if (npcInfo?.model) {
+        this.pendingModelLoads.push(
+          this.upgradeNPCModel(entity, npcDef.id, npcInfo, worldX, worldY, worldZ),
+        );
+      }
     }
 
     // Create pickup entities (offset by world position)
@@ -819,13 +829,13 @@ export class SugarEngine {
         inspectableDef.promptText
       ));
 
-      const geometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
-      const material = new THREE.MeshStandardMaterial({
+      const inspGeometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
+      const inspMaterial = new THREE.MeshStandardMaterial({
         color: 0x8888ff,
         emissive: 0x4444aa,
-        emissiveIntensity: 0.3
+        emissiveIntensity: 0.3,
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new THREE.Mesh(inspGeometry, inspMaterial);
       mesh.castShadow = true;
       mesh.position.set(worldX, worldY + 0.2, worldZ);
       mesh.name = `inspectable-${inspectableDef.id}`;
@@ -836,6 +846,15 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       state.inspectableEntities.push(entity);
+
+      const modelInfo = this.inspectionModelDatabase.get(inspectableDef.inspectionId);
+      if (modelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradeInspectableModel(
+            entity, inspectableDef.id, modelInfo, worldX, worldY, worldZ,
+          ),
+        );
+      }
     }
 
     // Create resonance point entities (offset by world position)
@@ -1204,55 +1223,108 @@ export class SugarEngine {
   }
 
   /**
-   * Create an NPC mesh: loads a character model if configured, otherwise returns a purple capsule.
-   * Returns the mesh and any animation clips.
+   * Wait for all pending model loads (NPC + inspectable) to complete.
+   * Reports progress via optional callback.
    */
-  private async createNPCMesh(
-    npcId: string,
-    npcInfo: NPCDatabaseEntry | undefined,
+  async waitForPendingModelLoads(
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<void> {
+    const promises = [...this.pendingModelLoads];
+    if (promises.length === 0) return;
+
+    const total = promises.length;
+    let loaded = 0;
+    onProgress?.(0, total);
+
+    await Promise.all(
+      promises.map((p) =>
+        p.then(() => {
+          loaded++;
+          onProgress?.(loaded, total);
+        }),
+      ),
+    );
+
+    // Clear only the batch we waited on
+    this.pendingModelLoads = this.pendingModelLoads.filter((p) => !promises.includes(p));
+  }
+
+  /**
+   * Background model upgrade for NPCs. Loads the character model and swaps
+   * the placeholder capsule. Never blocks loadRegion.
+   */
+  private async upgradeNPCModel(
+    entity: number, npcId: string, npcInfo: NPCDatabaseEntry,
     x: number, y: number, z: number,
-  ): Promise<{ mesh: THREE.Object3D; clips: Map<string, THREE.AnimationClip> }> {
-    let mesh: THREE.Object3D;
-    let clips = new Map<string, THREE.AnimationClip>();
+  ): Promise<void> {
+    try {
+      const baseUrl = import.meta.env.BASE_URL + npcInfo.model;
+      const animPaths = npcInfo.animations
+        ? Object.fromEntries(
+            Object.entries(npcInfo.animations).map(([k, v]) => [k, import.meta.env.BASE_URL + v])
+          )
+        : {};
+      const character = await this.characters.load(baseUrl, animPaths, npcInfo.modelHeight);
+      const newMesh = character.mesh;
+      newMesh.name = `npc-${npcId}`;
+      newMesh.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.name = `npc-${npcId}`;
+        }
+      });
+      newMesh.position.set(x, y, z);
 
-    if (npcInfo?.model) {
-      try {
-        const baseUrl = import.meta.env.BASE_URL + npcInfo.model;
-        const animPaths = npcInfo.animations
-          ? Object.fromEntries(
-              Object.entries(npcInfo.animations).map(([k, v]) => [k, import.meta.env.BASE_URL + v])
-            )
-          : {};
-        const character = await this.characters.load(baseUrl, animPaths, npcInfo.modelHeight);
-        mesh = character.mesh;
-        clips = character.clips;
-        mesh.name = `npc-${npcId}`;
-        mesh.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.name = `npc-${npcId}`;
-          }
-        });
-        mesh.position.set(x, y, z);
-        mesh.castShadow = true;
-      } catch {
-        // Fallback to capsule on load error
-        const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
-        const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
-        mesh = new THREE.Mesh(geometry, material);
-        mesh.castShadow = true;
-        mesh.position.set(x, y + 0.7, z);
-        mesh.name = `npc-${npcId}`;
+      // Swap placeholder → loaded model
+      const renderable = this.world.getComponent<Renderable>(entity, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+        this.scene.add(newMesh);
+        renderable.mesh = newMesh;
       }
-    } else {
-      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
-      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
-      mesh = new THREE.Mesh(geometry, material);
-      mesh.castShadow = true;
-      mesh.position.set(x, y + 0.7, z);
-      mesh.name = `npc-${npcId}`;
-    }
 
-    return { mesh, clips };
+      // Add animator if clips available
+      if (character.clips.size > 0) {
+        const animator = new Animator(newMesh);
+        for (const [name, clip] of character.clips) {
+          animator.addClip(name, clip);
+        }
+        if (animator.hasClip('idle')) {
+          animator.play('idle', 0);
+        }
+        this.world.addComponent(entity, animator);
+      }
+    } catch (e) {
+      console.warn(`[Engine] Failed to load NPC model for ${npcId}, keeping placeholder`, e);
+    }
+  }
+
+  /**
+   * Background model upgrade for inspectables. Loads the model and swaps
+   * the placeholder box. Never blocks loadRegion.
+   */
+  private async upgradeInspectableModel(
+    entity: number, id: string,
+    modelInfo: { model: string; modelScale?: number },
+    x: number, y: number, z: number,
+  ): Promise<void> {
+    try {
+      const url = import.meta.env.BASE_URL + modelInfo.model;
+      const character = await this.characters.load(url, {}, undefined);
+      const newMesh = character.mesh;
+      const scale = modelInfo.modelScale ?? 1;
+      if (scale !== 1) newMesh.scale.multiplyScalar(scale);
+      newMesh.position.set(x, y, z);
+      newMesh.name = `inspectable-${id}`;
+
+      const renderable = this.world.getComponent<Renderable>(entity, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+        this.scene.add(newMesh);
+        renderable.mesh = newMesh;
+      }
+    } catch (e) {
+      console.warn(`[Engine] Failed to load inspectable model for ${id}, keeping placeholder`, e);
+    }
   }
 
   // Helper to spawn an entity with a loaded model
@@ -1851,6 +1923,13 @@ export class SugarEngine {
    */
   registerNPC(id: string, name: string, dialogue?: string, behaviorTree?: import('../behavior').BTNode, behaviorMode?: import('../components').BehaviorMode, model?: string, modelHeight?: number, animations?: Record<string, string>): void {
     this.npcDatabase.set(id, { id, name, dialogue, behaviorTree, behaviorMode, model, modelHeight, animations });
+  }
+
+  /**
+   * Register model info for an inspection (for development mode)
+   */
+  registerInspectionModel(inspectionId: string, model: string, modelScale?: number): void {
+    this.inspectionModelDatabase.set(inspectionId, { model, modelScale });
   }
 
   /**

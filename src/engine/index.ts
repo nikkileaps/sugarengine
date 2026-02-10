@@ -105,6 +105,7 @@ export { Screen } from './scenes/Screen';
 export { TitleScreen } from './scenes/TitleScreen';
 export { PauseScreen } from './scenes/PauseScreen';
 export { SaveLoadScreen } from './scenes/SaveLoadScreen';
+export { LoadingScreen } from './scenes/LoadingScreen';
 
 // Audio
 export { AudioManager } from './audio';

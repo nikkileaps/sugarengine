@@ -11,6 +11,7 @@ import {
   Box,
   Textarea,
   TextInput,
+  NumberInput,
   ActionIcon,
   Image,
   ScrollArea,
@@ -188,6 +189,44 @@ export function InspectionDetail({ inspection, onChange, onDelete }: InspectionD
                 value={inspection.headerImage || ''}
                 onChange={(e) => handleHeaderImageChange(e.currentTarget.value)}
               />
+            </Paper>
+
+            {/* 3D Model Card */}
+            <Paper
+              p="md"
+              radius="md"
+              style={{ background: '#181825', border: '1px solid #313244' }}
+            >
+              <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="sm">
+                3D Model
+              </Text>
+              <Stack gap="sm">
+                <TextInput
+                  label="Model Path (optional)"
+                  value={inspection.model || ''}
+                  onChange={(e) => {
+                    const val = e.currentTarget.value.trim();
+                    handleChange('model', val.length > 0 ? val : undefined);
+                  }}
+                  placeholder="models/scroll.fbx"
+                  size="sm"
+                />
+                {inspection.model && (
+                  <NumberInput
+                    label="Model Scale"
+                    value={inspection.modelScale ?? 1}
+                    onChange={(val) => {
+                      const num = typeof val === 'number' ? val : undefined;
+                      handleChange('modelScale', num && num !== 1 ? num : undefined);
+                    }}
+                    min={0.01}
+                    max={100}
+                    step={0.1}
+                    decimalScale={2}
+                    size="sm"
+                  />
+                )}
+              </Stack>
             </Paper>
 
             {/* Main Content Card */}

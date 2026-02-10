@@ -64,6 +64,8 @@ export interface InspectionData {
   headerImage?: string;
   content?: string;
   sections?: { heading?: string; text: string }[];
+  model?: string;
+  modelScale?: number;
 }
 
 export interface ResonancePointData {
