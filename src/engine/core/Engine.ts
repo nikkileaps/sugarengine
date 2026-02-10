@@ -1316,11 +1316,22 @@ export class SugarEngine {
       newMesh.position.set(x, y, z);
       newMesh.name = `inspectable-${id}`;
 
+      // Compute XZ collision radius from bounding box
+      const box = new THREE.Box3().setFromObject(newMesh);
+      const size = box.getSize(new THREE.Vector3());
+      const xzRadius = Math.max(size.x, size.z) / 2;
+
       const renderable = this.world.getComponent<Renderable>(entity, Renderable);
       if (renderable) {
         this.scene.remove(renderable.mesh);
         this.scene.add(newMesh);
         renderable.mesh = newMesh;
+      }
+
+      // Set collision radius on inspectable component
+      const inspectable = this.world.getComponent<Inspectable>(entity, Inspectable);
+      if (inspectable) {
+        inspectable.collisionRadius = xzRadius;
       }
     } catch (e) {
       console.warn(`[Engine] Failed to load inspectable model for ${id}, keeping placeholder`, e);
