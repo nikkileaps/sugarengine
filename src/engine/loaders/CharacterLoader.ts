@@ -20,10 +20,17 @@ export class CharacterLoader {
   ): Promise<CharacterModel> {
     const result = await this.models.loadAnimatedModel(baseUrl);
     const mesh = this.normalizeModel(result.scene, targetHeight);
+    const isFBX = baseUrl.toLowerCase().endsWith('.fbx');
 
     mesh.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
+        // FBX materials need normalization — Phong materials look too shiny
+        // under PBR lighting, and Meshy FBX exports bake in metalness that
+        // doesn't match the non-PBR preview. GLB materials are left as-is.
+        if (isFBX) {
+          child.material = this.normalizeMaterials(child.material);
+        }
       }
     });
 
@@ -49,6 +56,48 @@ export class CharacterLoader {
     }
 
     return { mesh, clips };
+  }
+
+  /**
+   * Convert non-PBR materials to MeshStandardMaterial.
+   * FBX files typically import as MeshPhongMaterial which looks overly shiny
+   * under PBR lighting. This preserves the diffuse map/color and applies
+   * matte PBR defaults (high roughness, zero metalness).
+   */
+  private normalizeMaterials(
+    material: THREE.Material | THREE.Material[],
+  ): THREE.Material | THREE.Material[] {
+    if (Array.isArray(material)) {
+      return material.map((m) => this.convertMaterial(m));
+    }
+    return this.convertMaterial(material);
+  }
+
+  private convertMaterial(mat: THREE.Material): THREE.Material {
+    // Already PBR — strip metalness that FBX exports bake in
+    if (mat instanceof THREE.MeshStandardMaterial) {
+      mat.metalness = 0.0;
+      mat.roughness = Math.max(mat.roughness, 0.8);
+      mat.metalnessMap = null;
+      return mat;
+    }
+
+    // Convert Phong/Lambert to Standard with matte defaults
+    const src = mat as THREE.MeshPhongMaterial;
+    const std = new THREE.MeshStandardMaterial({
+      map: src.map ?? null,
+      color: src.color ?? new THREE.Color(0xffffff),
+      normalMap: src.normalMap ?? null,
+      transparent: src.transparent,
+      opacity: src.opacity,
+      side: src.side,
+      alphaTest: src.alphaTest,
+      roughness: 0.9,
+      metalness: 0.0,
+    });
+
+    src.dispose();
+    return std;
   }
 
   /** Normalize a model to a target height with feet at y=0, wrapped in a group. */

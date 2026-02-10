@@ -35,6 +35,9 @@ export interface NPCDatabaseEntry {
   dialogue?: string;
   behaviorTree?: import('../behavior').BTNode;
   behaviorMode?: import('../components').BehaviorMode;
+  model?: string;
+  modelHeight?: number;
+  animations?: Record<string, string>;
 }
 
 /**
@@ -422,13 +425,11 @@ export class SugarEngine {
         this.world.addComponent(entity, npcMovement);
       }
 
-      // Placeholder mesh (capsule like player but different color)
-      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
-      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.castShadow = true;
-      mesh.position.set(npcDef.position.x, npcDef.position.y + 0.7, npcDef.position.z);
-      mesh.name = `npc-${npcDef.id}`;
+      // Load model or fallback to purple capsule
+      const { mesh, clips } = await this.createNPCMesh(
+        npcDef.id, npcInfo,
+        npcDef.position.x, npcDef.position.y, npcDef.position.z,
+      );
       mesh.userData.npcId = npcDef.id;
       mesh.userData.entityId = entity;
       this.scene.add(mesh);
@@ -437,6 +438,18 @@ export class SugarEngine {
       this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
 
       this.world.addComponent(entity, new Renderable(mesh));
+
+      if (clips.size > 0) {
+        const animator = new Animator(mesh);
+        for (const [name, clip] of clips) {
+          animator.addClip(name, clip);
+        }
+        if (animator.hasClip('idle')) {
+          animator.play('idle', 0);
+        }
+        this.world.addComponent(entity, animator);
+      }
+
       this.npcEntities.push(entity);
     }
     // Create pickup entities from region data (skip already collected ones)
@@ -729,12 +742,9 @@ export class SugarEngine {
         this.world.addComponent(entity, npcMovement);
       }
 
-      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
-      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.castShadow = true;
-      mesh.position.set(worldX, worldY + 0.7, worldZ);
-      mesh.name = `npc-${npcDef.id}`;
+      const { mesh, clips } = await this.createNPCMesh(
+        npcDef.id, npcInfo, worldX, worldY, worldZ,
+      );
       mesh.userData.npcId = npcDef.id;
       mesh.userData.entityId = entity;
       mesh.userData.regionId = regionId;
@@ -742,6 +752,18 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
       this.world.addComponent(entity, new Renderable(mesh));
+
+      if (clips.size > 0) {
+        const animator = new Animator(mesh);
+        for (const [name, clip] of clips) {
+          animator.addClip(name, clip);
+        }
+        if (animator.hasClip('idle')) {
+          animator.play('idle', 0);
+        }
+        this.world.addComponent(entity, animator);
+      }
+
       state.npcEntities.push(entity);
     }
 
@@ -1179,6 +1201,58 @@ export class SugarEngine {
     }
 
     return entity;
+  }
+
+  /**
+   * Create an NPC mesh: loads a character model if configured, otherwise returns a purple capsule.
+   * Returns the mesh and any animation clips.
+   */
+  private async createNPCMesh(
+    npcId: string,
+    npcInfo: NPCDatabaseEntry | undefined,
+    x: number, y: number, z: number,
+  ): Promise<{ mesh: THREE.Object3D; clips: Map<string, THREE.AnimationClip> }> {
+    let mesh: THREE.Object3D;
+    let clips = new Map<string, THREE.AnimationClip>();
+
+    if (npcInfo?.model) {
+      try {
+        const baseUrl = import.meta.env.BASE_URL + npcInfo.model;
+        const animPaths = npcInfo.animations
+          ? Object.fromEntries(
+              Object.entries(npcInfo.animations).map(([k, v]) => [k, import.meta.env.BASE_URL + v])
+            )
+          : {};
+        const character = await this.characters.load(baseUrl, animPaths, npcInfo.modelHeight);
+        mesh = character.mesh;
+        clips = character.clips;
+        mesh.name = `npc-${npcId}`;
+        mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.name = `npc-${npcId}`;
+          }
+        });
+        mesh.position.set(x, y, z);
+        mesh.castShadow = true;
+      } catch {
+        // Fallback to capsule on load error
+        const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+        const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
+        mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.position.set(x, y + 0.7, z);
+        mesh.name = `npc-${npcId}`;
+      }
+    } else {
+      const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+      const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
+      mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.position.set(x, y + 0.7, z);
+      mesh.name = `npc-${npcId}`;
+    }
+
+    return { mesh, clips };
   }
 
   // Helper to spawn an entity with a loaded model
@@ -1775,8 +1849,8 @@ export class SugarEngine {
   /**
    * Register an NPC directly (for development mode)
    */
-  registerNPC(id: string, name: string, dialogue?: string, behaviorTree?: import('../behavior').BTNode, behaviorMode?: import('../components').BehaviorMode): void {
-    this.npcDatabase.set(id, { id, name, dialogue, behaviorTree, behaviorMode });
+  registerNPC(id: string, name: string, dialogue?: string, behaviorTree?: import('../behavior').BTNode, behaviorMode?: import('../components').BehaviorMode, model?: string, modelHeight?: number, animations?: Record<string, string>): void {
+    this.npcDatabase.set(id, { id, name, dialogue, behaviorTree, behaviorMode, model, modelHeight, animations });
   }
 
   /**

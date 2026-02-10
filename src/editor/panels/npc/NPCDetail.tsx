@@ -11,14 +11,18 @@ import {
   Button,
   Paper,
   TextInput,
+  NumberInput,
   Textarea,
   Select,
   Box,
   ScrollArea,
   Avatar,
 } from '@mantine/core';
+import { useEditorStore } from '../../store/useEditorStore';
 import { NPCEntry } from './NPCPanel';
 import { BehaviorTreeCanvas } from './BehaviorTreeCanvas';
+
+const ANIM_SLOTS = ['idle', 'walk', 'run', 'jump'] as const;
 
 interface NPCDetailProps {
   npc: NPCEntry;
@@ -30,6 +34,7 @@ interface NPCDetailProps {
 }
 
 export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDelete }: NPCDetailProps) {
+  const setDirty = useEditorStore((s) => s.setDirty);
   const [showBehaviorTree, setShowBehaviorTree] = useState(false);
 
   // Find dialogues where this NPC speaks
@@ -181,6 +186,67 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                     placeholder="/portraits/npc.png"
                     size="sm"
                   />
+                </Stack>
+              </Paper>
+
+              {/* Model & Animations Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="md">
+                  Model &amp; Animations
+                </Text>
+                <Stack gap="sm">
+                  <TextInput
+                    label="Model Path"
+                    value={npc.model || ''}
+                    onChange={(e) => {
+                      const val = e.currentTarget.value.trim();
+                      onChange({ ...npc, model: val.length > 0 ? val : undefined });
+                      setDirty(true);
+                    }}
+                    placeholder="models/npc-name.fbx"
+                    size="sm"
+                  />
+                  <NumberInput
+                    label="Height (meters)"
+                    value={npc.modelHeight ?? 1.5}
+                    onChange={(val) => {
+                      const num = typeof val === 'number' ? val : undefined;
+                      onChange({ ...npc, modelHeight: num && num !== 1.5 ? num : undefined });
+                      setDirty(true);
+                    }}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
+                    decimalScale={2}
+                    size="sm"
+                  />
+                  <Text size="xs" c="dimmed">
+                    Separate FBX/GLB files for each animation clip.
+                  </Text>
+                  {ANIM_SLOTS.map((slot) => (
+                    <TextInput
+                      key={slot}
+                      label={slot.charAt(0).toUpperCase() + slot.slice(1)}
+                      value={npc.animations?.[slot] || ''}
+                      onChange={(e) => {
+                        const val = e.currentTarget.value.trim();
+                        const next = { ...(npc.animations || {}) };
+                        if (val.length > 0) {
+                          next[slot] = val;
+                        } else {
+                          delete next[slot];
+                        }
+                        onChange({ ...npc, animations: Object.keys(next).length > 0 ? next : undefined });
+                        setDirty(true);
+                      }}
+                      placeholder={`models/npc-${slot}.fbx`}
+                      size="sm"
+                    />
+                  ))}
                 </Stack>
               </Paper>
 

@@ -24,6 +24,9 @@ export interface NPCData {
   faction?: string;
   behaviorTree?: import('../../engine/behavior/types').BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
+  model?: string;
+  modelHeight?: number;
+  animations?: Record<string, string>;
 }
 
 export interface DialogueData {

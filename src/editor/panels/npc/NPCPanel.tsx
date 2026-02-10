@@ -27,6 +27,9 @@ export interface NPCEntry {
   faction?: string;
   behaviorTree?: BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
+  model?: string;
+  modelHeight?: number;
+  animations?: Record<string, string>;
 }
 
 export interface NPCPanelResult {
