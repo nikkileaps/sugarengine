@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { System, World } from '../ecs';
-import { Position, Velocity, PlayerControlled, Inspectable } from '../components';
+import { Position, Velocity, PlayerControlled, Inspectable, ItemPickup } from '../components';
 import { InputManager } from '../core/InputManager';
 
 export class MovementSystem extends System {
@@ -93,8 +93,9 @@ export class MovementSystem extends System {
           }
         }
 
-        // Circle collision against inspectable models
+        // Circle collision against inspectable and pickup models
         this.resolveInspectableCollision(world, position);
+        this.resolvePickupCollision(world, position);
 
         position.y += velocity.y * delta;
       } else {
@@ -153,6 +154,28 @@ export class MovementSystem extends System {
 
       if (dist < minDist && dist > 0.001) {
         // Push the player out along the separation vector
+        const overlap = minDist - dist;
+        const nx = dx / dist;
+        const nz = dz / dist;
+        playerPos.x += nx * overlap;
+        playerPos.z += nz * overlap;
+      }
+    }
+  }
+
+  private resolvePickupCollision(world: World, playerPos: Position): void {
+    const playerRadius = 0.3;
+    const pickups = world.query<[ItemPickup, Position]>(ItemPickup, Position);
+
+    for (const { components: [pickup, objPos] } of pickups) {
+      if (pickup.collisionRadius <= 0 || pickup.collected) continue;
+
+      const dx = playerPos.x - objPos.x;
+      const dz = playerPos.z - objPos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      const minDist = playerRadius + pickup.collisionRadius;
+
+      if (dist < minDist && dist > 0.001) {
         const overlap = minDist - dist;
         const nx = dx / dist;
         const nz = dz / dist;

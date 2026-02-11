@@ -209,8 +209,8 @@ export class Game {
       dialogues?: { id: string }[];
       quests?: { id: string }[];
       npcs?: { id: string; name: string; defaultDialogue?: string; behaviorTree?: import('../behavior').BTNode; behaviorMode?: import('../components').BehaviorMode; model?: string; modelHeight?: number; animations?: Record<string, string> }[];
-      items?: { id: string; name: string }[];
-      inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[]; model?: string; modelScale?: number }[];
+      items?: { id: string; name: string; model?: string; modelScale?: number; modelColor?: string }[];
+      inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[]; model?: string; modelScale?: number; modelColor?: string }[];
       regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; resonancePoints?: { id: string; resonancePointId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; vfxSpawns?: { id: string; vfxId: string; position: { x: number; y: number; z: number }; scale?: number; autoPlay?: boolean }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
       playerCaster?: unknown;
       playerModel?: string;
@@ -272,6 +272,10 @@ export class Game {
     if (project.items) {
       for (const item of project.items) {
         this.inventory.registerItem(item);
+        if (item.model) {
+          const color = item.modelColor ? parseInt(item.modelColor.replace('#', ''), 16) : undefined;
+          this.engine.registerItemModel(item.id, item.model, item.modelScale, color);
+        }
       }
     }
 
@@ -280,7 +284,8 @@ export class Game {
       for (const insp of project.inspections) {
         this.inspection.registerInspection(insp.id, insp);
         if (insp.model) {
-          this.engine.registerInspectionModel(insp.id, insp.model, insp.modelScale);
+          const color = insp.modelColor ? parseInt(insp.modelColor.replace('#', ''), 16) : undefined;
+          this.engine.registerInspectionModel(insp.id, insp.model, insp.modelScale, color);
         }
       }
     }

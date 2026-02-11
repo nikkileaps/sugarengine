@@ -30,6 +30,7 @@ export interface InspectionEntry {
   sections?: InspectionSection[];
   model?: string;
   modelScale?: number;
+  modelColor?: string;
 }
 
 export interface InspectionPanelResult {

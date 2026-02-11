@@ -55,6 +55,9 @@ export interface ItemData {
   stackable: boolean;
   maxStack?: number;
   giftable: boolean;
+  model?: string;
+  modelScale?: number;
+  modelColor?: string;
 }
 
 export interface InspectionData {
@@ -66,6 +69,7 @@ export interface InspectionData {
   sections?: { heading?: string; text: string }[];
   model?: string;
   modelScale?: number;
+  modelColor?: string;
 }
 
 export interface ResonancePointData {

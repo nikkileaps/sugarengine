@@ -581,7 +581,7 @@ export function Editor() {
                                   padding={0}
                                   styles={{
                                     root: { background: '#1e1e2e' },
-                                    main: { background: '#1e1e2e' },
+                                    main: { background: '#1e1e2e', height: '100vh', overflow: 'hidden' },
                                     header: { background: '#181825', borderBottom: '1px solid #313244' },
                                     navbar: { background: '#1e1e2e', borderRight: '1px solid #313244' },
                                     aside: { background: '#1e1e2e', borderLeft: '1px solid #313244' },

@@ -55,6 +55,8 @@ export type {
 export { ModelLoader } from './loaders/ModelLoader';
 export { CharacterLoader } from './loaders/CharacterLoader';
 export type { CharacterModel } from './loaders/CharacterLoader';
+export { PropLoader } from './loaders/PropLoader';
+export type { PropModel } from './loaders/PropLoader';
 export { RegionLoader } from './loaders/RegionLoader';
 export type { RegionData, LoadedRegion, RegionStreamingConfig, GridPosition, Vec3 } from './loaders/RegionLoader';
 

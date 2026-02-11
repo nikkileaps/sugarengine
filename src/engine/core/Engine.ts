@@ -3,7 +3,7 @@ import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, NPCBehavior, ItemPickup, NPCMovement, Waypoint, Inspectable, ResonancePoint, WorldLabel, SurfacePatchLOD } from '../components';
 import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem, BehaviorTreeSystem, BTConditionChecker, BTActionHandler, AnimationSystem } from '../systems';
 import { Animator } from '../components/Animator';
-import { ModelLoader, CharacterLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
+import { ModelLoader, CharacterLoader, PropLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
@@ -97,7 +97,8 @@ export class SugarEngine {
   private cameraFollowsPlayer: boolean = true;
   private cameraUpdateEnabled: boolean = true;
   private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
-  private inspectionModelDatabase: Map<string, { model: string; modelScale?: number }> = new Map();
+  private inspectionModelDatabase: Map<string, { model: string; modelScale?: number; modelColor?: number }> = new Map();
+  private itemModelDatabase: Map<string, { model: string; modelScale?: number; modelColor?: number }> = new Map();
   private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
   private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
   private worldLabelSystem: WorldLabelSystem;
@@ -110,6 +111,7 @@ export class SugarEngine {
   readonly world: World;
   readonly models: ModelLoader;
   readonly characters: CharacterLoader;
+  readonly props: PropLoader;
   readonly regions: RegionLoader;
 
   constructor(config: EngineConfig) {
@@ -143,6 +145,7 @@ export class SugarEngine {
     // Loaders
     this.models = new ModelLoader();
     this.characters = new CharacterLoader(this.models);
+    this.props = new PropLoader(this.models);
     this.regions = new RegionLoader(this.models);
 
     // ECS World
@@ -500,6 +503,17 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       this.pickupEntities.push(entity);
+
+      // Fire-and-forget: upgrade placeholder to loaded model in the background
+      const itemModelInfo = this.itemModelDatabase.get(pickupDef.itemId);
+      if (itemModelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradePickupModel(
+            entity, pickupDef.id, pickupDef.itemId, itemModelInfo,
+            pickupDef.position.x, pickupDef.position.y, pickupDef.position.z,
+          ),
+        );
+      }
     }
 
     // Create inspectable entities from region data
@@ -812,6 +826,15 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       state.pickupEntities.push(entity);
+
+      const itemModelInfo = this.itemModelDatabase.get(pickupDef.itemId);
+      if (itemModelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradePickupModel(
+            entity, pickupDef.id, pickupDef.itemId, itemModelInfo, worldX, worldY, worldZ,
+          ),
+        );
+      }
     }
 
     // Create inspectable entities (offset by world position)
@@ -1304,13 +1327,13 @@ export class SugarEngine {
    */
   private async upgradeInspectableModel(
     entity: number, id: string,
-    modelInfo: { model: string; modelScale?: number },
+    modelInfo: { model: string; modelScale?: number; modelColor?: number },
     x: number, y: number, z: number,
   ): Promise<void> {
     try {
       const url = import.meta.env.BASE_URL + modelInfo.model;
-      const character = await this.characters.load(url, {}, undefined);
-      const newMesh = character.mesh;
+      const prop = await this.props.load(url, {}, 1.5, modelInfo.modelColor);
+      const newMesh = prop.mesh;
       const scale = modelInfo.modelScale ?? 1;
       if (scale !== 1) newMesh.scale.multiplyScalar(scale);
       newMesh.position.set(x, y, z);
@@ -1335,6 +1358,48 @@ export class SugarEngine {
       }
     } catch (e) {
       console.warn(`[Engine] Failed to load inspectable model for ${id}, keeping placeholder`, e);
+    }
+  }
+
+  /**
+   * Background model upgrade for pickups. Loads the model and swaps
+   * the placeholder sphere. Never blocks loadRegion.
+   */
+  private async upgradePickupModel(
+    entity: number, pickupId: string, itemId: string,
+    modelInfo: { model: string; modelScale?: number; modelColor?: number },
+    x: number, y: number, z: number,
+  ): Promise<void> {
+    try {
+      const url = import.meta.env.BASE_URL + modelInfo.model;
+      const prop = await this.props.load(url, {}, 1.5, modelInfo.modelColor);
+      const newMesh = prop.mesh;
+      const scale = modelInfo.modelScale ?? 1;
+      if (scale !== 1) newMesh.scale.multiplyScalar(scale);
+      newMesh.position.set(x, y, z);
+      newMesh.name = `pickup-${pickupId}`;
+      newMesh.userData.pickupId = pickupId;
+      newMesh.userData.entityId = entity;
+
+      // Compute XZ collision radius from bounding box
+      const box = new THREE.Box3().setFromObject(newMesh);
+      const size = box.getSize(new THREE.Vector3());
+      const xzRadius = Math.max(size.x, size.z) / 2;
+
+      const renderable = this.world.getComponent<Renderable>(entity, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+        this.scene.add(newMesh);
+        renderable.mesh = newMesh;
+      }
+
+      // Set collision radius on pickup component
+      const pickup = this.world.getComponent<ItemPickup>(entity, ItemPickup);
+      if (pickup) {
+        pickup.collisionRadius = xzRadius;
+      }
+    } catch (e) {
+      console.warn(`[Engine] Failed to load pickup model for ${pickupId} (item: ${itemId}), keeping placeholder`, e);
     }
   }
 
@@ -1659,9 +1724,10 @@ export class SugarEngine {
 
       const dx = pos.x - playerPos.x;
       const dz = pos.z - playerPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const centerDist = Math.sqrt(dx * dx + dz * dz);
+      const edgeDist = centerDist - pickup.collisionRadius;
 
-      if (dist < pickupRange) {
+      if (edgeDist < pickupRange) {
         return {
           id: pickup.id,
           itemId: pickup.itemId,
@@ -1693,9 +1759,10 @@ export class SugarEngine {
 
       const dx = pos.x - playerPos.x;
       const dz = pos.z - playerPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const centerDist = Math.sqrt(dx * dx + dz * dz);
+      const edgeDist = centerDist - pickup.collisionRadius;
 
-      if (dist < pickupRange) {
+      if (edgeDist < pickupRange) {
         // Remove entity from world FIRST (prevents RenderSystem from re-adding)
         this.world.removeEntity(entityId);
         const idx = this.pickupEntities.indexOf(entityId);
@@ -1939,8 +2006,12 @@ export class SugarEngine {
   /**
    * Register model info for an inspection (for development mode)
    */
-  registerInspectionModel(inspectionId: string, model: string, modelScale?: number): void {
-    this.inspectionModelDatabase.set(inspectionId, { model, modelScale });
+  registerInspectionModel(inspectionId: string, model: string, modelScale?: number, modelColor?: number): void {
+    this.inspectionModelDatabase.set(inspectionId, { model, modelScale, modelColor });
+  }
+
+  registerItemModel(itemId: string, model: string, modelScale?: number, modelColor?: number): void {
+    this.itemModelDatabase.set(itemId, { model, modelScale, modelColor });
   }
 
   /**

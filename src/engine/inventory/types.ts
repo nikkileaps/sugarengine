@@ -15,6 +15,9 @@ export interface ItemDefinition {
   stackable: boolean;
   maxStack?: number;       // Max stack size (default 99 if stackable)
   giftable: boolean;       // Can be given to NPCs
+  model?: string;          // Optional 3D model path (FBX/GLB)
+  modelScale?: number;     // Scale multiplier for the model (default 1)
+  modelColor?: number;     // Optional solid color override (hex, e.g. 0x8899aa)
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   Switch,
   NumberInput,
   ScrollArea,
+  ColorInput,
 } from '@mantine/core';
 import { ItemEntry } from './ItemPanel';
 import { useEditorStore } from '../../store';
@@ -284,6 +285,55 @@ export function ItemDetail({ item, quests, onChange, onDelete, onDuplicate }: It
                     checked={item.giftable}
                     onChange={(e) => handleChange('giftable', e.currentTarget.checked)}
                   />
+                </Stack>
+              </Paper>
+
+              {/* 3D Model Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="sm">
+                  3D Model
+                </Text>
+                <Stack gap="sm">
+                  <TextInput
+                    label="Model Path (optional)"
+                    value={item.model || ''}
+                    onChange={(e) => {
+                      const val = e.currentTarget.value.trim();
+                      handleChange('model', val.length > 0 ? val : undefined);
+                    }}
+                    placeholder="models/scroll.fbx"
+                    size="sm"
+                  />
+                  {item.model && (
+                    <>
+                      <NumberInput
+                        label="Model Scale"
+                        value={item.modelScale ?? 1}
+                        onChange={(val) => {
+                          const num = typeof val === 'number' ? val : undefined;
+                          handleChange('modelScale', num && num !== 1 ? num : undefined);
+                        }}
+                        min={0.01}
+                        max={100}
+                        step={0.1}
+                        decimalScale={2}
+                        size="sm"
+                      />
+                      <ColorInput
+                        label="Model Color (optional)"
+                        value={item.modelColor || ''}
+                        onChange={(val) => {
+                          handleChange('modelColor', val.length > 0 ? val : undefined);
+                        }}
+                        placeholder="No override"
+                        size="sm"
+                      />
+                    </>
+                  )}
                 </Stack>
               </Paper>
             </Stack>

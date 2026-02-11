@@ -1,23 +1,24 @@
 import * as THREE from 'three';
 import { ModelLoader } from './ModelLoader';
 
-export interface CharacterModel {
+export interface PropModel {
   mesh: THREE.Group;
   clips: Map<string, THREE.AnimationClip>;
 }
 
 /**
- * Loads a character model with normalized scale, shadow casting,
- * and named animation clips assembled from multiple files.
+ * Loads a prop model. Currently identical to CharacterLoader —
+ * will be teased apart over time for prop-specific handling.
  */
-export class CharacterLoader {
+export class PropLoader {
   constructor(private models: ModelLoader) {}
 
   async load(
     baseUrl: string,
     animationPaths: Record<string, string> = {},
     targetHeight: number = 1.5,
-  ): Promise<CharacterModel> {
+    colorOverride?: number,
+  ): Promise<PropModel> {
     const result = await this.models.loadAnimatedModel(baseUrl);
     const mesh = this.normalizeModel(result.scene, targetHeight);
     const isFBX = baseUrl.toLowerCase().endsWith('.fbx');
@@ -27,6 +28,9 @@ export class CharacterLoader {
         child.castShadow = true;
         if (isFBX) {
           child.material = this.normalizeMaterials(child.material);
+        }
+        if (colorOverride !== undefined) {
+          this.applyColorOverride(child.material, colorOverride);
         }
       }
     });
@@ -45,14 +49,28 @@ export class CharacterLoader {
         const firstClip = animResult.clips[0];
         if (firstClip) {
           clips.set(name, firstClip);
-          console.log(`[CharacterLoader] Loaded animation "${name}" from ${path}`);
+          console.log(`[PropLoader] Loaded animation "${name}" from ${path}`);
         }
       } catch (e) {
-        console.warn(`[CharacterLoader] Failed to load animation "${name}" from ${path}`, e);
+        console.warn(`[PropLoader] Failed to load animation "${name}" from ${path}`, e);
       }
     }
 
     return { mesh, clips };
+  }
+
+  private applyColorOverride(
+    material: THREE.Material | THREE.Material[],
+    color: number,
+  ): void {
+    const mats = Array.isArray(material) ? material : [material];
+    for (const mat of mats) {
+      if (mat instanceof THREE.MeshStandardMaterial) {
+        mat.color.set(color);
+        mat.map = null;
+        mat.needsUpdate = true;
+      }
+    }
   }
 
   /**
@@ -115,7 +133,7 @@ export class CharacterLoader {
 
     const wrapper = new THREE.Group();
     wrapper.add(model);
-    console.log(`[CharacterLoader] Normalized: height ${size.y.toFixed(1)} → ${targetHeight}`);
+    console.log(`[PropLoader] Normalized: height ${size.y.toFixed(1)} → ${targetHeight}`);
     return wrapper;
   }
 }

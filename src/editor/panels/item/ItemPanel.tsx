@@ -27,6 +27,9 @@ export interface ItemEntry {
   stackable: boolean;
   maxStack?: number;
   giftable: boolean;
+  model?: string;
+  modelScale?: number;
+  modelColor?: string;
 }
 
 export interface ItemPanelResult {

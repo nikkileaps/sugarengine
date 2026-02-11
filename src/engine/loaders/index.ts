@@ -2,6 +2,8 @@ export { ModelLoader } from './ModelLoader';
 export type { AnimatedModel } from './ModelLoader';
 export { CharacterLoader } from './CharacterLoader';
 export type { CharacterModel } from './CharacterLoader';
+export { PropLoader } from './PropLoader';
+export type { PropModel } from './PropLoader';
 export { RegionLoader } from './RegionLoader';
 export type {
   RegionData,
