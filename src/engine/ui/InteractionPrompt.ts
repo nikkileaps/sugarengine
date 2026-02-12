@@ -84,12 +84,8 @@ export class InteractionPrompt {
     document.head.appendChild(style);
   }
 
-  show(npcName?: string): void {
-    if (npcName) {
-      this.textEl.textContent = ` to talk to ${npcName}`;
-    } else {
-      this.textEl.textContent = ' to talk';
-    }
+  show(actionText?: string): void {
+    this.textEl.textContent = ` ${actionText || 'Interact'}`;
 
     // Reset animation
     this.element.style.animation = 'none';
