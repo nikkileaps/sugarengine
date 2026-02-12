@@ -207,6 +207,15 @@ export class InventoryManager {
       stackable: (item.stackable as boolean) ?? true,
       giftable: (item.giftable as boolean) ?? false,
     };
+
+    // Pass through optional fields
+    if (item.icon) itemDef.icon = item.icon as string;
+    if (item.maxStack != null) itemDef.maxStack = item.maxStack as number;
+    if (item.model) itemDef.model = item.model as string;
+    if (item.modelScale != null) itemDef.modelScale = item.modelScale as number;
+    if (item.modelColor != null) itemDef.modelColor = item.modelColor as number;
+    if (item.view) itemDef.view = item.view as ItemDefinition['view'];
+
     this.loader.registerItem(itemDef);
   }
 }

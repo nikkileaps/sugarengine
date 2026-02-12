@@ -4,6 +4,14 @@
 export type ItemCategory = 'quest' | 'gift' | 'key' | 'misc';
 
 /**
+ * Item view type — determines what happens when the player clicks the item in inventory
+ */
+export type ItemView =
+  | { type: 'readable'; content?: string; sections?: { heading?: string; text: string }[] }
+  | { type: 'examine' }
+  | { type: 'consumable'; action: string };
+
+/**
  * Item definition (loaded from items.json)
  */
 export interface ItemDefinition {
@@ -18,6 +26,7 @@ export interface ItemDefinition {
   model?: string;          // Optional 3D model path (FBX/GLB)
   modelScale?: number;     // Scale multiplier for the model (default 1)
   modelColor?: number;     // Optional solid color override (hex, e.g. 0x8899aa)
+  view?: ItemView;         // Click interaction in inventory (readable, examine, consumable)
 }
 
 /**

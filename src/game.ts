@@ -13,6 +13,7 @@ import {
   ItemNotification,
   InventoryUI,
   GiftUI,
+  ItemViewUI,
   SpellMenuUI,
   CasterHUD,
 } from './engine';
@@ -89,6 +90,7 @@ async function runGame(gameData: GameData) {
   const itemNotification = new ItemNotification(container);
   const inventoryUI = new InventoryUI(container, game.inventory);
   const giftUI = new GiftUI(container, game.inventory);
+  const itemViewUI = new ItemViewUI(container);
   const spellMenuUI = new SpellMenuUI(container, game.caster);
   // CasterHUD auto-registers event handlers and manages its own visibility
   new CasterHUD(container, game.caster);
@@ -122,6 +124,21 @@ async function runGame(gameData: GameData) {
     game.giveItemToNpc(npcId, itemId);
   });
 
+  // Item view handler (click item in inventory)
+  inventoryUI.onItemClick = (itemId) => {
+    const itemDef = game.inventory.getItemDefinition(itemId);
+    if (!itemDef?.view) return;
+
+    const onUse = itemDef.view.type === 'consumable' ? () => {
+      game.inventory.removeItem(itemId, 1);
+      itemNotification.show(itemDef.name, -1);
+      itemViewUI.hide();
+      inventoryUI.refresh();
+    } : undefined;
+
+    itemViewUI.show(itemDef, onUse);
+  };
+
   // ========================================
   // UI State Management
   // ========================================
@@ -133,7 +150,10 @@ async function runGame(gameData: GameData) {
   let escapeWasPressed = false;
 
   questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
-  inventoryUI.setOnClose(() => game.engine.removeMovementLock('inventory'));
+  inventoryUI.setOnClose(() => {
+    itemViewUI.hide();
+    game.engine.removeMovementLock('inventory');
+  });
   giftUI.setOnClose(() => game.engine.removeMovementLock('gift'));
   spellMenuUI.setOnClose(() => game.engine.removeMovementLock('spellMenu'));
 
@@ -141,6 +161,7 @@ async function runGame(gameData: GameData) {
     game.isUIBlocking() ||
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
+    itemViewUI.isVisible() ||
     giftUI.isVisible() ||
     spellMenuUI.isVisible();
 

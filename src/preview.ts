@@ -14,6 +14,7 @@ import {
   ItemNotification,
   InventoryUI,
   GiftUI,
+  ItemViewUI,
   DebugHUD,
   SpellMenuUI,
   CasterHUD,
@@ -116,6 +117,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   const itemNotification = new ItemNotification(container);
   const inventoryUI = new InventoryUI(container, game.inventory);
   const giftUI = new GiftUI(container, game.inventory);
+  const itemViewUI = new ItemViewUI(container);
   const spellMenuUI = new SpellMenuUI(container, game.caster);
   // CasterHUD auto-shows when caster exists
   new CasterHUD(container, game.caster);
@@ -171,6 +173,21 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     game.giveItemToNpc(npcId, itemId);
   });
 
+  // Item view handler (click item in inventory)
+  inventoryUI.onItemClick = (itemId) => {
+    const itemDef = game.inventory.getItemDefinition(itemId);
+    if (!itemDef?.view) return;
+
+    const onUse = itemDef.view.type === 'consumable' ? () => {
+      game.inventory.removeItem(itemId, 1);
+      itemNotification.show(itemDef.name, -1);
+      itemViewUI.hide();
+      inventoryUI.refresh();
+    } : undefined;
+
+    itemViewUI.show(itemDef, onUse);
+  };
+
   // Resonance game handler
   game.setResonanceGameHandler((config) => {
     resonanceGameUI.start(config);
@@ -193,7 +210,10 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   // Remove movement locks when UIs close
   questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
-  inventoryUI.setOnClose(() => game.engine.removeMovementLock('inventory'));
+  inventoryUI.setOnClose(() => {
+    itemViewUI.hide();
+    game.engine.removeMovementLock('inventory');
+  });
   giftUI.setOnClose(() => game.engine.removeMovementLock('gift'));
   spellMenuUI.setOnClose(() => game.engine.removeMovementLock('spellMenu'));
 
@@ -202,6 +222,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     game.isUIBlocking() ||
     questJournal.isVisible() ||
     inventoryUI.isVisible() ||
+    itemViewUI.isVisible() ||
     giftUI.isVisible() ||
     spellMenuUI.isVisible() ||
     resonanceGameUI.isActive();

@@ -123,6 +123,7 @@ export {
   InventoryUI,
   ItemNotification,
   InspectionUI,
+  ItemViewUI,
   GiftUI,
   DebugHUD,
   SpellMenuUI,

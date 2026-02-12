@@ -30,6 +30,7 @@ export interface ItemEntry {
   model?: string;
   modelScale?: number;
   modelColor?: string;
+  view?: import('../../../engine/inventory/types').ItemView;
 }
 
 export interface ItemPanelResult {

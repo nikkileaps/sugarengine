@@ -653,7 +653,7 @@ export class SugarEngine {
       const pos = this.world.getComponent<Position>(this.playerEntity, Position);
       if (pos) {
         pos.x = spawn.x;
-        pos.y = spawn.y + 0.75; // Offset for player height
+        pos.y = spawn.y;
         pos.z = spawn.z;
       }
     }
@@ -1044,7 +1044,7 @@ export class SugarEngine {
       const pos = this.world.getComponent<Position>(this.playerEntity, Position);
       if (pos) {
         pos.x = worldPos.x;
-        pos.y = worldPos.y + 0.75;
+        pos.y = worldPos.y;
         pos.z = worldPos.z;
       }
     }
@@ -1197,7 +1197,7 @@ export class SugarEngine {
   private async createPlayer(x: number = 0, y: number = 0, z: number = 0): Promise<number> {
     const entity = this.world.createEntity();
 
-    this.world.addComponent(entity, new Position(x, y + 0.75, z));
+    this.world.addComponent(entity, new Position(x, y, z));
     this.world.addComponent(entity, new Velocity());
     this.world.addComponent(entity, new PlayerControlled(5));
 
@@ -1221,6 +1221,7 @@ export class SugarEngine {
       });
     } catch {
       const geometry = new THREE.BoxGeometry(1, 1.5, 1);
+      geometry.translate(0, 0.75, 0); // Bottom at y=0 to match CharacterLoader convention
       const material = new THREE.MeshStandardMaterial({ color: 0xe07a5f });
       mesh = new THREE.Mesh(geometry, material);
       mesh.name = 'player';

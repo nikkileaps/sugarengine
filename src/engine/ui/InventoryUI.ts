@@ -10,6 +10,7 @@ export class InventoryUI {
   private tooltip: HTMLDivElement;
   private inventory: InventoryManager;
   private onClose: (() => void) | null = null;
+  onItemClick: ((itemId: string) => void) | null = null;
 
   private readonly GRID_COLS = 6;
   private readonly GRID_ROWS = 4;
@@ -297,6 +298,14 @@ export class InventoryUI {
       qty.className = 'inventory-slot-quantity';
       qty.textContent = String(item.quantity);
       slot.appendChild(qty);
+    }
+
+    // Click handler for items with a view
+    if (itemDef.view && this.onItemClick) {
+      slot.style.cursor = 'pointer';
+      slot.addEventListener('click', () => {
+        this.onItemClick?.(item.itemId);
+      });
     }
 
     // Tooltip events

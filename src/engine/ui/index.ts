@@ -8,6 +8,7 @@ export { ItemNotification } from './ItemNotification';
 export { InventoryUI } from './InventoryUI';
 export { GiftUI } from './GiftUI';
 export { InspectionUI } from './InspectionUI';
+export { ItemViewUI } from './ItemViewUI';
 export { DebugHUD } from './DebugHUD';
 export { SpellMenuUI } from './SpellMenuUI';
 export { CasterHUD } from './CasterHUD';

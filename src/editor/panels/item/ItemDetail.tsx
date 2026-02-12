@@ -19,6 +19,7 @@ import {
   ScrollArea,
   ColorInput,
 } from '@mantine/core';
+import type { ItemView } from '../../../engine/inventory/types';
 import { ItemEntry } from './ItemPanel';
 import { useEditorStore } from '../../store';
 
@@ -285,6 +286,72 @@ export function ItemDetail({ item, quests, onChange, onDelete, onDuplicate }: It
                     checked={item.giftable}
                     onChange={(e) => handleChange('giftable', e.currentTarget.checked)}
                   />
+                </Stack>
+              </Paper>
+
+              {/* Interaction Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="md">
+                  Interaction
+                </Text>
+                <Stack gap="sm">
+                  <Select
+                    label="View Type"
+                    description="What happens when the player clicks this item in inventory"
+                    data={[
+                      { value: 'none', label: 'None (tooltip only)' },
+                      { value: 'readable', label: 'Readable' },
+                      { value: 'examine', label: 'Examine' },
+                      { value: 'consumable', label: 'Consumable' },
+                    ]}
+                    value={item.view?.type ?? 'none'}
+                    onChange={(value) => {
+                      let view: ItemView | undefined;
+                      switch (value) {
+                        case 'readable':
+                          view = { type: 'readable', content: '' };
+                          break;
+                        case 'examine':
+                          view = { type: 'examine' };
+                          break;
+                        case 'consumable':
+                          view = { type: 'consumable', action: 'Use' };
+                          break;
+                        default:
+                          view = undefined;
+                      }
+                      handleChange('view', view);
+                    }}
+                    size="sm"
+                  />
+                  {item.view?.type === 'readable' && (
+                    <Textarea
+                      label="Content"
+                      value={item.view.content ?? ''}
+                      onChange={(e) => {
+                        handleChange('view', { ...item.view!, content: e.currentTarget.value } as ItemView);
+                      }}
+                      placeholder="Text the player will read..."
+                      minRows={4}
+                      autosize
+                      size="sm"
+                    />
+                  )}
+                  {item.view?.type === 'consumable' && (
+                    <TextInput
+                      label="Action Label"
+                      value={item.view.action}
+                      onChange={(e) => {
+                        handleChange('view', { ...item.view!, action: e.currentTarget.value } as ItemView);
+                      }}
+                      placeholder="Drink, Use, Eat..."
+                      size="sm"
+                    />
+                  )}
                 </Stack>
               </Paper>
 
