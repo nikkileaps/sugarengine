@@ -1,4 +1,4 @@
-import { InventoryManager, InventorySlot, ItemDefinition } from '../inventory';
+import { InventoryManager, InventorySlot, ItemDefinition } from '../../inventory';
 
 /**
  * Grid-based inventory bag overlay
@@ -324,10 +324,10 @@ export class InventoryUI {
 
   private getCategoryIcon(category: string): string {
     switch (category) {
-      case 'quest': return '📜';
-      case 'gift': return '🎁';
-      case 'key': return '🔑';
-      default: return '✦';
+      case 'quest': return '\uD83D\uDCDC';
+      case 'gift': return '\uD83C\uDF81';
+      case 'key': return '\uD83D\uDD11';
+      default: return '\u2726';
     }
   }
 
