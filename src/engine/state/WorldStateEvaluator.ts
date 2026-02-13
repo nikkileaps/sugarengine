@@ -69,9 +69,6 @@ export class WorldStateEvaluator {
 
       case 'canCastSpell': {
         const result = this.caster.canCastSpell(condition.spellId);
-        if (!result.canCast) {
-          console.log(`[WorldStateEvaluator] canCastSpell("${condition.spellId}") → false, reason: ${result.reason}`);
-        }
         return result.canCast;
       }
 

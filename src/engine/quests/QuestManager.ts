@@ -303,7 +303,6 @@ export class QuestManager {
     if (!actions || actions.length === 0) return;
 
     for (const action of actions) {
-      console.log(`[QuestManager] executeAction: ${action.type}, target=${action.target}, npcId=${action.npcId}, value=${JSON.stringify(action.value)}, position=${JSON.stringify(action.position)}, handler=${!!this.onBeatAction}`);
       if (this.onBeatAction) {
         this.onBeatAction(action);
       } else {
@@ -444,10 +443,7 @@ export class QuestManager {
       });
       const allPrereqsMet = prereqStatus.every(p => p.completed);
 
-      console.log(`[QuestManager] cascade check "${obj.description}" (${obj.id}): prereqs=${JSON.stringify(prereqStatus)}, allMet=${allPrereqsMet}`);
-
       if (allPrereqsMet) {
-        console.log(`[QuestManager]   → activating node "${obj.description}"`);
         this.activateNode(questId, obj);
       }
     }
@@ -578,15 +574,10 @@ export class QuestManager {
   private activateNode(questId: string, obj: QuestObjective): void {
     const nodeType: BeatNodeType = obj.nodeType ?? 'objective';
 
-    console.log(`[QuestManager] activateNode: "${obj.description}" (${obj.id}) type=${nodeType}, onEnter=${obj.onEnter?.length ?? 0} actions, autoStart=${obj.autoStart}`);
-
     // Mark as active
     this.activateObjectiveTracking(questId, obj.id);
 
     // Fire onEnter actions (before the node runs)
-    if (obj.onEnter?.length) {
-      console.log(`[QuestManager]   → firing onEnter actions:`, obj.onEnter.map(a => `${a.type}(${a.target || a.npcId || ''})`));
-    }
     this.executeActions(obj.onEnter);
 
     switch (nodeType) {
@@ -642,15 +633,11 @@ export class QuestManager {
    * Gates just wait — no fail path. Use conditional dialogue (ADR-019) for hints.
    */
   private activateConditionNode(questId: string, obj: QuestObjective): void {
-    console.log(`[QuestManager] activateConditionNode: "${obj.description}" (${obj.id}), operator=${obj.condition?.operator}, operand=${obj.condition?.operand}`);
     // Check immediately - condition might already be satisfied
     if (obj.condition && this.checkCondition(obj.condition)) {
-      console.log(`[QuestManager]   → condition already true, completing immediately`);
       this.completeObjective(questId, obj.id);
       return;
     }
-
-    console.log(`[QuestManager]   → condition false, registering for re-evaluation`);
     // Register for continuous evaluation
     let condSet = this.pendingConditions.get(questId);
     if (!condSet) {
@@ -741,7 +728,6 @@ export class QuestManager {
         if (!obj || obj.completed) continue;
 
         const result = obj.condition ? this.checkCondition(obj.condition) : false;
-        console.log(`[QuestManager] evaluateConditions: "${obj.description}" (${nodeId}) operator=${obj.condition?.operator} operand=${obj.condition?.operand} → ${result}`);
         if (result) {
           completions.push({ questId, nodeId });
         }
@@ -750,7 +736,6 @@ export class QuestManager {
 
     // Process completions
     for (const { questId, nodeId } of completions) {
-      console.log(`[QuestManager] evaluateConditions: completing gate "${nodeId}"`);
       this.completeObjective(questId, nodeId);
     }
   }

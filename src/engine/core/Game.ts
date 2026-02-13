@@ -683,7 +683,6 @@ export class Game {
 
       if (questDialogue) {
         // Use quest-specific dialogue
-        console.log(`[Game] Interact ${npcId}: quest dialogue intercepted (quest=${questDialogue.questId}, obj=${questDialogue.objectiveId})`);
         this.activeQuestDialogue = {
           questId: questDialogue.questId,
           objectiveId: questDialogue.objectiveId,
@@ -695,14 +694,12 @@ export class Game {
 
       // 2. Evaluate behavior tree (ADR-017)
       const btAction = this.engine.evaluateNPCBehavior(npcId);
-      console.log(`[Game] Interact ${npcId}: BT result =`, btAction);
       if (btAction) {
         this.executeBTAction(btAction, npcId);
         return;
       }
 
       // 3. Fallback to default dialogue + trigger generic talk objectives
-      console.log(`[Game] Interact ${npcId}: fallback (defaultDialogue=${npcDefaultDialogue || 'none'})`);
       this.quests.triggerObjective('talk', npcId);
 
       if (npcDefaultDialogue) {

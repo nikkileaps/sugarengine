@@ -4,10 +4,30 @@
 export type ItemCategory = 'quest' | 'gift' | 'key' | 'misc';
 
 /**
+ * Readable layout — controls presentation of readable items
+ */
+export type ReadableLayout = 'book' | 'newspaper' | 'letter' | 'postcard' | 'flyer';
+
+/**
  * Item view type — determines what happens when the player clicks the item in inventory
  */
 export type ItemView =
-  | { type: 'readable'; content?: string; sections?: { heading?: string; text: string }[] }
+  | {
+      type: 'readable';
+      layout?: ReadableLayout;
+      // Text content
+      content?: string;
+      sections?: { heading?: string; text: string }[];
+      // Book structure
+      title?: string;
+      author?: string;
+      cover?: string;
+      blurb?: string;
+      chapters?: { title: string; content: string }[];
+      // Image content
+      pages?: string[];
+      image?: string;
+    }
   | { type: 'examine' }
   | { type: 'consumable'; action: string };
 
