@@ -39,7 +39,7 @@ export abstract class Screen {
     this.isActive = true;
     this.selectedIndex = this.findFirstEnabledIndex();
     this.updateSelection();
-    window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('keydown', this.handleKeyDown, true);
   }
 
   /**
@@ -48,7 +48,7 @@ export abstract class Screen {
   hide(): void {
     this.element.classList.remove('visible');
     this.isActive = false;
-    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('keydown', this.handleKeyDown, true);
   }
 
   /**
@@ -74,19 +74,23 @@ export abstract class Screen {
     switch (e.code) {
       case 'ArrowUp':
         e.preventDefault();
+        e.stopPropagation();
         this.selectPrevious();
         break;
       case 'ArrowDown':
         e.preventDefault();
+        e.stopPropagation();
         this.selectNext();
         break;
       case 'Enter':
       case 'Space':
         e.preventDefault();
+        e.stopPropagation();
         this.activateSelected();
         break;
       case 'Escape':
         e.preventDefault();
+        e.stopPropagation();
         this.onEscape();
         break;
     }
@@ -204,7 +208,7 @@ export abstract class Screen {
    * Clean up resources
    */
   dispose(): void {
-    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('keydown', this.handleKeyDown, true);
     this.element.remove();
   }
 }
