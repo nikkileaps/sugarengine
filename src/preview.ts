@@ -21,6 +21,7 @@ import {
   ResonanceGameUI,
   FreeCameraController,
   LoadingScreen,
+  ControlsHint,
 } from './engine';
 
 interface ProjectMessage {
@@ -122,6 +123,8 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   // CasterHUD auto-shows when caster exists
   new CasterHUD(container, game.caster);
   const resonanceGameUI = new ResonanceGameUI(container);
+  const controlsHint = new ControlsHint(container);
+  controlsHint.hide(); // Hidden until gameplay starts
   const debugHUD = new DebugHUD(container, game.quests);
 
   debugHUD.setPlayerPositionProvider(() => game.getPlayerPosition());
@@ -206,7 +209,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   let inventoryWasPressed = false;
   let giftWasPressed = false;
   let spellMenuWasPressed = false;
-  let escapeWasPressed = false;
+  let menuWasPressed = false;
 
   // Remove movement locks when UIs close
   questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
@@ -250,20 +253,28 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   const originalRun = game.engine.run.bind(game.engine);
   game.engine.run = () => {
+    let prevScene = game.sceneManager.getCurrentScene();
     const checkInputs = () => {
-      if (game.sceneManager.getCurrentScene() !== 'gameplay') {
+      const scene = game.sceneManager.getCurrentScene();
+      if (scene !== prevScene) {
+        if (scene === 'gameplay') controlsHint.show();
+        else controlsHint.hide();
+        prevScene = scene;
+      }
+
+      if (scene !== 'gameplay') {
         requestAnimationFrame(checkInputs);
         return;
       }
 
-      // Escape for pause menu
-      const escapePressed = game.engine.isEscapePressed();
-      if (escapePressed && !escapeWasPressed) {
+      // Q for pause/main menu
+      const menuPressed = game.engine.isMenuPressed();
+      if (menuPressed && !menuWasPressed) {
         if (!isUIBlocking() || game.sceneManager.getCurrentScene() === 'pause') {
           game.sceneManager.togglePause();
         }
       }
-      escapeWasPressed = escapePressed;
+      menuWasPressed = menuPressed;
 
       if (isUIBlocking()) {
         requestAnimationFrame(checkInputs);

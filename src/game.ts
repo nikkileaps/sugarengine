@@ -16,6 +16,7 @@ import {
   ItemViewUI,
   SpellMenuUI,
   CasterHUD,
+  ControlsHint,
 } from './engine';
 
 interface GameData {
@@ -94,6 +95,8 @@ async function runGame(gameData: GameData) {
   const spellMenuUI = new SpellMenuUI(container, game.caster);
   // CasterHUD auto-registers event handlers and manages its own visibility
   new CasterHUD(container, game.caster);
+  const controlsHint = new ControlsHint(container);
+  controlsHint.hide(); // Hidden until gameplay starts
 
   // ========================================
   // Game Event Handlers → UI Updates
@@ -147,7 +150,7 @@ async function runGame(gameData: GameData) {
   let inventoryWasPressed = false;
   let giftWasPressed = false;
   let spellMenuWasPressed = false;
-  let escapeWasPressed = false;
+  let menuWasPressed = false;
 
   questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
   inventoryUI.setOnClose(() => {
@@ -187,20 +190,28 @@ async function runGame(gameData: GameData) {
 
   const originalRun = game.engine.run.bind(game.engine);
   game.engine.run = () => {
+    let prevScene = game.sceneManager.getCurrentScene();
     const checkInputs = () => {
-      if (game.sceneManager.getCurrentScene() !== 'gameplay') {
+      const scene = game.sceneManager.getCurrentScene();
+      if (scene !== prevScene) {
+        if (scene === 'gameplay') controlsHint.show();
+        else controlsHint.hide();
+        prevScene = scene;
+      }
+
+      if (scene !== 'gameplay') {
         requestAnimationFrame(checkInputs);
         return;
       }
 
-      // Escape for pause menu
-      const escapePressed = game.engine.isEscapePressed();
-      if (escapePressed && !escapeWasPressed) {
+      // Q for pause/main menu
+      const menuPressed = game.engine.isMenuPressed();
+      if (menuPressed && !menuWasPressed) {
         if (!isUIBlocking() || game.sceneManager.getCurrentScene() === 'pause') {
           game.sceneManager.togglePause();
         }
       }
-      escapeWasPressed = escapePressed;
+      menuWasPressed = menuPressed;
 
       if (isUIBlocking()) {
         requestAnimationFrame(checkInputs);

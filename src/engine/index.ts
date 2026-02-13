@@ -130,6 +130,7 @@ export {
   CasterHUD,
   ResonanceGameUI,
   FadeOverlay,
+  ControlsHint,
 } from './ui';
 
 // Resonance System

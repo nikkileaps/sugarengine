@@ -1672,6 +1672,13 @@ export class SugarEngine {
   }
 
   /**
+   * Check if menu key was just pressed (Q)
+   */
+  isMenuPressed(): boolean {
+    return this.input.isMenuPressed();
+  }
+
+  /**
    * Check if inventory key was just pressed (I)
    */
   isInventoryPressed(): boolean {

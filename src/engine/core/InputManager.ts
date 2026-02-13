@@ -135,6 +135,13 @@ export class InputManager {
   }
 
   /**
+   * Check if menu key was just pressed (Q key)
+   */
+  isMenuPressed(): boolean {
+    return this.keysJustPressed.has('KeyQ');
+  }
+
+  /**
    * Check if inventory key was just pressed (I key)
    */
   isInventoryPressed(): boolean {

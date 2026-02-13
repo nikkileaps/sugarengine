@@ -85,7 +85,7 @@ export class PauseScreen extends Screen {
     // Footer
     const footer = document.createElement('div');
     footer.className = 'pause-footer key-hint';
-    footer.innerHTML = 'Press <span class="key">Esc</span> to resume';
+    footer.innerHTML = 'Press <span class="key">Q</span> to resume';
     panel.appendChild(footer);
 
     this.element.appendChild(panel);
@@ -135,8 +135,22 @@ export class PauseScreen extends Screen {
     this.onQuitToTitleHandler = handler;
   }
 
+  protected handleKeyDown(e: KeyboardEvent): void {
+    if (!this.isActive) return;
+
+    // Q also resumes (same as Escape)
+    if (e.code === 'KeyQ') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onResumeHandler?.();
+      return;
+    }
+
+    super.handleKeyDown(e);
+  }
+
   protected onEscape(): void {
-    // Escape resumes game
+    // Escape also resumes game
     this.onResumeHandler?.();
   }
 }
