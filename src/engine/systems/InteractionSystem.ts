@@ -136,7 +136,7 @@ export class InteractionSystem extends System {
             type: 'resonancePoint',
             id: resonancePoint.id,
             resonanceDefId: resonancePoint.resonancePointId,
-            promptText: resonancePoint.promptText || 'Attune',
+            promptText: resonancePoint.promptText || 'Resonance Point',
             distance
           };
         }
@@ -182,7 +182,7 @@ export class InteractionSystem extends System {
         this.onResonance(
           this.nearestInteractable.id,
           this.nearestInteractable.resonanceDefId!,
-          this.nearestInteractable.promptText || 'Attune'
+          this.nearestInteractable.promptText || 'Resonance Point'
         );
       }
     }

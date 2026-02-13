@@ -372,6 +372,12 @@ export class SpellMenuUI {
       html += `<div class="spell-menu-description-error">${canCast.reason}</div>`;
     }
 
+    const chaosChance = this.casterManager.getChaosChance();
+    if (chaosChance > 0) {
+      const pct = Math.round(chaosChance * 100);
+      html += `<div class="spell-menu-description-error">Chaos risk: ${pct}%</div>`;
+    }
+
     this.description.innerHTML = html;
   }
 

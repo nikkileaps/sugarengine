@@ -228,7 +228,7 @@ export class CasterManager {
 
     // Check battery
     if (caster.battery < spell.batteryCost) {
-      return { canCast: false, reason: 'Not enough battery' };
+      return { canCast: false, reason: `Not enough battery, recharge rate ${caster.rechargeRate}%/min` };
     }
 
     if (caster.battery === 0) {
