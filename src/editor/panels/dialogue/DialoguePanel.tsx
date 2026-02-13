@@ -29,6 +29,7 @@ export interface DialogueNode {
   id: string;
   name?: string;
   speaker?: string;
+  speakerLabel?: string;
   text: string;
   next?: DialogueNext[];
   onEnter?: string;

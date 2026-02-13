@@ -29,7 +29,9 @@ const NODE_SPACING_Y = 150;
 
 // Special speaker IDs
 const PLAYER_ID = 'e095b3b2-3351-403a-abe1-88861fa489ad';
+const PLAYER_VO_ID = 'b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c';
 const NARRATOR_ID = '1a44e7dd-fd2c-4862-a489-59692155e406';
+const EXCERPT_ID = 'a3f8c1d2-7e4b-4a9f-b6d5-1c2e3f4a5b6d';
 
 interface DialogueNodeCanvasProps {
   dialogue: DialogueEntry;
@@ -79,7 +81,9 @@ export function DialogueNodeCanvas({
   const getSpeakerName = (speakerId: string | undefined): string => {
     if (!speakerId) return '';
     if (speakerId === PLAYER_ID) return 'Player';
+    if (speakerId === PLAYER_VO_ID) return 'Player (VO)';
     if (speakerId === NARRATOR_ID) return 'Narrator';
+    if (speakerId === EXCERPT_ID) return 'Excerpt';
     const npc = npcs.find((n) => n.id === speakerId);
     return npc?.name || speakerId;
   };
@@ -535,7 +539,9 @@ function NodeEditorPanel({
 }: NodeEditorPanelProps) {
   const speakerOptions = [
     { value: PLAYER_ID, label: 'Player' },
+    { value: PLAYER_VO_ID, label: 'Player (VO)' },
     { value: NARRATOR_ID, label: 'Narrator' },
+    { value: EXCERPT_ID, label: 'Excerpt' },
     ...npcs.map((n) => ({ value: n.id, label: n.name })),
   ];
 
@@ -603,11 +609,26 @@ function NodeEditorPanel({
             label="Speaker"
             data={speakerOptions}
             value={node.speaker || null}
-            onChange={(value) => handleChange('speaker', value || undefined)}
+            onChange={(value) => {
+              handleChange('speaker', value || undefined);
+              if (value !== EXCERPT_ID && node.speakerLabel) {
+                handleChange('speakerLabel', undefined);
+              }
+            }}
             placeholder="Select speaker"
             searchable
             clearable
           />
+
+          {node.speaker === EXCERPT_ID && (
+            <TextInput
+              label="Source Title"
+              value={node.speakerLabel || ''}
+              onChange={(e) => handleChange('speakerLabel', e.currentTarget.value || undefined)}
+              placeholder="e.g., Handbook for the Recently Transported"
+              description="Displayed as the speaker name for this excerpt"
+            />
+          )}
 
           <Textarea
             label="Dialogue Text"

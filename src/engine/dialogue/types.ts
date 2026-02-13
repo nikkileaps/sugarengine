@@ -19,6 +19,17 @@ export const PLAYER: Player = {
   kind: 'player',
 };
 
+/** Player voiceover / internal monologue - displays as "Holly" but italic */
+export interface PlayerVO extends BaseSpeaker {
+  readonly kind: 'player-vo';
+}
+
+export const PLAYER_VO: PlayerVO = {
+  id: 'b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c',
+  displayName: 'Holly',
+  kind: 'player-vo',
+};
+
 /** Narrator - disembodied storytelling voice */
 export interface Narrator extends BaseSpeaker {
   readonly kind: 'narrator';
@@ -30,13 +41,24 @@ export const NARRATOR: Narrator = {
   kind: 'narrator',
 };
 
+/** Excerpt - text read from an in-world source (book, handbook, sign, etc.) */
+export interface ExcerptSpeaker extends BaseSpeaker {
+  readonly kind: 'excerpt';
+}
+
+export const EXCERPT: ExcerptSpeaker = {
+  id: 'a3f8c1d2-7e4b-4a9f-b6d5-1c2e3f4a5b6d',
+  displayName: 'Excerpt',
+  kind: 'excerpt',
+};
+
 /** NPC speaker (imported from NPC system, shares the shape) */
 export interface NPCSpeaker extends BaseSpeaker {
   readonly kind: 'npc';
 }
 
 /** Union type for all possible speakers */
-export type Speaker = Player | Narrator | NPCSpeaker;
+export type Speaker = Player | PlayerVO | Narrator | ExcerptSpeaker | NPCSpeaker;
 
 /**
  * A connection to the next dialogue node
@@ -56,6 +78,8 @@ export interface DialogueNode {
   id: string;
   name?: string;            // Human-readable name shown in UI
   speaker?: string;         // Who's talking (NPC name, "Player", etc.)
+  speakerLabel?: string;    // Custom display name override (e.g., book title for Excerpt speaker)
+  speakerId?: string;       // Original speaker UUID (set at display time for UI styling)
   text: string;             // The dialogue text
   next?: DialogueNext[];    // Connections to next node(s). Empty/undefined = end of dialogue
   onEnter?: string;         // Event to fire when entering this node

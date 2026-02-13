@@ -130,12 +130,21 @@ export class DialogueManager {
 
     // Resolve speaker name if we have a resolver
     let displayNode = this.currentNode;
+    const originalSpeakerId = displayNode.speaker; // UUID, before resolution
     if (displayNode.speaker && this.speakerNameResolver) {
       const resolvedName = this.speakerNameResolver(displayNode.speaker);
       if (resolvedName) {
         displayNode = { ...displayNode, speaker: resolvedName };
       }
     }
+
+    // Apply speakerLabel override (e.g., book title for Excerpt speaker)
+    if (displayNode.speakerLabel) {
+      displayNode = { ...displayNode, speaker: displayNode.speakerLabel };
+    }
+
+    // Preserve original speaker UUID so UI can detect speaker type for styling
+    displayNode = { ...displayNode, speakerId: originalSpeakerId };
 
     // Show in UI (with filtered connections)
     this.dialoguePanel.show(

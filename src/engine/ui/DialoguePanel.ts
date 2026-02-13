@@ -1,4 +1,4 @@
-import { DialogueNode, DialogueNext } from '../dialogue';
+import { DialogueNode, DialogueNext, PLAYER, PLAYER_VO, EXCERPT } from '../dialogue';
 
 export type DialoguePanelCallback = (selected?: DialogueNext) => void;
 export type DialogueCancelCallback = () => void;
@@ -171,17 +171,40 @@ export class DialoguePanel {
 
       .dialogue-entry.player .dialogue-entry-text {
         color: rgba(240, 230, 216, 0.85);
+      }
+
+      .dialogue-entry.player-vo .dialogue-entry-speaker {
+        color: #f0e6d8;
+      }
+
+      .dialogue-entry.player-vo .dialogue-entry-text {
+        color: rgba(240, 230, 216, 0.85);
         font-style: italic;
+      }
+
+      .dialogue-entry.excerpt {
+        padding-left: 16px;
+        border-left: 2px solid rgba(212, 196, 160, 0.3);
+      }
+
+      .dialogue-entry.excerpt .dialogue-entry-speaker {
+        color: #d4c4a0;
+        font-style: italic;
+        font-family: Georgia, "Times New Roman", serif;
+        text-transform: none;
+      }
+
+      .dialogue-entry.excerpt .dialogue-entry-text {
+        color: rgba(212, 196, 160, 0.85);
+        font-style: italic;
+        font-family: Georgia, "Times New Roman", serif;
       }
 
       .dialogue-entry.player-choice {
-        padding-left: 16px;
-        border-left: 2px solid rgba(240, 230, 216, 0.3);
       }
 
       .dialogue-entry.player-choice .dialogue-entry-text {
-        color: rgba(240, 230, 216, 0.7);
-        font-style: italic;
+        color: #e8e0d8;
       }
 
       .dialogue-panel-choices {
@@ -337,13 +360,17 @@ export class DialoguePanel {
     const entry = document.createElement('div');
     entry.className = 'dialogue-entry';
 
-    // Check if this is the player speaking (internal monologue/voiceover)
-    const speakerLower = node.speaker?.toLowerCase();
-    const isPlayer = speakerLower === 'you' ||
-                     speakerLower === 'player' ||
-                     speakerLower === 'holly';
+    // Detect speaker type via original UUID for styling
+    const isPlayer = node.speakerId === PLAYER.id;
+    const isPlayerVO = node.speakerId === PLAYER_VO.id;
+    const isExcerpt = node.speakerId === EXCERPT.id;
+
     if (isPlayer) {
       entry.classList.add('player');
+    } else if (isPlayerVO) {
+      entry.classList.add('player-vo');
+    } else if (isExcerpt) {
+      entry.classList.add('excerpt');
     }
 
     // Speaker name
@@ -351,7 +378,7 @@ export class DialoguePanel {
       const speakerEl = document.createElement('div');
       speakerEl.className = 'dialogue-entry-speaker';
       speakerEl.textContent = node.speaker;
-      speakerEl.style.color = isPlayer ? '#f0e6d8' : this.getSpeakerColor(node.speaker);
+      speakerEl.style.color = (isPlayer || isPlayerVO) ? '#f0e6d8' : isExcerpt ? '#d4c4a0' : this.getSpeakerColor(node.speaker);
       entry.appendChild(speakerEl);
     }
 
@@ -484,9 +511,15 @@ export class DialoguePanel {
     const entry = document.createElement('div');
     entry.className = 'dialogue-entry player-choice';
 
+    const speakerEl = document.createElement('div');
+    speakerEl.className = 'dialogue-entry-speaker';
+    speakerEl.textContent = PLAYER.displayName;
+    speakerEl.style.color = '#f0e6d8';
+    entry.appendChild(speakerEl);
+
     const textEl = document.createElement('div');
     textEl.className = 'dialogue-entry-text';
-    textEl.textContent = `"${text}"`;
+    textEl.textContent = text;
     entry.appendChild(textEl);
 
     this.historyContainer.appendChild(entry);

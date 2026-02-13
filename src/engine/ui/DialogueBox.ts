@@ -1,4 +1,4 @@
-import { DialogueNode, DialogueNext } from '../dialogue';
+import { DialogueNode, DialogueNext, PLAYER_VO, EXCERPT } from '../dialogue';
 
 export type DialogueBoxCallback = (selected?: DialogueNext) => void;
 export type DialogueCancelCallback = () => void;
@@ -16,6 +16,8 @@ export class DialogueBox {
   private cursorEl: HTMLSpanElement;
   private choicesEl: HTMLDivElement;
   private continueHint: HTMLDivElement;
+
+  private textContainer: HTMLDivElement = null!;
 
   private typewriterInterval: number | null = null;
   private fullText = '';
@@ -114,7 +116,8 @@ export class DialogueBox {
     this.innerBox.appendChild(this.speakerEl);
 
     // Text content with cursor
-    const textContainer = document.createElement('div');
+    this.textContainer = document.createElement('div');
+    const textContainer = this.textContainer;
     textContainer.style.cssText = `
       font-size: 17px;
       line-height: 1.6;
@@ -278,12 +281,42 @@ export class DialogueBox {
     this.onCancel = onCancel ?? null;
     this.currentNext = node.next ?? [];
 
+    // Detect special speaker types for styling
+    const isPlayerVO = node.speakerId === PLAYER_VO.id;
+    const isExcerpt = node.speakerId === EXCERPT.id;
+
     // Set speaker
     if (node.speaker) {
       this.speakerEl.textContent = node.speaker;
       this.speakerEl.style.display = 'inline-block';
+
+      if (isExcerpt) {
+        this.speakerEl.style.background = 'linear-gradient(135deg, rgba(212, 196, 160, 0.25) 0%, rgba(180, 160, 120, 0.15) 100%)';
+        this.speakerEl.style.borderColor = 'rgba(212, 196, 160, 0.3)';
+        this.speakerEl.style.color = '#d4c4a0';
+        this.speakerEl.style.fontStyle = 'italic';
+        this.speakerEl.style.fontFamily = 'Georgia, "Times New Roman", serif';
+      } else {
+        this.speakerEl.style.background = 'linear-gradient(135deg, rgba(136, 180, 220, 0.25) 0%, rgba(100, 140, 180, 0.15) 100%)';
+        this.speakerEl.style.borderColor = 'rgba(136, 180, 220, 0.3)';
+        this.speakerEl.style.color = '#a8d4f0';
+        this.speakerEl.style.fontStyle = 'normal';
+        this.speakerEl.style.fontFamily = "'Segoe UI', system-ui, sans-serif";
+      }
     } else {
       this.speakerEl.style.display = 'none';
+    }
+
+    // Apply text styling for special speaker types
+    if (isExcerpt) {
+      this.textContainer.style.fontStyle = 'italic';
+      this.textContainer.style.fontFamily = 'Georgia, "Times New Roman", serif';
+    } else if (isPlayerVO) {
+      this.textContainer.style.fontStyle = 'italic';
+      this.textContainer.style.fontFamily = 'inherit';
+    } else {
+      this.textContainer.style.fontStyle = 'normal';
+      this.textContainer.style.fontFamily = 'inherit';
     }
 
     // Clear previous

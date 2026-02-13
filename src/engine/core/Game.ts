@@ -14,7 +14,7 @@ import { Caster } from '../components/Caster';
 import { ObjectiveType, BeatAction } from '../quests/types';
 import type { BTAction, BTCondition } from '../behavior';
 import { FlagsManager, WorldStateEvaluator, WorldStateNotifier, conditionExpressionToWorldState, btConditionToWorldState } from '../state';
-import { PLAYER, NARRATOR } from '../dialogue/types';
+import { PLAYER, PLAYER_VO, NARRATOR, EXCERPT } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
 import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
@@ -460,8 +460,14 @@ export class Game {
       if (speakerId === PLAYER.id) {
         return PLAYER.displayName;
       }
+      if (speakerId === PLAYER_VO.id) {
+        return PLAYER_VO.displayName;
+      }
       if (speakerId === NARRATOR.id) {
         return NARRATOR.displayName;
+      }
+      if (speakerId === EXCERPT.id) {
+        return EXCERPT.displayName;
       }
       // Check if it's an NPC
       const npcInfo = this.engine.getNPCInfo(speakerId);
