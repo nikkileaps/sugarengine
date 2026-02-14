@@ -248,6 +248,7 @@ export class QuestManager {
     this.activeQuests.delete(questId);
     this.completedQuests.add(questId);
     this.pendingConditions.delete(questId);
+
     this.failTargetsActivated.delete(questId);
 
     // Untrack if this was the tracked quest
@@ -269,6 +270,7 @@ export class QuestManager {
     state.status = 'failed';
     this.activeQuests.delete(questId);
     this.pendingConditions.delete(questId);
+
     this.failTargetsActivated.delete(questId);
 
     // Untrack if this was the tracked quest
@@ -285,6 +287,7 @@ export class QuestManager {
   abandonQuest(questId: string): void {
     this.activeQuests.delete(questId);
     this.pendingConditions.delete(questId);
+
     this.failTargetsActivated.delete(questId);
     if (this.trackedQuestId === questId) {
       this.trackedQuestId = this.getFirstActiveQuestId();
@@ -495,8 +498,9 @@ export class QuestManager {
 
     state.currentStageId = stageId;
 
-    // Clear pending conditions and fail tracking for this quest
+    // Clear pending conditions, auto-triggers, and fail tracking for this quest
     this.pendingConditions.delete(questId);
+
     this.failTargetsActivated.delete(questId);
 
     // Initialize objectives for new stage
@@ -1010,6 +1014,7 @@ export class QuestManager {
     this.completedQuests.clear();
     this.activeObjectives.clear();
     this.pendingConditions.clear();
+
     this.failTargetsActivated.clear();
     this.trackedQuestId = null;
   }
