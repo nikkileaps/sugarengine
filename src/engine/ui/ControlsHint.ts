@@ -10,8 +10,8 @@ export class ControlsHint {
     this.element = document.createElement('div');
     this.element.className = 'controls-hint';
     this.element.innerHTML = [
-      '<span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> Move',
       '<span class="key">I</span> Inventory',
+      '<span class="key">C</span> Caster',
       '<span class="key">Q</span> Main Menu',
     ].join('<span class="controls-hint-sep">\u00b7</span>');
 
