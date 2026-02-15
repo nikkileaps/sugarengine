@@ -89,6 +89,8 @@ export function Editor() {
   const setPlayerModel = useEditorStore((s) => s.setPlayerModel);
   const playerAnimations = useEditorStore((s) => s.playerAnimations);
   const setPlayerAnimations = useEditorStore((s) => s.setPlayerAnimations);
+  const titleScreen = useEditorStore((s) => s.titleScreen);
+  const setTitleScreen = useEditorStore((s) => s.setTitleScreen);
   const spells = useEditorStore((s) => s.spells);
   const setSpells = useEditorStore((s) => s.setSpells);
   const resonancePoints = useEditorStore((s) => s.resonancePoints);
@@ -149,6 +151,7 @@ export function Editor() {
       playerCaster,
       playerModel,
       playerAnimations,
+      titleScreen,
       spells,
       resonancePoints,
       vfxDefinitions,
@@ -258,6 +261,7 @@ export function Editor() {
       playerCaster,
       playerModel,
       playerAnimations,
+      titleScreen,
       spells,
       resonancePoints,
       vfxDefinitions,
@@ -317,6 +321,7 @@ export function Editor() {
       playerCaster,
       playerModel,
       playerAnimations,
+      titleScreen,
       spells,
       resonancePoints,
       vfxDefinitions,
@@ -445,6 +450,7 @@ export function Editor() {
       setPlayerCaster(data.playerCaster || null);
       setPlayerModel(data.playerModel || null);
       setPlayerAnimations(data.playerAnimations || {});
+      setTitleScreen(data.titleScreen || null);
       setSpells(data.spells || []);
       setResonancePoints(data.resonancePoints || []);
       setVFXDefinitions(data.vfxDefinitions || []);

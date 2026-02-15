@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+export interface ModelLoaderOptions {
+  /** Enable Draco mesh decoder for compressed GLBs. Default false. */
+  draco?: boolean;
+  /** Base URL for Draco decoder files. Required when draco is true. */
+  dracoDecoderPath?: string;
+}
 
 export interface AnimatedModel {
   scene: THREE.Group;
@@ -13,8 +21,15 @@ export class ModelLoader {
   private gltfCache: Map<string, GLTF> = new Map();
   private fbxCache: Map<string, THREE.Group> = new Map();
 
-  constructor() {
+  constructor(options?: ModelLoaderOptions) {
     this.gltfLoader = new GLTFLoader();
+
+    if (options?.draco) {
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath(options.dracoDecoderPath ?? 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+      this.gltfLoader.setDRACOLoader(dracoLoader);
+    }
+
     this.fbxLoader = new FBXLoader();
   }
 

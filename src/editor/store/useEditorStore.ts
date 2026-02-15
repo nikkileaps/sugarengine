@@ -201,6 +201,12 @@ interface EditorState {
   playerCaster: PlayerCasterData | null;
   playerModel: string | null;
   playerAnimations: Record<string, string>;  // clip name → FBX/GLB path (e.g. { idle: 'models/idle.fbx' })
+  titleScreen: {
+    cameraPosition?: { x: number; y: number; z: number };
+    cameraLookAt?: { x: number; y: number; z: number };
+    hidePlayer?: boolean;
+    transitionDuration?: number;
+  } | null;
   spells: SpellData[];
   resonancePoints: ResonancePointData[];
   vfxDefinitions: VFXDefinitionData[];
@@ -235,6 +241,7 @@ interface EditorState {
   setPlayerCaster: (playerCaster: PlayerCasterData | null) => void;
   setPlayerModel: (playerModel: string | null) => void;
   setPlayerAnimations: (playerAnimations: Record<string, string>) => void;
+  setTitleScreen: (titleScreen: EditorState['titleScreen']) => void;
   setSpells: (spells: SpellData[]) => void;
   setResonancePoints: (resonancePoints: ResonancePointData[]) => void;
   setVFXDefinitions: (vfxDefinitions: VFXDefinitionData[]) => void;
@@ -265,6 +272,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   playerCaster: null,
   playerModel: null,
   playerAnimations: {},
+  titleScreen: null,
   spells: [],
   resonancePoints: [],
   vfxDefinitions: [],
@@ -297,6 +305,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   setPlayerCaster: (playerCaster) => set({ playerCaster }),
   setPlayerModel: (playerModel) => set({ playerModel }),
   setPlayerAnimations: (playerAnimations) => set({ playerAnimations }),
+  setTitleScreen: (titleScreen) => set({ titleScreen }),
   setSpells: (spells) => set({ spells }),
   setResonancePoints: (resonancePoints) => set({ resonancePoints }),
   setVFXDefinitions: (vfxDefinitions) => set({ vfxDefinitions }),

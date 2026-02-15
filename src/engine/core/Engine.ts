@@ -25,6 +25,8 @@ export interface CameraConfig {
 export interface EngineConfig {
   container: HTMLElement;
   camera: CameraConfig;
+  /** Enable Draco mesh decoder for compressed GLBs (published builds). */
+  draco?: boolean;
 }
 
 // NPC database entry (matches editor format)
@@ -143,7 +145,10 @@ export class SugarEngine {
     this.input = new InputManager();
 
     // Loaders
-    this.models = new ModelLoader();
+    this.models = new ModelLoader(config.draco ? {
+      draco: true,
+      dracoDecoderPath: import.meta.env.BASE_URL + 'draco/',
+    } : undefined);
     this.characters = new CharacterLoader(this.models);
     this.props = new PropLoader(this.models);
     this.regions = new RegionLoader(this.models);

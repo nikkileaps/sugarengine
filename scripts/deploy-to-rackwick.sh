@@ -8,6 +8,12 @@ DEPLOY_DIR="$RACKWICK_DIR/dist"
 echo "Building game for deploy..."
 DEPLOY_BUILD=true npm run game:build
 
+echo "Compressing GLB files with Draco..."
+node scripts/compress-glb.mjs "$DIST_DIR"
+
+echo "Copying Draco decoder to build..."
+cp -r node_modules/three/examples/jsm/libs/draco/gltf/ "$DIST_DIR/draco/"
+
 echo "Preparing deploy directory..."
 cd "$RACKWICK_DIR"
 

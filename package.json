@@ -13,7 +13,8 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "game:build": "vite build --config vite.config.game.ts && mv dist-game/game.html dist-game/index.html",
-    "publish:local": "npm run game:build && vite preview --outDir dist-game --port 4173",
+    "game:build:compressed": "npm run game:build && node scripts/compress-glb.mjs dist-game && cp -r node_modules/three/examples/jsm/libs/draco/gltf/ dist-game/draco/",
+    "publish:local": "npm run game:build:compressed && vite preview --outDir dist-game --port 4173",
     "publish:deploy": "./scripts/deploy-to-rackwick.sh"
   },
   "devDependencies": {

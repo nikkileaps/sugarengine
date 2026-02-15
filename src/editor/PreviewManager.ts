@@ -22,6 +22,7 @@ export interface ProjectData {
   inspections: unknown[];
   regions?: unknown[];
   playerCaster?: unknown;
+  titleScreen?: unknown;
   spells?: unknown[];
   resonancePoints?: unknown[];
   vfxDefinitions?: unknown[];
