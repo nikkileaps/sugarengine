@@ -24,6 +24,7 @@ The engine uses an **Entity-Component-System (ECS)** architecture for maximum fl
 | `SceneManager` | Title screen, pause menu, save/load screens |
 | `WorldStateEvaluator` | Unified condition evaluation across all systems |
 | `FlagsManager` | Typed key-value flags with change notification |
+| `PluginManager` | Optional runtime plugin orchestration (ADR-024) |
 
 ## Quick Start
 
@@ -128,3 +129,4 @@ The save system automatically detects the platform and uses the appropriate stor
 - [Inspection System](./12-inspection.md) - Examining world objects
 - [NPC System](./013-npc.md) - NPC behavior trees and beat graph actions
 - [World State](./014-world-state.md) - Unified conditions, flags, and state notifications
+- [Plugin System](./15-plugins.md) - Optional runtime plugin architecture

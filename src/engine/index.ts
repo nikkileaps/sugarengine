@@ -172,5 +172,20 @@ export type { BTConditionChecker, BTActionHandler } from './systems/BehaviorTree
 export { WorldStateEvaluator, WorldStateNotifier, FlagsManager } from './state';
 export type { WorldStateCondition, StateChange, StateChangeListener, StateNamespace } from './state';
 
+// Plugins (ADR-024)
+export { PluginManager, PluginSystem, PLUGIN_API_VERSION } from './plugins';
+export type {
+  EnginePlugin,
+  PluginDescriptor,
+  PluginContext,
+  PluginEvent,
+  PluginHostContext,
+  PluginIntent,
+  PluginIntentResult,
+  PluginInteractionResolution,
+  InteractionRequest,
+  PluginInteractionSource,
+} from './plugins';
+
 // Debug
 export { FreeCameraController } from './debug';

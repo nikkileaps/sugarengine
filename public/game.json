@@ -14,31 +14,388 @@
       "seasonId": "bedf72ba-e0db-4dbb-a92f-46d6f0dad29b",
       "name": "Episode 1",
       "order": 1,
-      "startRegion": "b1ede603-c4ab-4e5d-a3c8-5023861bc216"
+      "startRegion": "b1ede603-c4ab-4e5d-a3c8-5023861bc216",
+      "completionCondition": {
+        "type": "quest",
+        "questId": "338dcbbe-6b75-4ba3-82d4-de2c018f8d03"
+      }
     }
   ],
   "dialogues": [
     {
       "id": "ea0de694-456a-47de-b6b1-6a50b00fb888",
-      "displayName": "Long Time",
       "startNode": "e38d7da7-3577-477a-b717-02ca7d120ca4",
       "nodes": [
         {
           "id": "e38d7da7-3577-477a-b717-02ca7d120ca4",
-          "displayName": "Start",
-          "text": "Hello again, Holly.",
-          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "text": "Hello, Ethan.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
           "next": [
             {
               "nodeId": "478f6382-a184-4106-8cd1-23bf5e837761"
             }
-          ]
+          ],
+          "name": "Start"
         },
         {
           "id": "478f6382-a184-4106-8cd1-23bf5e837761",
-          "displayName": "Node 2",
-          "text": "Hello, Ethan.",
+          "text": "Well, hey there, if it isn't my old pal Holly Weaver. I should have known. The wind did have a whiff of cheap ink and righteous indignation. Long time, no anything.",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "name": "Node 2",
+          "next": [
+            {
+              "nodeId": "60deb0e8-40ee-4ba1-b632-a6558c72d1be"
+            }
+          ]
+        },
+        {
+          "id": "60deb0e8-40ee-4ba1-b632-a6558c72d1be",
+          "name": "Node 3",
+          "text": "Out following a \"lead\"? Who's the lucky piece of scum?",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "da161b93-adac-4352-a60d-6a37d61fb347"
+            }
+          ]
+        },
+        {
+          "id": "da161b93-adac-4352-a60d-6a37d61fb347",
+          "name": "Node 4",
+          "text": "You know … I did have “follow lucky piece of scum” on my bingo card and here you are – looks like I’m getting that stuffed hupplup after all. So why did you finally decide to crawl out from whatever rock you’ve been hiding under?",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
+          "next": [
+            {
+              "nodeId": "c967b28a-f670-484c-a240-4d732b467c4a"
+            }
+          ]
+        },
+        {
+          "id": "c967b28a-f670-484c-a240-4d732b467c4a",
+          "name": "Node 5",
+          "text": "And just like that the inquisition begins. You haven’t changed at all. What’s the story this time, Grim Peeper? How did you find me anyways?",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "950c3e9b-c19d-4a18-ad02-5752bd9b9101",
+              "text": "Let’s see … First I hacked the mainframe, then, I cross referenced a list or two, stuck on my hat and released the hounds.. And here we are, my dear Watson."
+            },
+            {
+              "nodeId": "03cc6444-5831-433b-8a63-6a18116ba263",
+              "text": "I asked Brill."
+            }
+          ]
+        },
+        {
+          "id": "950c3e9b-c19d-4a18-ad02-5752bd9b9101",
+          "name": "Node 6",
+          "text": "You asked Brill, didn't you?",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "7800d512-76a5-42cf-9aa7-0ca7b18bd52c"
+            }
+          ]
+        },
+        {
+          "id": "03cc6444-5831-433b-8a63-6a18116ba263",
+          "name": "Node 7",
+          "text": "He always had a soft spot for you. What do you want Holly?",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "c4ec5757-df08-4135-ac86-94c5497f5007"
+            }
+          ]
+        },
+        {
+          "id": "7800d512-76a5-42cf-9aa7-0ca7b18bd52c",
+          "name": "Node 8",
+          "text": "I asked Brill.",
+          "next": [
+            {
+              "nodeId": "03cc6444-5831-433b-8a63-6a18116ba263"
+            }
+          ],
           "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        },
+        {
+          "id": "c4ec5757-df08-4135-ac86-94c5497f5007",
+          "name": "Node 9",
+          "text": "I want to know why you sent me an \"anonymous\" message trying to point the finger at an innocent night watchmen for a theft you comitted.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
+          "next": [
+            {
+              "nodeId": "03056493-59e8-4877-bd0e-4f3387bdd9dc"
+            }
+          ]
+        },
+        {
+          "id": "03056493-59e8-4877-bd0e-4f3387bdd9dc",
+          "name": "Node 10",
+          "text": "You know ... your brain must be a fascinating place to live in -- full of cork boards and red string. I don't know what you're talking about.",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "a46f2700-27f9-4e24-b034-0a4e70853689"
+            }
+          ]
+        },
+        {
+          "id": "a46f2700-27f9-4e24-b034-0a4e70853689",
+          "name": "Node 11",
+          "text": "And as much as I’ve really missed this … you flinging baseless accusations at me, and me not giving a damn, I’ve got places to be … tacos to eat. Any other anonymous, random stuff you want to tell me I’m responsible for? Any other rumors or hot gossip you need to offload while we’re here?",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "c4dd8525-b40d-413a-bee1-522ef4ed4d9c"
+            }
+          ]
+        },
+        {
+          "id": "c4dd8525-b40d-413a-bee1-522ef4ed4d9c",
+          "name": "Node 12",
+          "text": "You’re not going to keep getting away with it, Ethan. I’m going to find out the truth. About this. About all of it.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
+          "next": [
+            {
+              "nodeId": "d9e6a2e0-7db8-4d63-b2c3-47b4502346ce"
+            }
+          ]
+        },
+        {
+          "id": "d9e6a2e0-7db8-4d63-b2c3-47b4502346ce",
+          "name": "Node 13",
+          "text": "Ooooooooo! I'll get you my pretty! Later.",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334",
+          "next": [
+            {
+              "nodeId": "aac61140-0e2a-4b09-8c0b-31731a7f168c"
+            }
+          ]
+        },
+        {
+          "id": "aac61140-0e2a-4b09-8c0b-31731a7f168c",
+          "name": "Node 14",
+          "text": "And your little dog too!",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        }
+      ],
+      "name": "Long Time"
+    },
+    {
+      "id": "bd32f03d-8849-4a98-9fcf-72c6ce758393",
+      "startNode": "4ade9be7-b342-4499-9ff0-7960d7db1b3d",
+      "nodes": [
+        {
+          "id": "4ade9be7-b342-4499-9ff0-7960d7db1b3d",
+          "text": "Yaddah, yaddah, yaddah.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
+          "next": [
+            {
+              "nodeId": "5e4b4481-1737-4f48-b05a-7cae7a9fffe2"
+            }
+          ],
+          "name": "Start"
+        },
+        {
+          "id": "5e4b4481-1737-4f48-b05a-7cae7a9fffe2",
+          "text": "Sounds great, doesn’t it? Very poetic. Of course, books in Rackwick are known to fib. Not outright lies mind you, but they do tend to add certain embellishments to their pages on occasion, a touch of grandiosity here and there. The way a homeowner might put expensive wall paper right over that one moldy corner of the bathroom.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
+          "next": [
+            {
+              "nodeId": "d94ce4a0-12cd-417d-90cb-94e6258d10c6"
+            }
+          ],
+          "name": "Node 2"
+        },
+        {
+          "id": "d94ce4a0-12cd-417d-90cb-94e6258d10c6",
+          "text": "I’ve lived here my whole life and the reality of a mostly magic city is that it can’t, or doesn’t want to, make the minor alleyways sit still or keep the gusgoyles from eating the occasional citizen stumbling from a questionable venue after midnight.",
+          "next": [
+            {
+              "nodeId": "e08ad375-be53-49dd-98e7-f876e96ce419"
+            }
+          ],
+          "name": "Node 3",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        },
+        {
+          "id": "e08ad375-be53-49dd-98e7-f876e96ce419",
+          "text": "And there is no more wretched hive of magic and poor life choices after midnight than The Cultslaw Club. I’ve been waiting outside of this vermin infested rat trap for almost two hours now for what? ",
+          "name": "Node 4",
+          "next": [
+            {
+              "nodeId": "fa84e934-051b-4744-be38-9d34a51066c7"
+            }
+          ],
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        },
+        {
+          "id": "fa84e934-051b-4744-be38-9d34a51066c7",
+          "name": "Node 5",
+          "text": "Because a “hot tip” claimed that an old flame is back in town and shoplifting rare books from museum basements? A guy whose family owns half the city. A guy who looks like he’s waiting for the world to apologize for existing.",
+          "next": [
+            {
+              "nodeId": "14e7381c-5ed2-4c01-9083-2007e3cd4497"
+            }
+          ],
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        },
+        {
+          "id": "14e7381c-5ed2-4c01-9083-2007e3cd4497",
+          "name": "Node 6",
+          "text": "Ethan Mantaque",
+          "next": [
+            {
+              "nodeId": "08b59bcc-279d-4757-b192-0b60fd7dd0bb"
+            }
+          ],
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        },
+        {
+          "id": "08b59bcc-279d-4757-b192-0b60fd7dd0bb",
+          "name": "Node 7",
+          "text": "Two years ago, he was a high school nerd who liked rare books and – briefly anyways – me. Now? If the tip is right, he’s a thief. If my suspicion is right, he’s a murderer. If the last message he sent me two years ago is right … I’m just a heartless outsider looking for the next story.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad",
+          "next": [
+            {
+              "nodeId": "52a4f691-3f08-4fcf-a8dc-e09e6c7f6259"
+            }
+          ]
+        },
+        {
+          "id": "52a4f691-3f08-4fcf-a8dc-e09e6c7f6259",
+          "name": "Node 8",
+          "text": "So what’s it going to be, Holly? Wander up to your bitter ex who you still have the occasional nocturnal rerun about and find out what he’s up to? Or should we just call it a night, go home, and snuggle up next to Mr. Fluffles, our one and only true love?",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        }
+      ],
+      "name": "Holly VO"
+    },
+    {
+      "id": "33fb3f65-3224-45bb-892d-03c29127aaa1",
+      "startNode": "4b18965f-b703-43de-8fad-1a2e096c31e7",
+      "nodes": [
+        {
+          "id": "4b18965f-b703-43de-8fad-1a2e096c31e7",
+          "text": "On October 15, 1980 a dragon appeared in the sky and fell on the city of Denver That Was. Everything within the circumference of its fall was transported to the Great Head. That is how Rackwick City was born and that is how magic came to be. ",
+          "speaker": "a3f8c1d2-7e4b-4a9f-b6d5-1c2e3f4a5b6d",
+          "name": "Start",
+          "next": [
+            {
+              "nodeId": "cf1d2253-a598-402c-9c4a-495542e825e5"
+            }
+          ],
+          "speakerLabel": "Handbook for the Recently Transported"
+        },
+        {
+          "id": "cf1d2253-a598-402c-9c4a-495542e825e5",
+          "name": "Handbook Excerpt 2",
+          "text": "Magic in Rackwick City is like a dream that forgot to wake up. Every stone in Rackwick City remembers every footstep. The wind takes away the secrets we can’t stand to keep. All things are impossibly possible and possibly impossible in Rackwick City.",
+          "speaker": "a3f8c1d2-7e4b-4a9f-b6d5-1c2e3f4a5b6d",
+          "next": [],
+          "speakerLabel": "Handbook for the Recently Transported"
+        }
+      ],
+      "name": "Handbook Exerpt"
+    },
+    {
+      "id": "e9911264-ccdf-4ccc-8186-579a1fdfefb5",
+      "startNode": "0b6c4766-ba13-4963-91d0-6fcc28eb5876",
+      "nodes": [
+        {
+          "id": "0b6c4766-ba13-4963-91d0-6fcc28eb5876",
+          "text": "Nothing in the paper. And nothing but denial from Ethan, of course. Time to go home.",
+          "speaker": "b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c",
+          "name": "Find My Rug",
+          "next": [
+            {
+              "nodeId": "a3185980-239e-40d4-a617-296cc56e0207",
+              "condition": {
+                "type": "not",
+                "condition": {
+                  "type": "hasItem",
+                  "itemId": "6242f978-8c4c-4816-9b9b-f54c94f5b2cf"
+                }
+              }
+            },
+            {
+              "nodeId": "335bea96-e72a-43c0-9aaa-5d9adde8a0fc",
+              "condition": {
+                "type": "hasItem",
+                "itemId": "6242f978-8c4c-4816-9b9b-f54c94f5b2cf"
+              }
+            }
+          ]
+        },
+        {
+          "id": "a3185980-239e-40d4-a617-296cc56e0207",
+          "name": "Where Did I Leave It?",
+          "text": "Where the hell did I leave my rug?",
+          "speaker": "b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c",
+          "next": [
+            {
+              "nodeId": "c9f79da3-252a-46a4-aa41-12c5c671ccd6"
+            }
+          ]
+        },
+        {
+          "id": "335bea96-e72a-43c0-9aaa-5d9adde8a0fc",
+          "name": "Already Have It",
+          "text": "Good thing I've already got my rug. Time to get the hell out of here.",
+          "speaker": "b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c",
+          "next": [
+            {
+              "nodeId": "c9f79da3-252a-46a4-aa41-12c5c671ccd6"
+            }
+          ]
+        },
+        {
+          "id": "c9f79da3-252a-46a4-aa41-12c5c671ccd6",
+          "name": "Node 4",
+          "text": "Hopefully it's got enough juice to cast the  Flight spell to get home. Or there's a Resonance Point around here somewhere.",
+          "speaker": "b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c"
+        }
+      ],
+      "name": "Find My Rug"
+    },
+    {
+      "id": "a0210ef4-ccce-44b4-a081-f62be1b934fb",
+      "name": "Everything I Need to Say",
+      "startNode": "ead9146f-7983-479b-9ef1-bf13b27d05ac",
+      "nodes": [
+        {
+          "id": "ead9146f-7983-479b-9ef1-bf13b27d05ac",
+          "name": "All I have to say",
+          "text": "I already said everything I need to say to you.",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334"
+        }
+      ]
+    },
+    {
+      "id": "b8fb4a4a-d794-44fa-a81f-677ce16ff749",
+      "name": "More Resonance",
+      "startNode": "bd99c01c-eb35-44d6-a723-0e82c5da90d1",
+      "nodes": [
+        {
+          "id": "bd99c01c-eb35-44d6-a723-0e82c5da90d1",
+          "name": "Start",
+          "text": "Oh great. I need more resonance. No need to risk turning into a donkey or something.",
+          "speaker": "e095b3b2-3351-403a-abe1-88861fa489ad"
+        }
+      ]
+    },
+    {
+      "id": "566340d9-5360-4fba-98e4-72e6435a2c47",
+      "name": "Not Me, Book Fake",
+      "startNode": "63e2a7d9-bc9c-481f-aa5b-e427d082bbd6",
+      "nodes": [
+        {
+          "id": "63e2a7d9-bc9c-481f-aa5b-e427d082bbd6",
+          "name": "Book Fake",
+          "text": "Hey! Take a closer look at the book in the picture.",
+          "speaker": "7319fa48-11aa-4abe-b086-850fd51f8334"
         }
       ]
     }
@@ -52,20 +409,287 @@
       "stages": [
         {
           "id": "start",
+          "description": "Act 1",
+          "objectives": [
+            {
+              "id": "53d1a921-7334-408f-9faf-11c004760a8f",
+              "type": "voiceover",
+              "target": "",
+              "description": "Handbook",
+              "dialogue": "33fb3f65-3224-45bb-892d-03c29127aaa1",
+              "trigger": "onStageStart",
+              "onComplete": [
+                {
+                  "type": "triggerObjective",
+                  "objectiveId": "bd5265a0-ae83-4733-a302-4f8d565bb78d"
+                }
+              ],
+              "autoStart": true
+            },
+            {
+              "id": "obj-1770427673045",
+              "type": "custom",
+              "target": "",
+              "description": "Voiceover",
+              "nodeType": "narrative",
+              "narrativeType": "dialogue",
+              "autoStart": true,
+              "prerequisites": [
+                "53d1a921-7334-408f-9faf-11c004760a8f"
+              ],
+              "dialogueId": "bd32f03d-8849-4a98-9fcf-72c6ce758393"
+            },
+            {
+              "id": "obj-1770489203430",
+              "type": "custom",
+              "target": "",
+              "description": "Condition gate",
+              "nodeType": "condition",
+              "condition": {
+                "operator": "hasItem",
+                "operand": "6242f978-8c4c-4816-9b9b-f54c94f5b2cf"
+              },
+              "prerequisites": [
+                "obj-1770427673045"
+              ]
+            },
+            {
+              "id": "obj-1770496112055",
+              "type": "custom",
+              "target": "",
+              "description": "Condition gate",
+              "nodeType": "condition",
+              "condition": {
+                "operator": "canCastSpell",
+                "operand": "19ba3692-83ca-415f-9438-d2247ea7af48"
+              },
+              "prerequisites": [
+                "obj-1770427673045"
+              ]
+            },
+            {
+              "id": "obj-1770576028489",
+              "type": "castSpell",
+              "target": "19ba3692-83ca-415f-9438-d2247ea7af48",
+              "description": "Cast Flight Spell to Leave",
+              "nodeType": "objective",
+              "prerequisites": [
+                "obj-1771037551947",
+                "obj-1771037185875"
+              ]
+            },
+            {
+              "id": "obj-1770576207472",
+              "type": "custom",
+              "target": "",
+              "description": "Flight cut scene",
+              "nodeType": "narrative",
+              "narrativeType": "cutscene",
+              "autoStart": true,
+              "prerequisites": [
+                "obj-1770576028489"
+              ]
+            },
+            {
+              "id": "obj-1771035877129",
+              "type": "talk",
+              "target": "7319fa48-11aa-4abe-b086-850fd51f8334",
+              "description": "Ethan and Holly Confront Eachother",
+              "nodeType": "objective",
+              "prerequisites": [
+                "obj-1770427673045"
+              ],
+              "dialogue": "ea0de694-456a-47de-b6b1-6a50b00fb888",
+              "onComplete": [
+                {
+                  "type": "setFlag",
+                  "target": "has-had-long-time-talk"
+                },
+                {
+                  "type": "moveNpc",
+                  "value": {
+                    "x": -15,
+                    "y": 0,
+                    "z": -16
+                  },
+                  "position": {
+                    "x": -15,
+                    "y": 0,
+                    "z": -16
+                  },
+                  "target": "7319fa48-11aa-4abe-b086-850fd51f8334",
+                  "npcId": "7319fa48-11aa-4abe-b086-850fd51f8334"
+                }
+              ]
+            },
+            {
+              "id": "obj-1771037185875",
+              "type": "custom",
+              "target": "",
+              "description": "Branch route",
+              "nodeType": "branch",
+              "condition": {
+                "operator": "hasFlag",
+                "operand": "has-had-long-time-talk"
+              },
+              "prerequisites": [
+                "obj-1770427673045",
+                "obj-1770489203430",
+                "obj-1770496112055"
+              ],
+              "failTargets": [
+                "obj-1771037551947"
+              ]
+            },
+            {
+              "id": "obj-1771037551947",
+              "type": "talk",
+              "target": "7319fa48-11aa-4abe-b086-850fd51f8334",
+              "description": "Ethan Finds Holly and Confronts Her",
+              "nodeType": "objective",
+              "dialogue": "ea0de694-456a-47de-b6b1-6a50b00fb888",
+              "autoStart": true,
+              "onEnter": [
+                {
+                  "type": "moveNpc",
+                  "value": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                  },
+                  "position": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                  },
+                  "target": "7319fa48-11aa-4abe-b086-850fd51f8334",
+                  "npcId": "7319fa48-11aa-4abe-b086-850fd51f8334",
+                  "moveTarget": "player"
+                }
+              ]
+            }
+          ],
+          "objectivePositions": {
+            "obj-1": {
+              "x": 250.54823998582248,
+              "y": 445.25792452327966
+            },
+            "a9c2fce1-c2a5-45c5-a26f-8847826d91be": {
+              "x": 475.8265266297288,
+              "y": 140.00359602024503
+            },
+            "bd5265a0-ae83-4733-a302-4f8d565bb78d": {
+              "x": 58.0983126889395,
+              "y": 330.3897593084165
+            },
+            "53d1a921-7334-408f-9faf-11c004760a8f": {
+              "x": 38.517332875568364,
+              "y": 155.75481370691188
+            },
+            "obj-1770391764928": {
+              "x": 651.7616658602806,
+              "y": 356.1577388293393
+            },
+            "obj-1770418571668": {
+              "x": 962.2898961992958,
+              "y": 505.80851432030295
+            },
+            "obj-1770418619499": {
+              "x": 965.9148891643259,
+              "y": 341.3091052577566
+            },
+            "obj-1770427617297": {
+              "x": 648.106543870264,
+              "y": 325.9751056646029
+            },
+            "obj-1770427673045": {
+              "x": 338.43863671511855,
+              "y": 160.11441259287807
+            },
+            "obj-1770428470616": {
+              "x": 298.2228639006918,
+              "y": 200.7761694044454
+            },
+            "obj-1770428897158": {
+              "x": 607.4497546343699,
+              "y": 327.78207407508705
+            },
+            "obj-1770429097705": {
+              "x": 197.13878258751848,
+              "y": 232.96370018612467
+            },
+            "obj-1770489115828": {
+              "x": 322.1458862259332,
+              "y": 575.8994793264853
+            },
+            "obj-1770489203430": {
+              "x": 798.4679765651539,
+              "y": 292.8394816193539
+            },
+            "obj-1770489346332": {
+              "x": 1247.66789349927,
+              "y": 331.935944819389
+            },
+            "obj-1770496112055": {
+              "x": 780.1024253410756,
+              "y": 454.86024715565117
+            },
+            "obj-1770496129801": {
+              "x": 1302.015481040653,
+              "y": 90.94033852842489
+            },
+            "obj-1770576028489": {
+              "x": 1800.7762907379597,
+              "y": 158.6736331167847
+            },
+            "obj-1770576207472": {
+              "x": 2088.9341244876828,
+              "y": 155.96124181082035
+            },
+            "obj-1771009506234": {
+              "x": 87.89184672133244,
+              "y": 244.38068042650667
+            },
+            "obj-1771009633380": {
+              "x": 791.374352949279,
+              "y": -54.57493288894489
+            },
+            "obj-1771018717586": {
+              "x": 847.1071412603326,
+              "y": 136.03703504503565
+            },
+            "obj-1771035877129": {
+              "x": 841.7126882543857,
+              "y": -119.22989631865394
+            },
+            "obj-1771037185875": {
+              "x": 1149.402476039705,
+              "y": 155.12813089997348
+            },
+            "obj-1771037551947": {
+              "x": 1490.5754792586063,
+              "y": 403.58412544616135
+            }
+          }
+        }
+      ],
+      "episodeId": "7e581708-4c66-44b7-8e6f-e6ebc45f92b2"
+    },
+    {
+      "id": "d3360cde-dea1-4a94-86bc-45e8e2cde952",
+      "name": "Great Sandwich Rebellion",
+      "description": "Quest description...",
+      "startStage": "start",
+      "stages": [
+        {
+          "id": "start",
           "description": "First stage",
           "objectives": [
             {
               "id": "obj-1",
               "type": "talk",
-              "target": "7319fa48-11aa-4abe-b086-850fd51f8334",
-              "description": "Talk to Ethan",
-              "dialogue": "ea0de694-456a-47de-b6b1-6a50b00fb888"
-            },
-            {
-              "id": "a9c2fce1-c2a5-45c5-a26f-8847826d91be",
-              "type": "collect",
-              "target": "e9dfa09a-430f-4d85-93dc-12827a80e756",
-              "description": "Collect Newspaper from Stand"
+              "target": "",
+              "description": "Talk to someone"
             }
           ]
         }
@@ -77,7 +701,42 @@
     {
       "id": "7319fa48-11aa-4abe-b086-850fd51f8334",
       "name": "Ethan",
-      "description": ""
+      "description": "",
+      "behaviorMode": "onInteraction",
+      "behaviorTree": {
+        "id": "bt-1770482159694-tv0p",
+        "type": "selector",
+        "children": [
+          {
+            "id": "bt-1770482167066-jjjv",
+            "type": "condition",
+            "condition": {
+              "type": "questStage",
+              "questId": "338dcbbe-6b75-4ba3-82d4-de2c018f8d03",
+              "stageId": "start",
+              "state": "active",
+              "nodeId": "obj-1770429097705"
+            },
+            "name": "Check questStage"
+          },
+          {
+            "id": "bt-1770482204962-gwk6",
+            "type": "action",
+            "action": {
+              "type": "dialogue",
+              "dialogueId": "a0210ef4-ccce-44b4-a081-f62be1b934fb"
+            },
+            "name": "Do dialogue"
+          }
+        ],
+        "name": "New selector"
+      },
+      "model": "models/ethan-rigged-t-pose-v2.fbx",
+      "modelHeight": 1.8,
+      "animations": {
+        "walk": "models/ethan-animation-walk-v1.fbx",
+        "idle": "models/ethan-animation-idle-v1.fbx"
+      }
     }
   ],
   "items": [
@@ -88,7 +747,37 @@
       "category": "quest",
       "stackable": false,
       "maxStack": 99,
-      "giftable": false
+      "giftable": false,
+      "model": "models/newspaper.fbx",
+      "modelColor": "#ebebeb",
+      "modelScale": 0.05,
+      "view": {
+        "type": "readable",
+        "content": "This is newspaper time!",
+        "layout": "newspaper",
+        "pages": [
+          "items/gazette/rackwick-gazette-post-issue-1.png",
+          "items/gazette/rackwick-gazette-post-issue-2.png",
+          "items/gazette/rackwick-gazette-post-issue-3.png",
+          "items/gazette/rackwick-gazette-post-issue-4.png",
+          "items/gazette/rackwick-gazette-post-issue-5.png",
+          "items/gazette/rackwick-gazette-post-issue-6.png",
+          "items/gazette/rackwick-gazette-post-issue-7.png",
+          "items/gazette/rackwick-gazette-post-issue-8.png"
+        ]
+      }
+    },
+    {
+      "id": "6242f978-8c4c-4816-9b9b-f54c94f5b2cf",
+      "name": "Holly's Rug",
+      "description": "Holly's flying rug. Cast Flight spell with at least 10% resonance or risk chaos.",
+      "category": "quest",
+      "stackable": false,
+      "maxStack": 99,
+      "giftable": false,
+      "model": "models/cafe-nollie-rug-rolled.fbx",
+      "modelScale": 0.15,
+      "modelColor": "#fc870a"
     }
   ],
   "inspections": [
@@ -96,7 +785,10 @@
       "id": "f97f1df3-5b14-422f-a846-617207aac5e2",
       "title": "Fountain",
       "subtitle": "Subtitle",
-      "content": "Founder's Fountain.\nThe inscription on the fountain reads - for those who so bravely founded the city of Rackwick after the Fall."
+      "content": "Founder's Fountain.\nThe inscription on the fountain reads - for those who so bravely founded the city of Rackwick after the Fall.",
+      "model": "models/cafe-nollie-fountain.fbx",
+      "modelScale": 0.5,
+      "modelColor": "#524a4a"
     }
   ],
   "regions": [
@@ -136,6 +828,16 @@
             "z": -9
           },
           "quantity": 1
+        },
+        {
+          "id": "c8f847d1-c7ae-44e5-8f49-fa3b5d226aca",
+          "itemId": "6242f978-8c4c-4816-9b9b-f54c94f5b2cf",
+          "position": {
+            "x": -14,
+            "y": 0,
+            "z": 5
+          },
+          "quantity": 1
         }
       ],
       "inspectables": [
@@ -148,7 +850,135 @@
             "z": 0
           }
         }
+      ],
+      "resonancePoints": [
+        {
+          "id": "aafaf7b0-2552-40f7-b445-cfa13ba66049",
+          "resonancePointId": "9bc463ce-b02e-4b0e-856b-b8b972b3341a",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 18
+          }
+        }
+      ],
+      "vfxSpawns": [
+        {
+          "id": "8b86d4ba-7fed-4db7-9043-445e35ddd386",
+          "vfxId": "2d63597a-9fe9-42cf-8954-ae1f679f43ae",
+          "position": {
+            "x": 0,
+            "y": 0.68,
+            "z": 18
+          },
+          "scale": 1,
+          "autoPlay": true
+        }
       ]
+    }
+  ],
+  "playerCaster": {
+    "initialBattery": 3,
+    "rechargeRate": 2,
+    "resonanceBuildRate": 1,
+    "initialFacingAngle": 180,
+    "initialSpawnPosition": {
+      "x": 5.5,
+      "y": 0,
+      "z": -7
+    }
+  },
+  "playerModel": "models/holly-rigged-t-pose-v1.fbx",
+  "playerAnimations": {
+    "idle": "models/holly-animation-idle-v1.fbx",
+    "walk": "models/holly-animation-walk-v5.fbx"
+  },
+  "titleScreen": null,
+  "spells": [
+    {
+      "id": "19ba3692-83ca-415f-9438-d2247ea7af48",
+      "name": "Flight",
+      "description": "",
+      "icon": "✨",
+      "tags": [],
+      "batteryCost": 10,
+      "effects": []
+    }
+  ],
+  "resonancePoints": [
+    {
+      "id": "9bc463ce-b02e-4b0e-856b-b8b972b3341a",
+      "name": "Dragon Claw Shrine",
+      "description": "",
+      "icon": "✨",
+      "resonanceReward": 10,
+      "difficulty": "easy"
+    }
+  ],
+  "vfxDefinitions": [
+    {
+      "id": "2d63597a-9fe9-42cf-8954-ae1f679f43ae",
+      "name": "Shrine Flame",
+      "emissionRate": 25,
+      "maxParticles": 80,
+      "lifetime": [
+        0.2,
+        0.8
+      ],
+      "size": [
+        0.07,
+        0.19
+      ],
+      "sizeOverLife": 0.7,
+      "speed": [
+        0.6,
+        0.9
+      ],
+      "geometry": "point",
+      "color": "#ff6600",
+      "colorEnd": "#ffcc00",
+      "opacity": 0.9,
+      "blendMode": "additive",
+      "direction": {
+        "x": 0,
+        "y": 1,
+        "z": 0
+      },
+      "spread": 25,
+      "gravity": -0.1,
+      "loop": true
+    },
+    {
+      "id": "56459b45-4235-4bac-9abc-aabc204c0cee",
+      "name": "Sparkle Copy",
+      "emissionRate": 3,
+      "maxParticles": 60,
+      "lifetime": [
+        0.3,
+        1.6
+      ],
+      "size": [
+        0.01,
+        0.02
+      ],
+      "sizeOverLife": 1,
+      "speed": [
+        0.02,
+        0.08
+      ],
+      "geometry": "sparkle",
+      "color": "#fff8e0",
+      "colorEnd": "#fff8e0",
+      "opacity": 1,
+      "blendMode": "additive",
+      "direction": {
+        "x": 0,
+        "y": 1,
+        "z": 0
+      },
+      "spread": 360,
+      "gravity": 0,
+      "loop": true
     }
   ]
 }

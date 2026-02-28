@@ -1,7 +1,7 @@
 /**
  * Save data format version for migration support
  */
-export const SAVE_DATA_VERSION = 3;
+export const SAVE_DATA_VERSION = 4;
 
 /**
  * Episode progression data
@@ -95,6 +95,8 @@ export interface GameSaveData {
   };
 
   caster?: CasterSaveData;
+
+  plugins?: Record<string, unknown>;
 
   episodes?: EpisodeProgressionData;
 }

@@ -19,6 +19,14 @@ import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
 import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
 import { FadeOverlay } from '../ui/FadeOverlay';
+import { PluginManager, PluginSystem } from '../plugins';
+import type {
+  EnginePlugin,
+  PluginEvent,
+  PluginIntent,
+  PluginIntentResult,
+  PluginInteractionResolution,
+} from '../plugins';
 
 export interface TitleScreenConfig {
   /** Camera position for title screen (world coordinates) */
@@ -36,6 +44,8 @@ export interface GameConfig {
   engine?: Partial<EngineConfig>;
   save?: Partial<SaveManagerConfig>;
   audio?: Partial<AudioConfig>;
+  /** Optional runtime plugins (ADR-024). Omit for scripted-only games. */
+  plugins?: EnginePlugin[];
   startRegion?: string;
   startQuest?: string;
   startItems?: { itemId: string; quantity?: number }[];
@@ -87,6 +97,7 @@ export class Game {
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
   private fadeOverlay: FadeOverlay;
+  private pluginManager: PluginManager | null = null;
 
   // World state (ADR-018)
   readonly flags: FlagsManager;
@@ -145,6 +156,25 @@ export class Game {
     this.flags = new FlagsManager();
     this.worldStateNotifier = new WorldStateNotifier();
 
+    // Optional plugin runtime (ADR-024)
+    if (config.plugins && config.plugins.length > 0) {
+      this.pluginManager = new PluginManager({
+        getNearbyInteraction: () => this.getNearbyInteraction(),
+        getNearbyInteractable: () => this.engine.getNearbyInteractable(),
+        getNPCInfo: (npcId) => {
+          const npc = this.engine.getNPCInfo(npcId);
+          if (!npc) return undefined;
+          return { id: npc.id, name: npc.name, dialogueId: npc.dialogue };
+        },
+        getPlayerPosition: () => this.getPlayerPosition(),
+        getRegionInfo: () => this.getRegionInfo(),
+        executeIntent: (intent) => this.executePluginIntent(intent),
+      }, config.plugins);
+
+      // Run plugin updates within ECS update ordering.
+      this.engine.world.addSystem(new PluginSystem(this.pluginManager));
+    }
+
     // Create episode manager
     this.episodes = new EpisodeManager({
       developmentMode: config.mode === 'development',
@@ -165,7 +195,10 @@ export class Game {
     );
 
     // Wire flags → notifier → re-evaluate conditions
-    this.flags.setOnChange((change) => this.worldStateNotifier.notify(change));
+    this.flags.setOnChange((change) => {
+      this.worldStateNotifier.notify(change);
+      this.emitPluginEvent({ type: 'stateChanged', change });
+    });
     this.worldStateNotifier.subscribe(() => this.quests.evaluateConditions());
 
     // Wire quest state changes → notifier
@@ -184,6 +217,8 @@ export class Game {
       this.caster.checkSpellAvailability();
     });
 
+    await this.pluginManager?.init();
+
     await this.inventory.init();
     await this.saveManager.init();
 
@@ -198,7 +233,18 @@ export class Game {
     }
 
     // Connect save manager to game systems
-    this.saveManager.setGameSystems(this.engine, this.quests, this.inventory, this.caster);
+    this.saveManager.setGameSystems(
+      this.engine,
+      this.quests,
+      this.inventory,
+      this.caster,
+      this.pluginManager
+        ? {
+            serializePluginState: () => this.pluginManager?.serializeState() ?? {},
+            loadPluginState: (state) => this.pluginManager?.loadState(state),
+          }
+        : undefined,
+    );
     this.sceneManager.setGameSystems(this.engine, this.saveManager);
   }
 
@@ -414,11 +460,13 @@ export class Game {
     // ========================================
     this.dialogue.setOnStart(() => {
       this.engine.addMovementLock('dialogue');
+      this.emitPluginEvent({ type: 'dialogueStarted', dialogueId: this.dialogue.getCurrentDialogueId() ?? undefined });
     });
 
     this.dialogue.setOnEnd(() => {
       this.engine.removeMovementLock('dialogue');
       this.engine.consumeInteract();
+      this.emitPluginEvent({ type: 'dialogueEnded' });
 
       // If this was a quest dialogue that completes on dialogue end, complete the objective
       if (this.activeQuestDialogue?.completeOn === 'dialogueEnd') {
@@ -448,6 +496,7 @@ export class Game {
       }
 
       this.eventHandlers.onDialogueEvent?.(eventName);
+      this.emitPluginEvent({ type: 'dialogueEvent', eventName });
     });
 
     // Condition checker for conditional dialogue connections (ADR-019)
@@ -503,10 +552,12 @@ export class Game {
     // ========================================
     this.quests.setOnQuestStart((event) => {
       this.eventHandlers.onQuestStart?.(event.questName);
+      this.emitPluginEvent({ type: 'questStarted', questId: event.questId, questName: event.questName });
     });
 
     this.quests.setOnQuestComplete((event) => {
       this.eventHandlers.onQuestComplete?.(event.questName);
+      this.emitPluginEvent({ type: 'questCompleted', questId: event.questId, questName: event.questName });
       this.saveManager.autoSave('quest-complete');
 
       // If no more active quests, return to title screen
@@ -528,10 +579,21 @@ export class Game {
       if (event.objective) {
         this.eventHandlers.onObjectiveComplete?.(event.objective.description);
       }
+      this.emitPluginEvent({
+        type: 'objectiveCompleted',
+        questId: event.questId,
+        objectiveId: event.objectiveId,
+        description: event.objective?.description,
+      });
     });
 
-    this.quests.setOnObjectiveProgress(() => {
+    this.quests.setOnObjectiveProgress((event) => {
       this.eventHandlers.onObjectiveProgress?.();
+      this.emitPluginEvent({
+        type: 'objectiveProgressed',
+        questId: event.questId,
+        objectiveId: event.objectiveId,
+      });
     });
 
     // Handle auto-start objectives (legacy: autoStart on objective nodes)
@@ -633,6 +695,7 @@ export class Game {
     // ========================================
     this.inventory.setOnItemAdded((event) => {
       this.eventHandlers.onItemAdded?.(event.itemName, event.quantity);
+      this.emitPluginEvent({ type: 'itemAdded', itemId: event.itemId, quantity: event.quantity });
 
       // Trigger collect objectives for this item
       this.quests.triggerObjective('collect', event.itemId);
@@ -644,6 +707,7 @@ export class Game {
     this.inventory.setOnItemRemoved((event) => {
       // Notify world state (ADR-018) - triggers condition re-evaluation
       this.worldStateNotifier.notify({ namespace: 'inventory', key: event.itemId, newValue: 0 });
+      this.emitPluginEvent({ type: 'itemRemoved', itemId: event.itemId, quantity: event.quantity });
     });
 
     // ========================================
@@ -678,40 +742,12 @@ export class Game {
       if (this.onNearbyInteractionChangeHandler) {
         this.onNearbyInteractionChangeHandler(this.getNearbyInteraction());
       }
+      this.emitPluginEvent({ type: 'nearbyInteractionChanged', interaction: this.getNearbyInteraction() });
     });
 
     // NPC interaction → quest dialogue → behavior tree → default dialogue
     this.engine.onInteract((npcId, npcDefaultDialogue) => {
-      if (this.isUIBlocking()) return;
-      this.audio.play('interact');
-
-      // 1. Check if any active quest has a specific dialogue for this NPC
-      const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
-
-      if (questDialogue) {
-        // Use quest-specific dialogue
-        this.activeQuestDialogue = {
-          questId: questDialogue.questId,
-          objectiveId: questDialogue.objectiveId,
-          completeOn: questDialogue.completeOn
-        };
-        this.dialogue.start(questDialogue.dialogue);
-        return;
-      }
-
-      // 2. Evaluate behavior tree (ADR-017)
-      const btAction = this.engine.evaluateNPCBehavior(npcId);
-      if (btAction) {
-        this.executeBTAction(btAction, npcId);
-        return;
-      }
-
-      // 3. Fallback to default dialogue + trigger generic talk objectives
-      this.quests.triggerObjective('talk', npcId);
-
-      if (npcDefaultDialogue) {
-        this.dialogue.start(npcDefaultDialogue);
-      }
+      void this.handleNPCInteraction(npcId, npcDefaultDialogue);
     });
 
     // Inspectable interaction → inspection system
@@ -726,6 +762,7 @@ export class Game {
       // Location objectives complete when player reaches a trigger zone
       // The objective's target should match the trigger ID
       this.quests.triggerObjective('location', triggerId);
+      this.emitPluginEvent({ type: 'triggerEntered', triggerId, triggerType: event.type, target: event.target });
 
       if (event.type === 'quest') {
         this.quests.triggerObjective('trigger', triggerId);
@@ -737,9 +774,11 @@ export class Game {
 
     // Item pickups → inventory
     this.engine.onItemPickup((pickupId, itemId, quantity) => {
+      const regionPath = this.engine.getCurrentRegion();
       this.inventory.addItem(itemId, quantity);
-      this.saveManager.markPickupCollected(this.engine.getCurrentRegion(), pickupId);
+      this.saveManager.markPickupCollected(regionPath, pickupId);
       this.audio.play('pickup');
+      this.emitPluginEvent({ type: 'itemPickedUp', pickupId, itemId, quantity, regionPath });
     });
 
     // Resonance points → resonance game
@@ -1234,6 +1273,131 @@ export class Game {
   }
 
   /**
+   * NPC interaction chain:
+   * quest dialogue -> behavior tree -> plugin resolution -> default dialogue.
+   */
+  private async handleNPCInteraction(npcId: string, npcDefaultDialogue?: string): Promise<void> {
+    if (this.isUIBlocking()) return;
+    this.audio.play('interact');
+    this.emitPluginEvent({ type: 'interactionAttempt', npcId, npcDefaultDialogue });
+
+    // 1) Quest-specific dialogue takes absolute priority.
+    const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
+    if (questDialogue) {
+      this.activeQuestDialogue = {
+        questId: questDialogue.questId,
+        objectiveId: questDialogue.objectiveId,
+        completeOn: questDialogue.completeOn
+      };
+      this.dialogue.start(questDialogue.dialogue);
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'quest' });
+      return;
+    }
+
+    // 2) Scripted behavior tree interaction (existing ADR-017 path).
+    const btAction = this.engine.evaluateNPCBehavior(npcId);
+    if (btAction) {
+      this.executeBTAction(btAction, npcId);
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
+      return;
+    }
+
+    // 3) Optional plugin handling.
+    if (this.pluginManager) {
+      const npcInfo = this.engine.getNPCInfo(npcId);
+      const resolution = await this.pluginManager.resolveInteraction({
+        npcId,
+        npcName: npcInfo?.name,
+        npcDefaultDialogue,
+        hasQuestDialogue: false,
+        hasBehaviorTree: this.engine.hasNPCBehaviorTree(npcId),
+      });
+
+      if (resolution) {
+        const handled = await this.applyPluginInteractionResolution(resolution, npcId);
+        if (handled) {
+          this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'plugin' });
+          return;
+        }
+      }
+    }
+
+    // 4) Scripted fallback.
+    this.quests.triggerObjective('talk', npcId);
+    if (npcDefaultDialogue) {
+      this.dialogue.start(npcDefaultDialogue);
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'defaultDialogue' });
+    } else {
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'none' });
+    }
+  }
+
+  private async applyPluginInteractionResolution(
+    resolution: PluginInteractionResolution,
+    npcId: string,
+  ): Promise<boolean> {
+    switch (resolution.type) {
+      case 'startDialogue':
+        this.dialogue.start(resolution.dialogueId);
+        return true;
+
+      case 'intent': {
+        const result = await this.executePluginIntent(resolution.intent);
+        if (!result.success) {
+          console.warn(`[Game] Plugin intent rejected for NPC "${npcId}": ${result.error}`);
+        }
+        return result.success;
+      }
+
+      case 'handled':
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Canonical action gate for plugins.
+   * Plugins can request actions, but the engine validates and executes them.
+   */
+  private async executePluginIntent(intent: PluginIntent): Promise<PluginIntentResult> {
+    try {
+      switch (intent.type) {
+        case 'startDialogue':
+          this.dialogue.start(intent.dialogueId);
+          return { success: true };
+
+        case 'setFlag':
+          this.flags.set(intent.flag, intent.value);
+          return { success: true };
+
+        case 'emitEvent':
+          this.eventHandlers.onDialogueEvent?.(intent.eventName);
+          return { success: true };
+
+        case 'moveNpc':
+          await this.engine.moveNPCTo(intent.npcId, intent.target);
+          return { success: true };
+
+        case 'triggerObjective':
+          this.quests.triggerObjective(intent.objectiveType, intent.targetId);
+          return { success: true };
+
+        default:
+          return { success: false, error: 'Unknown plugin intent type' };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown plugin intent error';
+      return { success: false, error: message };
+    }
+  }
+
+  private emitPluginEvent(event: PluginEvent): void {
+    this.pluginManager?.emit(event);
+  }
+
+  /**
    * Execute a behavior tree action result.
    * Called for both onInteraction and continuous modes.
    */
@@ -1280,6 +1444,9 @@ export class Game {
    * Dispose all systems
    */
   dispose(): void {
+    if (this.pluginManager) {
+      void this.pluginManager.dispose();
+    }
     this.ambient.dispose();
     this.audio.dispose();
     this.dialogue.dispose();

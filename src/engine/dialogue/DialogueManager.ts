@@ -216,6 +216,13 @@ export class DialogueManager {
   }
 
   /**
+   * Get the current dialogue ID if active.
+   */
+  getCurrentDialogueId(): string | null {
+    return this.currentDialogue?.tree.id ?? null;
+  }
+
+  /**
    * Preload dialogues for faster access
    */
   async preload(dialogueIds: string[]): Promise<void> {
