@@ -201,4 +201,34 @@ describe('SaveManager plugin persistence', () => {
     expect(withoutPlugins.success).toBe(true);
     expect(loadPluginState).toHaveBeenLastCalledWith(undefined);
   });
+
+  it('loads safely when save contains plugin state but no plugin bridge is configured', async () => {
+    saveManager.setGameSystems(
+      engine,
+      questManager,
+      inventoryManager,
+      casterManager,
+    );
+
+    await provider.save('slot-plugin-disabled', {
+      version: SAVE_DATA_VERSION,
+      savedAt: Date.now(),
+      playTime: 999,
+      player: {
+        position: { x: 1, y: 2, z: 3 },
+        currentRegion: 'start-region',
+      },
+      quests: {
+        active: [],
+        completed: [],
+        trackedQuestId: null,
+      },
+      inventory: [],
+      world: { collectedPickups: {} },
+      plugins: { sugaragent: { memoryCount: 42 } },
+    });
+
+    const result = await saveManager.load('slot-plugin-disabled');
+    expect(result.success).toBe(true);
+  });
 });

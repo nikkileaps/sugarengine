@@ -1,0 +1,183 @@
+[
+  {
+    "chunkId": "lore.entities.npcs.nollie#nollie",
+    "pageId": "lore.entities.npcs.nollie",
+    "title": "Nollie",
+    "canonLevel": "hard",
+    "sourceFile": "entities/npcs/npc.nollie.md",
+    "sourceRepo": "git@github.com:nikkileaps/rackwick-lore.git",
+    "sourceCommit": "77db7b89c81a4b592844660742f91633bdf2f4d9",
+    "sourceRef": "refs/heads/main",
+    "sectionHeading": "Nollie",
+    "content": "Nollie an anthropromorphic bear. He runs Cafe Nollie in Rackwick City. He's friendly and kind. He loves coffee and helping people.",
+    "summary": "Nollie an anthropromorphic bear.",
+    "tokens": [
+      "nollie",
+      "anthropromorphic",
+      "bear",
+      "runs",
+      "cafe",
+      "nollie",
+      "rackwick",
+      "city",
+      "friendly",
+      "and",
+      "kind",
+      "loves",
+      "coffee",
+      "and",
+      "helping",
+      "people"
+    ],
+    "metadata": {
+      "id": "lore.entities.npcs.nollie",
+      "title": "Nollie",
+      "canon_level": "hard",
+      "entity_ids": [
+        "npc.nollie"
+      ],
+      "location_ids": [
+        "locations.rackwick_city"
+      ],
+      "faction_ids": [],
+      "time_period": "post-fall",
+      "tags": [
+        "founding",
+        "history",
+        "rackwick_city"
+      ],
+      "beat_ids": []
+    }
+  },
+  {
+    "chunkId": "lore.history.events.creation_of_rackwick_city#creation",
+    "pageId": "lore.history.events.creation_of_rackwick_city",
+    "title": "Creation of Rackwick City",
+    "canonLevel": "hard",
+    "sourceFile": "history/events/creation_of_rackwick_city.md",
+    "sourceRepo": "git@github.com:nikkileaps/rackwick-lore.git",
+    "sourceCommit": "77db7b89c81a4b592844660742f91633bdf2f4d9",
+    "sourceRef": "refs/heads/main",
+    "sectionHeading": "Creation",
+    "content": "On October 10, 1980 a dragon appeared in the sky over the city of Denver That Was. It fell and everything it encricled was transported to the Great Head. Everything within the dragon's circumference -- people and city became the seed of Rackwick City.",
+    "summary": "On October 10, 1980 a dragon appeared in the sky over the city of Denver That Was.",
+    "tokens": [
+      "october",
+      "1980",
+      "dragon",
+      "appeared",
+      "the",
+      "sky",
+      "over",
+      "the",
+      "city",
+      "denver",
+      "that",
+      "was",
+      "fell",
+      "and",
+      "everything",
+      "encricled",
+      "was",
+      "transported",
+      "the",
+      "great",
+      "head",
+      "everything",
+      "within",
+      "the",
+      "dragon",
+      "circumference",
+      "people",
+      "and",
+      "city",
+      "became",
+      "the",
+      "seed",
+      "rackwick",
+      "city"
+    ],
+    "metadata": {
+      "id": "lore.history.events.creation_of_rackwick_city",
+      "title": "Creation of Rackwick City",
+      "canon_level": "hard",
+      "entity_ids": [],
+      "location_ids": [
+        "locations.rackwick_city"
+      ],
+      "faction_ids": [],
+      "time_period": "the-fall",
+      "tags": [
+        "founding",
+        "history",
+        "rackwick_city"
+      ],
+      "beat_ids": []
+    }
+  },
+  {
+    "chunkId": "lore.history.events.creation_of_rackwick_city#notes",
+    "pageId": "lore.history.events.creation_of_rackwick_city",
+    "title": "Creation of Rackwick City",
+    "canonLevel": "hard",
+    "sourceFile": "history/events/creation_of_rackwick_city.md",
+    "sourceRepo": "git@github.com:nikkileaps/rackwick-lore.git",
+    "sourceCommit": "77db7b89c81a4b592844660742f91633bdf2f4d9",
+    "sourceRef": "refs/heads/main",
+    "sectionHeading": "Notes",
+    "content": "The dragon turned to stone and is the mountain range that encircles the valley that Rackwick City is located in. Magic exists on the Great Head and it causes Rackwick City to be a living entity with its own strange kind of sentience.",
+    "summary": "The dragon turned to stone and is the mountain range that encircles the valley that Rackwick City is located in.",
+    "tokens": [
+      "the",
+      "dragon",
+      "turned",
+      "stone",
+      "and",
+      "the",
+      "mountain",
+      "range",
+      "that",
+      "encircles",
+      "the",
+      "valley",
+      "that",
+      "rackwick",
+      "city",
+      "located",
+      "magic",
+      "exists",
+      "the",
+      "great",
+      "head",
+      "and",
+      "causes",
+      "rackwick",
+      "city",
+      "living",
+      "entity",
+      "with",
+      "its",
+      "own",
+      "strange",
+      "kind",
+      "sentience"
+    ],
+    "metadata": {
+      "id": "lore.history.events.creation_of_rackwick_city",
+      "title": "Creation of Rackwick City",
+      "canon_level": "hard",
+      "entity_ids": [],
+      "location_ids": [
+        "locations.rackwick_city"
+      ],
+      "faction_ids": [],
+      "time_period": "the-fall",
+      "tags": [
+        "founding",
+        "history",
+        "rackwick_city"
+      ],
+      "beat_ids": []
+    }
+  }
+]

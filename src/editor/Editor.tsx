@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef } from 'react';
-import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, ActionIcon, ScrollArea } from '@mantine/core';
+import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, Textarea, ActionIcon, ScrollArea, Switch } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
 import type { EditorTab } from './store/useEditorStore';
@@ -26,6 +26,7 @@ import { ProjectExplorer } from './components/ProjectExplorer';
 import { EpisodeDialog } from './components/EpisodeDialog';
 import { EpisodeDetailsDialog } from './components/EpisodeDetailsDialog';
 import { PreviewManager } from './PreviewManager';
+import type { PluginConfigData } from './store/useEditorStore';
 
 const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'dialogues', label: 'Dialogues', icon: '💬' },
@@ -39,6 +40,14 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
 ];
+
+const AVAILABLE_PLUGINS = [
+  {
+    id: 'sugaragent',
+    name: 'SugarAgent',
+    description: 'Agentic NPC conversation, memory, lore retrieval, and beat contracts.',
+  },
+] as const;
 
 const theme = createTheme({
   primaryColor: 'blue',
@@ -62,6 +71,50 @@ const theme = createTheme({
   },
 });
 
+function normalizePlugins(rawPlugins: unknown): PluginConfigData[] {
+  if (!Array.isArray(rawPlugins)) return [];
+  const normalized: PluginConfigData[] = [];
+
+  for (const entry of rawPlugins) {
+    if (typeof entry === 'string') {
+      const id = entry.trim();
+      if (id.length > 0) {
+        normalized.push({ id, enabled: true });
+      }
+      continue;
+    }
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== 'string' || record.id.trim().length === 0) continue;
+    normalized.push({
+      ...record,
+      id: record.id.trim(),
+      enabled: record.enabled === false ? false : true,
+    } as PluginConfigData);
+  }
+
+  return normalized;
+}
+
+function isPluginEnabled(plugins: PluginConfigData[], pluginId: string): boolean {
+  const id = pluginId.trim();
+  return plugins.some((entry) => entry.id === id && entry.enabled !== false);
+}
+
+function parseStringList(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeStringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0);
+}
+
 export function Editor() {
   const activeTab = useEditorStore((s) => s.activeTab);
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
@@ -81,6 +134,8 @@ export function Editor() {
   const setSeasons = useEditorStore((s) => s.setSeasons);
   const episodes = useEditorStore((s) => s.episodes);
   const setEpisodes = useEditorStore((s) => s.setEpisodes);
+  const plugins = useEditorStore((s) => s.plugins);
+  const setPlugins = useEditorStore((s) => s.setPlugins);
   const regions = useEditorStore((s) => s.regions);
   const setRegions = useEditorStore((s) => s.setRegions);
   const playerCaster = useEditorStore((s) => s.playerCaster);
@@ -117,6 +172,7 @@ export function Editor() {
   // New project dialog state (for creating from menu)
   const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('My Game');
+  const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
 
   // Get current episode
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId);
@@ -142,6 +198,7 @@ export function Editor() {
       },
       seasons,
       episodes,
+      plugins,
       dialogues,
       quests,
       npcs,
@@ -195,6 +252,7 @@ export function Editor() {
 
     setSeasons([newSeason]);
     setEpisodes([newEpisode]);
+    setPlugins([]);
     setNPCs([]);
     setDialogues([]);
     setQuests([]);
@@ -252,6 +310,7 @@ export function Editor() {
       },
       seasons,
       episodes,
+      plugins,
       npcs,
       dialogues,
       quests,
@@ -312,6 +371,7 @@ export function Editor() {
       defaultEpisode: currentEpisodeId,
       seasons,
       episodes,
+      plugins,
       dialogues,
       quests,
       npcs,
@@ -439,6 +499,7 @@ export function Editor() {
 
       setSeasons(loadedSeasons);
       setEpisodes(loadedEpisodes);
+      setPlugins(normalizePlugins(data.plugins));
 
       // Load other data
       setNPCs(data.npcs || []);
@@ -488,6 +549,52 @@ export function Editor() {
   const triggerList = regions.flatMap((r) =>
     (r.triggers ?? []).map((t) => ({ id: t.id, name: t.name || t.id }))
   );
+
+  const handleSetPluginEnabled = (pluginId: string, enabled: boolean) => {
+    const existing = plugins.find((entry) => entry.id === pluginId);
+    const nextPlugins = plugins.filter((entry) => entry.id !== pluginId);
+    if (!enabled && !existing) {
+      setPlugins(nextPlugins);
+      setDirty(true);
+      return;
+    }
+    nextPlugins.push({
+      ...(existing ?? {}),
+      id: pluginId,
+      enabled,
+    });
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
+
+  const getPluginConfig = (pluginId: string): PluginConfigData | null => (
+    plugins.find((entry) => entry.id === pluginId) ?? null
+  );
+
+  const sugarAgentPluginConfig = getPluginConfig('sugaragent');
+  const sugarAgentGlobalSafetyBounds = normalizeStringArrayValue(
+    sugarAgentPluginConfig?.globalSafetyBounds ?? sugarAgentPluginConfig?.safetyBounds,
+  );
+
+  const handleSetSugarAgentGlobalSafetyBounds = (value: string) => {
+    const nextBounds = parseStringList(value);
+    const existing = sugarAgentPluginConfig;
+    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
+    const nextConfig: PluginConfigData = {
+      ...(existing ?? {}),
+      id: 'sugaragent',
+      enabled: existing?.enabled === false ? false : true,
+    };
+    if (nextBounds.length > 0) {
+      nextConfig.globalSafetyBounds = nextBounds;
+    } else {
+      delete nextConfig.globalSafetyBounds;
+    }
+    delete nextConfig.safetyBounds;
+    nextPlugins.push(nextConfig);
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
 
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
@@ -605,6 +712,7 @@ export function Editor() {
                                         onNewProject={() => setNewProjectDialogOpen(true)}
                                         onOpenProject={handleOpenProjectFromFile}
                                         onSaveProject={handleSaveProject}
+                                        onManagePlugins={() => setPluginsDialogOpen(true)}
                                         projectLoaded={projectLoaded}
                                       />
 
@@ -816,6 +924,63 @@ export function Editor() {
               Create
             </Button>
           </Group>
+        </Stack>
+      </Modal>
+
+      {/* Plugins Dialog */}
+      <Modal
+        opened={pluginsDialogOpen}
+        onClose={() => setPluginsDialogOpen(false)}
+        title="Plugins"
+        centered
+        styles={{
+          header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
+          title: { color: '#cdd6f4', fontWeight: 600 },
+          body: { background: '#1e1e2e', padding: '20px' },
+          content: { background: '#1e1e2e' },
+          close: { color: '#6c7086', '&:hover': { background: '#313244' } },
+        }}
+      >
+        <Stack gap="md">
+          {AVAILABLE_PLUGINS.map((plugin) => (
+            <Group
+              key={plugin.id}
+              align="stretch"
+              style={{
+                border: '1px solid #313244',
+                background: '#181825',
+                borderRadius: 8,
+                padding: 12,
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <Group justify="space-between" align="flex-start" gap="md">
+                <Stack gap={2} style={{ flex: 1 }}>
+                  <Text size="sm" fw={600}>{plugin.name}</Text>
+                  <Text size="xs" c="dimmed">{plugin.description}</Text>
+                </Stack>
+                <Switch
+                  checked={isPluginEnabled(plugins, plugin.id)}
+                  onChange={(event) => handleSetPluginEnabled(plugin.id, event.currentTarget.checked)}
+                  disabled={!projectLoaded}
+                />
+              </Group>
+
+              {plugin.id === 'sugaragent' && (
+                <Textarea
+                  label="Global Safety Bounds"
+                  description="Baseline safety policy applied to all SugarAgent NPCs (one per line or comma-separated)."
+                  value={sugarAgentGlobalSafetyBounds.join('\n')}
+                  onChange={(event) => handleSetSugarAgentGlobalSafetyBounds(event.currentTarget.value)}
+                  placeholder={'No profanity\nNo legal advice\nNo medical advice'}
+                  minRows={3}
+                  autosize
+                  disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
+                />
+              )}
+            </Group>
+          ))}
         </Stack>
       </Modal>
 

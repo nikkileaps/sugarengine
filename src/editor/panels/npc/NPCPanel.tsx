@@ -27,6 +27,14 @@ export interface NPCEntry {
   faction?: string;
   behaviorTree?: BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
+  interactionMode?: 'scripted' | 'agent' | 'hybrid';
+  agentProfile?: {
+    persona?: string;
+    tone?: string;
+    constraints?: string[];
+    safetyBounds?: string[]; // Legacy alias, accepted for backward compatibility.
+    loreScopes?: string[];
+  };
   model?: string;
   modelHeight?: number;
   animations?: Record<string, string>;

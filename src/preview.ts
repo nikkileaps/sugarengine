@@ -14,6 +14,7 @@ import {
   LoadingScreen,
 } from './engine';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
+import { buildRuntimePluginsFromProject } from './plugins/runtime';
 
 interface ProjectMessage {
   type: 'LOAD_PROJECT' | 'UPDATE_PROJECT';
@@ -25,6 +26,7 @@ let gameInstance: Game | null = null;
 
 async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
+  const runtimePlugins = buildRuntimePluginsFromProject(projectData);
 
   const isDevelopmentMode = !!projectData;
 
@@ -85,6 +87,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     mode: isDevelopmentMode ? 'development' : 'production',
     projectData,
     currentEpisode: episodeId,
+    plugins: runtimePlugins,
     titleScreen: {
       ...DEFAULT_GAME_CONFIG.titleScreen,
       ...projectTitleScreen,

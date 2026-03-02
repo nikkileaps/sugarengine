@@ -22,11 +22,19 @@ import { FadeOverlay } from '../ui/FadeOverlay';
 import { PluginManager, PluginSystem } from '../plugins';
 import type {
   EnginePlugin,
+  PluginAgentTurnResult,
   PluginEvent,
   PluginIntent,
   PluginIntentResult,
   PluginInteractionResolution,
 } from '../plugins';
+import {
+  evaluateAgentBeatCompletion,
+  parseRuntimeAgentBeatContracts,
+  selectActiveAgentBeatContract,
+  shouldFallbackToScriptedForBeat,
+} from './agentBeatRuntime';
+import type { RuntimeAgentBeatContract } from './agentBeatRuntime';
 
 export interface TitleScreenConfig {
   /** Camera position for title screen (world coordinates) */
@@ -68,6 +76,21 @@ export interface GameEventHandlers {
   onDialogueEvent?: (eventName: string) => void;
   onSpellCast?: (spell: SpellDefinition, result: SpellResult) => void;
   onChaosTriggered?: (spell: SpellDefinition, chaosEffect: SpellEffect) => void;
+  onAgentConversationStart?: (session: { npcId: string; npcName?: string }) => void;
+  onAgentConversationEnd?: () => void;
+}
+
+type NPCInteractionMode = 'scripted' | 'agent' | 'hybrid';
+
+function normalizeNPCInteractionMode(raw: unknown): NPCInteractionMode {
+  if (raw === 'agent' || raw === 'hybrid') {
+    return raw;
+  }
+  return 'scripted';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 /**
@@ -96,8 +119,10 @@ export class Game {
   private playerCasterConfig: PlayerCasterConfig | null = null;
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
+  private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
   private fadeOverlay: FadeOverlay;
   private pluginManager: PluginManager | null = null;
+  private agentBeatContractsByNpc = new Map<string, RuntimeAgentBeatContract[]>();
 
   // World state (ADR-018)
   readonly flags: FlagsManager;
@@ -110,6 +135,7 @@ export class Game {
     objectiveId: string;
     completeOn: 'dialogueEnd' | string;
   } | null = null;
+  private activeAgentConversation: { npcId: string; npcName?: string } | null = null;
 
   constructor(config: GameConfig) {
     this.config = config;
@@ -255,7 +281,17 @@ export class Game {
     const project = projectData as {
       dialogues?: { id: string }[];
       quests?: { id: string }[];
-      npcs?: { id: string; name: string; defaultDialogue?: string; behaviorTree?: import('../behavior').BTNode; behaviorMode?: import('../components').BehaviorMode; model?: string; modelHeight?: number; animations?: Record<string, string> }[];
+      npcs?: {
+        id: string;
+        name: string;
+        defaultDialogue?: string;
+        behaviorTree?: import('../behavior').BTNode;
+        behaviorMode?: import('../components').BehaviorMode;
+        model?: string;
+        modelHeight?: number;
+        animations?: Record<string, string>;
+        interactionMode?: NPCInteractionMode;
+      }[];
       items?: { id: string; name: string; model?: string; modelScale?: number; modelColor?: string; view?: import('../inventory/types').ItemView }[];
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[]; model?: string; modelScale?: number; modelColor?: string }[];
       regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; resonancePoints?: { id: string; resonancePointId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; vfxSpawns?: { id: string; vfxId: string; position: { x: number; y: number; z: number }; scale?: number; autoPlay?: boolean }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
@@ -264,6 +300,8 @@ export class Game {
       playerAnimations?: Record<string, string>;
       spells?: unknown[];
     };
+
+    this.agentBeatContractsByNpc = parseRuntimeAgentBeatContracts(projectData);
 
     // Set player model if specified in project data
     if (project.playerModel) {
@@ -308,9 +346,14 @@ export class Game {
       }
     }
 
-    // Register NPCs
+    // Register NPCs and optional interaction routing mode.
+    this.npcInteractionModes.clear();
     if (project.npcs) {
       for (const npc of project.npcs) {
+        this.npcInteractionModes.set(
+          npc.id,
+          normalizeNPCInteractionMode(npc.interactionMode),
+        );
         this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode, npc.model, npc.modelHeight, npc.animations);
       }
     }
@@ -407,6 +450,150 @@ export class Game {
     return this.nearbyNpcId;
   }
 
+  isAgentConversationActive(): boolean {
+    return this.activeAgentConversation !== null;
+  }
+
+  getActiveAgentConversation(): { npcId: string; npcName?: string } | null {
+    return this.activeAgentConversation ? { ...this.activeAgentConversation } : null;
+  }
+
+  closeAgentConversation(): void {
+    if (!this.activeAgentConversation) return;
+    this.activeAgentConversation = null;
+    this.engine.removeMovementLock('agentConversation');
+    this.eventHandlers.onAgentConversationEnd?.();
+  }
+
+  async submitAgentConversationTurn(playerMessage: string): Promise<PluginAgentTurnResult> {
+    const active = this.activeAgentConversation;
+    if (!active || !this.pluginManager) {
+      return {
+        utterance: 'I cannot continue this conversation right now.',
+        emotion: 'neutral',
+        intent: 'fallback',
+      };
+    }
+
+    const message = playerMessage.trim();
+    if (!message) {
+      return {
+        utterance: 'Could you say that again?',
+        emotion: 'neutral',
+        intent: 'clarify',
+      };
+    }
+
+    const activeBeatContract = selectActiveAgentBeatContract({
+      npcId: active.npcId,
+      activeQuests: this.quests
+        .getActiveQuests()
+        .map((quest) => ({ questId: quest.questId, currentStageId: quest.currentStageId })),
+      contractsByNpc: this.agentBeatContractsByNpc,
+      getObjectiveState: (questId, objectiveId) => this.quests.getObjectiveState(questId, objectiveId),
+    });
+
+    const beatSessionKey = activeBeatContract
+      ? `${active.npcId}:${activeBeatContract.id}`
+      : null;
+    const nextBeatTurnCount = beatSessionKey && activeBeatContract
+      ? this.getPersistedSugarAgentBeatTurnCount(active.npcId, activeBeatContract.id) + 1
+      : undefined;
+
+    if (
+      activeBeatContract
+      && nextBeatTurnCount !== undefined
+      && shouldFallbackToScriptedForBeat(activeBeatContract, nextBeatTurnCount)
+    ) {
+      if (activeBeatContract.fallbackScriptId) {
+        this.dialogue.start(activeBeatContract.fallbackScriptId);
+      }
+      this.closeAgentConversation();
+      return {
+        utterance: 'Let us continue this through the scripted briefing.',
+        emotion: 'neutral',
+        intent: 'fallback',
+      };
+    }
+
+    const result = await this.pluginManager.runAgentTurn({
+      npcId: active.npcId,
+      npcName: active.npcName,
+      playerMessage: message,
+      beatContract: activeBeatContract ?? undefined,
+      beatTurnCount: nextBeatTurnCount,
+    });
+
+    if (result) {
+      if (activeBeatContract && result.beatEvidence) {
+        const evaluation = evaluateAgentBeatCompletion(
+          activeBeatContract,
+          result.beatEvidence,
+          (flagName) => this.flags.get(flagName),
+        );
+
+        if (evaluation.passed && activeBeatContract.objectiveId) {
+          const objectiveState = this.quests.getObjectiveState(
+            activeBeatContract.questId,
+            activeBeatContract.objectiveId,
+          );
+          if (objectiveState === 'active') {
+            this.quests.completeObjective(
+              activeBeatContract.questId,
+              activeBeatContract.objectiveId,
+            );
+          }
+        }
+      }
+
+      this.emitPluginEvent({
+        type: 'interactionHandled',
+        npcId: active.npcId,
+        source: 'plugin',
+        detail: 'agent-turn',
+      });
+      return result;
+    }
+
+    return {
+      utterance: 'I lost my train of thought. Could you try again?',
+      emotion: 'neutral',
+      intent: 'fallback',
+    };
+  }
+
+  private getPersistedSugarAgentBeatTurnCount(npcId: string, beatId: string): number {
+    if (!this.pluginManager) return 0;
+
+    const pluginState = this.pluginManager.serializeState();
+    const sugaragent = pluginState.sugaragent;
+    if (!isRecord(sugaragent) || !isRecord(sugaragent.dialogueSessions)) {
+      return 0;
+    }
+
+    const sessions = sugaragent.dialogueSessions;
+    const sessionKey = `${npcId}:${beatId}`;
+    const session = sessions[sessionKey] ?? sessions[npcId];
+    if (!isRecord(session) || typeof session.turnCount !== 'number' || !Number.isFinite(session.turnCount)) {
+      return 0;
+    }
+
+    return Math.max(0, Math.floor(session.turnCount));
+  }
+
+  private startAgentConversation(session: { npcId: string; npcName?: string }): void {
+    this.activeAgentConversation = {
+      npcId: session.npcId,
+      npcName: session.npcName,
+    };
+    this.engine.addMovementLock('agentConversation');
+    this.eventHandlers.onAgentConversationStart?.({ ...this.activeAgentConversation });
+  }
+
+  private getNpcInteractionMode(npcId: string): NPCInteractionMode {
+    return this.npcInteractionModes.get(npcId) ?? 'scripted';
+  }
+
   /**
    * Set handler for when nearby interaction changes (for showing/hiding prompts)
    */
@@ -425,14 +612,17 @@ export class Game {
 
     // For NPCs, available if there's dialogue or a behavior tree to evaluate
     if (type === 'npc') {
+      const interactionMode = this.getNpcInteractionMode(id);
       const hasQuestDialogue = this.quests.getQuestDialogueForNpc(id) !== null;
       const hasDefaultDialogue = !!dialogueId;
       const hasBehaviorTree = this.engine.hasNPCBehaviorTree(id);
+      const canUsePlugin = this.pluginManager !== null
+        && (interactionMode === 'agent' || interactionMode === 'hybrid');
       return {
         type,
         id,
         promptText,
-        available: hasQuestDialogue || hasDefaultDialogue || hasBehaviorTree,
+        available: hasQuestDialogue || hasDefaultDialogue || hasBehaviorTree || canUsePlugin,
       };
     }
 
@@ -447,7 +637,8 @@ export class Game {
     return (
       this.sceneManager.isBlocking() ||
       this.dialogue.isDialogueActive() ||
-      this.inspection.isInspectionActive()
+      this.inspection.isInspectionActive() ||
+      this.isAgentConversationActive()
     );
   }
 
@@ -1280,6 +1471,7 @@ export class Game {
     if (this.isUIBlocking()) return;
     this.audio.play('interact');
     this.emitPluginEvent({ type: 'interactionAttempt', npcId, npcDefaultDialogue });
+    const interactionMode = this.getNpcInteractionMode(npcId);
 
     // 1) Quest-specific dialogue takes absolute priority.
     const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
@@ -1295,15 +1487,19 @@ export class Game {
     }
 
     // 2) Scripted behavior tree interaction (existing ADR-017 path).
-    const btAction = this.engine.evaluateNPCBehavior(npcId);
-    if (btAction) {
-      this.executeBTAction(btAction, npcId);
-      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
-      return;
+    // "agent" mode bypasses BT to prioritize plugin free-form interaction.
+    if (interactionMode !== 'agent') {
+      const btAction = this.engine.evaluateNPCBehavior(npcId);
+      if (btAction) {
+        this.executeBTAction(btAction, npcId);
+        this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
+        return;
+      }
     }
 
-    // 3) Optional plugin handling.
-    if (this.pluginManager) {
+    // 3) Optional plugin handling (enabled in agent/hybrid modes only).
+    const canUsePlugin = interactionMode === 'agent' || interactionMode === 'hybrid';
+    if (this.pluginManager && canUsePlugin) {
       const npcInfo = this.engine.getNPCInfo(npcId);
       const resolution = await this.pluginManager.resolveInteraction({
         npcId,
@@ -1350,6 +1546,13 @@ export class Game {
       }
 
       case 'handled':
+        return true;
+
+      case 'openAgentConversation':
+        this.startAgentConversation({
+          npcId: resolution.npcId,
+          npcName: resolution.npcName,
+        });
         return true;
 
       default:
@@ -1444,6 +1647,7 @@ export class Game {
    * Dispose all systems
    */
   dispose(): void {
+    this.closeAgentConversation();
     if (this.pluginManager) {
       void this.pluginManager.dispose();
     }

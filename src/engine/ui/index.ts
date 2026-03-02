@@ -15,3 +15,4 @@ export { CasterHUD } from './CasterHUD';
 export { ResonanceGameUI } from './ResonanceGameUI';
 export { FadeOverlay } from './FadeOverlay';
 export { ControlsHint } from './ControlsHint';
+export { AgentConversationUI } from './AgentConversationUI';

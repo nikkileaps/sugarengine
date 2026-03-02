@@ -8,6 +8,7 @@ interface ProjectMenuProps {
   onNewProject: () => void;
   onOpenProject: () => void;
   onSaveProject: () => void;
+  onManagePlugins: () => void;
   projectLoaded: boolean;
 }
 
@@ -15,6 +16,7 @@ export function ProjectMenu({
   onNewProject,
   onOpenProject,
   onSaveProject,
+  onManagePlugins,
   projectLoaded,
 }: ProjectMenuProps) {
   return (
@@ -62,6 +64,13 @@ export function ProjectMenu({
           disabled={!projectLoaded}
         >
           Save Project
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<span>🧩</span>}
+          onClick={onManagePlugins}
+          disabled={!projectLoaded}
+        >
+          Plugins
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>

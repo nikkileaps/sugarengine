@@ -58,6 +58,57 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
     onChange({ ...npc, [field]: value || undefined });
   };
 
+  const parseList = (value: string): string[] => (
+    value
+      .split(/\r?\n|,/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  );
+
+  const normalizeOptionalText = (value: string | undefined): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    return value.trim().length === 0 ? undefined : value;
+  };
+
+  const updateAgentProfile = (updates: Partial<NonNullable<NPCEntry['agentProfile']>>) => {
+    const current = npc.agentProfile ?? {};
+    const currentConstraints = Array.isArray(current.constraints)
+      ? current.constraints
+      : Array.isArray(current.safetyBounds)
+        ? current.safetyBounds
+        : undefined;
+    const next = {
+      persona: updates.persona ?? current.persona,
+      tone: updates.tone ?? current.tone,
+      constraints: updates.constraints ?? currentConstraints,
+      loreScopes: updates.loreScopes ?? current.loreScopes,
+    };
+
+    const normalized = {
+      persona: normalizeOptionalText(next.persona),
+      tone: normalizeOptionalText(next.tone),
+      constraints: Array.isArray(next.constraints) && next.constraints.length > 0
+        ? next.constraints
+        : undefined,
+      loreScopes: Array.isArray(next.loreScopes) && next.loreScopes.length > 0
+        ? next.loreScopes
+        : undefined,
+    };
+
+    const hasData = !!(
+      normalized.persona
+      || normalized.tone
+      || normalized.constraints
+      || normalized.loreScopes
+    );
+
+    onChange({
+      ...npc,
+      agentProfile: hasData ? normalized : undefined,
+    });
+    setDirty(true);
+  };
+
   // If showing behavior tree editor, render that instead
   if (showBehaviorTree) {
     return (
@@ -343,6 +394,82 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                       Create Behavior Tree
                     </Button>
                   )}
+                </Stack>
+              </Paper>
+
+              {/* SugarAgent Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="md">
+                  SugarAgent
+                </Text>
+                <Stack gap="sm">
+                  <Select
+                    label="Interaction Mode"
+                    description="Scripted keeps current behavior. Agent/Hybrid enables SugarAgent routing."
+                    data={[
+                      { value: 'scripted', label: 'Scripted' },
+                      { value: 'hybrid', label: 'Hybrid (Scripted then Agent)' },
+                      { value: 'agent', label: 'Agent (Plugin-first)' },
+                    ]}
+                    value={npc.interactionMode || 'scripted'}
+                    onChange={(value) => {
+                      onChange({
+                        ...npc,
+                        interactionMode: (value as NPCEntry['interactionMode']) || 'scripted',
+                      });
+                      setDirty(true);
+                    }}
+                    size="sm"
+                  />
+
+                  <Textarea
+                    label="Agent Persona"
+                    description="Optional style/persona guidance for this NPC."
+                    value={npc.agentProfile?.persona || ''}
+                    onChange={(e) => updateAgentProfile({ persona: e.currentTarget.value })}
+                    placeholder="Warm neighborhood baker who notices small details..."
+                    minRows={2}
+                    autosize
+                    size="sm"
+                  />
+
+                  <TextInput
+                    label="Agent Tone"
+                    value={npc.agentProfile?.tone || ''}
+                    onChange={(e) => updateAgentProfile({ tone: e.currentTarget.value })}
+                    placeholder="friendly, grounded, concise"
+                    size="sm"
+                  />
+
+                  <Textarea
+                    label="Constraints"
+                    description="NPC-specific constraints (one per line or comma-separated)."
+                    value={(
+                      npc.agentProfile?.constraints
+                      || npc.agentProfile?.safetyBounds
+                      || []
+                    ).join('\n')}
+                    onChange={(e) => updateAgentProfile({ constraints: parseList(e.currentTarget.value) })}
+                    placeholder={'Do not reveal Captain Rowan\'s hidden identity before beat.gate_reveal'}
+                    minRows={2}
+                    autosize
+                    size="sm"
+                  />
+
+                  <Textarea
+                    label="Lore Scopes"
+                    description="One per line (or comma-separated)."
+                    value={(npc.agentProfile?.loreScopes || []).join('\n')}
+                    onChange={(e) => updateAgentProfile({ loreScopes: parseList(e.currentTarget.value) })}
+                    placeholder={'town.history\nnpc.baker'}
+                    minRows={2}
+                    autosize
+                    size="sm"
+                  />
                 </Stack>
               </Paper>
             </Stack>

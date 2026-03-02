@@ -22,9 +22,49 @@ export interface PluginIntentResult {
   error?: string;
 }
 
+export interface PluginAgentTurnRequest {
+  npcId: string;
+  npcName?: string;
+  playerMessage: string;
+  beatContract?: PluginAgentBeatContract;
+  beatTurnCount?: number;
+}
+
+export interface PluginAgentBeatContract {
+  id: string;
+  questId: string;
+  npcId: string;
+  objective: string;
+  requiredFacts: string[];
+  forbiddenFacts?: string[];
+  completionRule: 'player_ack' | 'player_action' | 'engine_flag';
+  completionTarget?: string;
+  maxTurns?: number;
+  fallbackScriptId?: string;
+  stageId?: string;
+  objectiveId?: string;
+}
+
+export interface PluginAgentBeatEvidence {
+  beatId?: string;
+  coveredFacts: string[];
+  uncoveredFacts: string[];
+  completionSignal: 'none' | 'player_ack' | 'player_action' | 'engine_flag';
+  confidence: number;
+}
+
+export interface PluginAgentTurnResult {
+  utterance: string;
+  emotion?: string;
+  intent?: string;
+  citations?: Array<{ sourceId: string; snippet?: string }>;
+  beatEvidence?: PluginAgentBeatEvidence;
+}
+
 export type PluginInteractionResolution =
   | { type: 'startDialogue'; dialogueId: string }
   | { type: 'intent'; intent: PluginIntent }
+  | { type: 'openAgentConversation'; npcId: string; npcName?: string }
   | { type: 'handled' };
 
 export interface InteractionRequest {
@@ -77,6 +117,7 @@ export interface EnginePlugin {
   onUpdate?(delta: number): void;
   onEvent?(event: PluginEvent): void;
   resolveInteraction?(request: InteractionRequest): PluginInteractionResolution | null | Promise<PluginInteractionResolution | null>;
+  runAgentTurn?(request: PluginAgentTurnRequest): PluginAgentTurnResult | null | Promise<PluginAgentTurnResult | null>;
   serializeState?(): unknown;
   loadState?(state: unknown): void;
 }

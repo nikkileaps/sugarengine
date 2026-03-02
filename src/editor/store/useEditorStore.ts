@@ -24,6 +24,14 @@ export interface NPCData {
   faction?: string;
   behaviorTree?: import('../../engine/behavior/types').BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
+  interactionMode?: 'scripted' | 'agent' | 'hybrid';
+  agentProfile?: {
+    persona?: string;
+    tone?: string;
+    constraints?: string[];
+    safetyBounds?: string[]; // Legacy alias, accepted for backward compatibility.
+    loreScopes?: string[];
+  };
   model?: string;
   modelHeight?: number;
   animations?: Record<string, string>;
@@ -44,6 +52,19 @@ export interface QuestData {
     objectives: { id: string; type: string; target: string; description: string }[];
   }[];
   episodeId?: string;
+  agentBeatContracts?: {
+    id: string;
+    npcId: string;
+    objective: string;
+    requiredFacts: string[];
+    forbiddenFacts?: string[];
+    completionRule: 'player_ack' | 'player_action' | 'engine_flag';
+    completionTarget?: string;
+    maxTurns?: number;
+    fallbackScriptId?: string;
+    stageId?: string;
+    objectiveId?: string;
+  }[];
 }
 
 export interface ItemData {
@@ -177,6 +198,12 @@ export interface EpisodeData {
   };
 }
 
+export interface PluginConfigData {
+  id: string;
+  enabled?: boolean;
+  [key: string]: unknown;
+}
+
 interface EditorState {
   // UI state
   activeTab: EditorTab;
@@ -192,6 +219,7 @@ interface EditorState {
   // Project data
   seasons: SeasonData[];
   episodes: EpisodeData[];
+  plugins: PluginConfigData[];
   npcs: NPCData[];
   dialogues: DialogueData[];
   quests: QuestData[];
@@ -231,6 +259,7 @@ interface EditorState {
   // Data actions
   setSeasons: (seasons: SeasonData[]) => void;
   setEpisodes: (episodes: EpisodeData[]) => void;
+  setPlugins: (plugins: PluginConfigData[]) => void;
   updateEpisode: (id: string, updates: Partial<EpisodeData>) => void;
   setNPCs: (npcs: NPCData[]) => void;
   setDialogues: (dialogues: DialogueData[]) => void;
@@ -263,6 +292,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   // Project data
   seasons: [],
   episodes: [],
+  plugins: [],
   npcs: [],
   dialogues: [],
   quests: [],
@@ -293,6 +323,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   // Data actions
   setSeasons: (seasons) => set({ seasons }),
   setEpisodes: (episodes) => set({ episodes }),
+  setPlugins: (plugins) => set({ plugins }),
   updateEpisode: (id, updates) => set((state) => ({
     episodes: state.episodes.map((e) => (e.id === id ? { ...e, ...updates } : e)),
   })),

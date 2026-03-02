@@ -7,10 +7,15 @@
 
 import { Game } from './engine';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
+import { buildRuntimePluginsFromProject } from './plugins/runtime';
 
 interface GameData {
   title?: string;
   defaultEpisode?: string;
+  plugins?: unknown[];
+  sugaragent?: {
+    enabled?: boolean;
+  };
   episodes?: {
     id: string;
     startRegion?: string;
@@ -39,6 +44,7 @@ async function loadGameData(): Promise<GameData> {
 
 async function runGame(gameData: GameData) {
   const container = document.getElementById('app')!;
+  const runtimePlugins = buildRuntimePluginsFromProject(gameData);
 
   // Determine start region from default episode
   const episodeId = gameData.defaultEpisode || gameData.episodes?.[0]?.id;
@@ -67,6 +73,7 @@ async function runGame(gameData: GameData) {
     mode: 'development', // Use 'development' to enable projectData loading
     projectData: gameData,
     currentEpisode: episodeId,
+    plugins: runtimePlugins,
     titleScreen: {
       ...DEFAULT_GAME_CONFIG.titleScreen,
       ...gameData.titleScreen,

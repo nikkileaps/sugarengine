@@ -99,6 +99,19 @@ export interface QuestEntry {
   stages: QuestStage[];
   rewards?: QuestReward[];
   episodeId?: string;
+  agentBeatContracts?: {
+    id: string;
+    npcId: string;
+    objective: string;
+    requiredFacts: string[];
+    forbiddenFacts?: string[];
+    completionRule: 'player_ack' | 'player_action' | 'engine_flag';
+    completionTarget?: string;
+    maxTurns?: number;
+    fallbackScriptId?: string;
+    stageId?: string;
+    objectiveId?: string;
+  }[];
 }
 
 export interface QuestPanelResult {
@@ -186,6 +199,29 @@ export function validateQuest(quest: QuestEntry): string[] {
         warnings.push(`Stage "${stage.id}" has no entry nodes (all nodes have prerequisites)`);
       }
 
+    }
+  }
+
+  if (Array.isArray(quest.agentBeatContracts) && quest.agentBeatContracts.length > 0) {
+    const seenIds = new Set<string>();
+    for (const contract of quest.agentBeatContracts) {
+      if (!contract.id || contract.id.trim().length === 0) {
+        warnings.push('A SugarAgent beat contract is missing an id');
+        continue;
+      }
+      if (seenIds.has(contract.id)) {
+        warnings.push(`Duplicate SugarAgent beat contract id "${contract.id}"`);
+      }
+      seenIds.add(contract.id);
+      if (!contract.npcId || contract.npcId.trim().length === 0) {
+        warnings.push(`Beat contract "${contract.id}" is missing npcId`);
+      }
+      if (!contract.objective || contract.objective.trim().length === 0) {
+        warnings.push(`Beat contract "${contract.id}" is missing objective text`);
+      }
+      if (!Array.isArray(contract.requiredFacts) || contract.requiredFacts.length === 0) {
+        warnings.push(`Beat contract "${contract.id}" must include at least one required fact`);
+      }
     }
   }
 

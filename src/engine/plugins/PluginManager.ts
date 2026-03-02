@@ -1,6 +1,8 @@
 import {
   EnginePlugin,
   PLUGIN_API_VERSION,
+  PluginAgentTurnRequest,
+  PluginAgentTurnResult,
   PluginEvent,
   PluginHostContext,
   PluginInteractionResolution,
@@ -118,6 +120,23 @@ export class PluginManager {
         }
       } catch (error) {
         console.error(`[PluginManager] Plugin "${plugin.descriptor.id}" failed in resolveInteraction`, error);
+      }
+    }
+
+    return null;
+  }
+
+  async runAgentTurn(request: PluginAgentTurnRequest): Promise<PluginAgentTurnResult | null> {
+    for (const plugin of this.plugins) {
+      if (!plugin.runAgentTurn) continue;
+
+      try {
+        const result = await plugin.runAgentTurn(request);
+        if (result) {
+          return result;
+        }
+      } catch (error) {
+        console.error(`[PluginManager] Plugin "${plugin.descriptor.id}" failed in runAgentTurn`, error);
       }
     }
 

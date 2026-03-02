@@ -39,6 +39,7 @@ import {
   CasterHUD,
   ResonanceGameUI,
   ControlsHint,
+  AgentConversationUI,
 } from './engine';
 
 export function setupGameUI(game: Game, container: HTMLElement) {
@@ -53,10 +54,14 @@ export function setupGameUI(game: Game, container: HTMLElement) {
   const giftUI = new GiftUI(container, game.inventory);
   const itemViewUI = new ItemViewUI(container);
   const spellMenuUI = new SpellMenuUI(container, game.caster);
+  const agentConversationUI = new AgentConversationUI(container);
   new CasterHUD(container, game.caster);
   const resonanceGameUI = new ResonanceGameUI(container);
   const controlsHint = new ControlsHint(container);
   controlsHint.hide(); // Hidden until gameplay starts
+
+  agentConversationUI.setOnSubmit((message) => game.submitAgentConversationTurn(message));
+  agentConversationUI.setOnClose(() => game.closeAgentConversation());
 
   // ========================================
   // Game Event Handlers → UI Updates
@@ -75,6 +80,12 @@ export function setupGameUI(game: Game, container: HTMLElement) {
     },
     onItemAdded: (itemName, quantity) => {
       itemNotification.show(itemName, quantity);
+    },
+    onAgentConversationStart: (session) => {
+      agentConversationUI.show(session);
+    },
+    onAgentConversationEnd: () => {
+      agentConversationUI.hide();
     },
   });
 
@@ -135,6 +146,7 @@ export function setupGameUI(game: Game, container: HTMLElement) {
     itemViewUI.isVisible() ||
     giftUI.isVisible() ||
     spellMenuUI.isVisible() ||
+    agentConversationUI.isVisible() ||
     resonanceGameUI.isActive();
 
   let nearbyPickupId: string | null = null;

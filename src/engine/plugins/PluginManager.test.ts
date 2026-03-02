@@ -108,6 +108,29 @@ describe('PluginManager', () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
+  it('runs agent turns through plugins and isolates failures', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const manager = new PluginManager(host, [
+      createPlugin('broken', {
+        runAgentTurn: async () => {
+          throw new Error('boom');
+        },
+      }),
+      createPlugin('agent', {
+        runAgentTurn: async () => ({ utterance: 'Hello there.' }),
+      }),
+    ]);
+
+    const result = await manager.runAgentTurn({
+      npcId: 'npc-1',
+      npcName: 'Baker',
+      playerMessage: 'hi',
+    });
+
+    expect(result).toEqual({ utterance: 'Hello there.' });
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
   it('emits events to subscribers and plugins', () => {
     const received: string[] = [];
     const pluginEventHandler = vi.fn((event: PluginEvent) => {

@@ -131,6 +131,7 @@ export {
   ResonanceGameUI,
   FadeOverlay,
   ControlsHint,
+  AgentConversationUI,
 } from './ui';
 
 // Resonance System
@@ -182,6 +183,10 @@ export type {
   PluginHostContext,
   PluginIntent,
   PluginIntentResult,
+  PluginAgentBeatContract,
+  PluginAgentBeatEvidence,
+  PluginAgentTurnRequest,
+  PluginAgentTurnResult,
   PluginInteractionResolution,
   InteractionRequest,
   PluginInteractionSource,

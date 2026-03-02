@@ -18,6 +18,7 @@ import {
   Modal,
   Select,
   Switch,
+  NumberInput,
 } from '@mantine/core';
 import { QuestEntry, QuestStage, QuestObjective, validateQuest } from './QuestPanel';
 import { ObjectiveNodeCanvas } from './ObjectiveNodeCanvas';
@@ -261,6 +262,8 @@ export function QuestDetail({
   onChange,
   onDelete,
 }: QuestDetailProps) {
+  type AgentBeatContract = NonNullable<QuestEntry['agentBeatContracts']>[number];
+
   // Track which stage is expanded in graph view
   const [graphStageId, setGraphStageId] = useState<string | null>(null);
   // Track which stage is being edited in the modal
@@ -269,6 +272,67 @@ export function QuestDetail({
 
   const handleChange = <K extends keyof QuestEntry>(field: K, value: QuestEntry[K]) => {
     onChange({ ...quest, [field]: value });
+  };
+
+  const beatContracts = quest.agentBeatContracts ?? [];
+
+  const parseList = (value: string): string[] => (
+    value
+      .split(/\r?\n|,/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  );
+
+  const setBeatContracts = (contracts: AgentBeatContract[]) => {
+    onChange({
+      ...quest,
+      agentBeatContracts: contracts.length > 0 ? contracts : undefined,
+    });
+  };
+
+  const addBeatContract = () => {
+    const nextIndex = beatContracts.length + 1;
+    const defaultNpcId = npcs[0]?.id || '';
+    const newContract: AgentBeatContract = {
+      id: `beat.${quest.id}.${nextIndex}`,
+      npcId: defaultNpcId,
+      objective: '',
+      requiredFacts: [],
+      forbiddenFacts: [],
+      completionRule: 'player_ack',
+      maxTurns: 3,
+    };
+    setBeatContracts([...beatContracts, newContract]);
+  };
+
+  const updateBeatContract = (index: number, updates: Partial<AgentBeatContract>) => {
+    const updated = [...beatContracts];
+    const existing = updated[index];
+    if (!existing) return;
+    const merged: AgentBeatContract = {
+      ...existing,
+      ...updates,
+    };
+    merged.requiredFacts = Array.isArray(merged.requiredFacts)
+      ? merged.requiredFacts
+      : [];
+    merged.forbiddenFacts = Array.isArray(merged.forbiddenFacts)
+      ? merged.forbiddenFacts
+      : [];
+    if (merged.completionTarget && merged.completionTarget.trim().length === 0) {
+      merged.completionTarget = undefined;
+    }
+    if (typeof merged.maxTurns === 'number' && (!Number.isFinite(merged.maxTurns) || merged.maxTurns < 1)) {
+      merged.maxTurns = 1;
+    }
+    updated[index] = merged;
+    setBeatContracts(updated);
+  };
+
+  const removeBeatContract = (index: number) => {
+    const updated = [...beatContracts];
+    updated.splice(index, 1);
+    setBeatContracts(updated);
   };
 
   // Build stage order starting from startStage
@@ -557,6 +621,185 @@ export function QuestDetail({
               </Stack>
             </Paper>
           )}
+
+          {/* SugarAgent Beat Contracts */}
+          <Paper
+            p="md"
+            radius="md"
+            style={{ background: '#181825', border: '1px solid #313244' }}
+          >
+            <Group justify="space-between" mb="sm">
+              <Group gap="xs">
+                <Text size="sm">🤖</Text>
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+                  SugarAgent Beat Contracts
+                </Text>
+              </Group>
+              <Button size="xs" variant="subtle" onClick={addBeatContract}>
+                + Add Contract
+              </Button>
+            </Group>
+
+            {beatContracts.length === 0 ? (
+              <Text size="sm" c="dimmed">
+                No beat contracts configured for this quest.
+              </Text>
+            ) : (
+              <Stack gap="md">
+                {beatContracts.map((contract, index) => {
+                  const stageOptions = quest.stages.map((stage) => ({
+                    value: stage.id,
+                    label: stage.description || stage.id,
+                  }));
+                  const selectedStage = contract.stageId
+                    ? quest.stages.find((stage) => stage.id === contract.stageId)
+                    : null;
+                  const objectiveOptions = (selectedStage?.objectives || []).map((objective) => ({
+                    value: objective.id,
+                    label: objective.description || objective.id,
+                  }));
+
+                  return (
+                    <Paper
+                      key={`${contract.id}:${index}`}
+                      p="sm"
+                      radius="sm"
+                      style={{ background: '#11111b', border: '1px solid #313244' }}
+                    >
+                      <Stack gap="xs">
+                        <Group justify="space-between">
+                          <Text size="sm" fw={500}>
+                            Contract {index + 1}
+                          </Text>
+                          <Button
+                            size="xs"
+                            color="red"
+                            variant="subtle"
+                            onClick={() => removeBeatContract(index)}
+                          >
+                            Remove
+                          </Button>
+                        </Group>
+
+                        <TextInput
+                          label="Contract ID"
+                          value={contract.id}
+                          onChange={(e) => updateBeatContract(index, { id: e.currentTarget.value })}
+                        />
+
+                        <Select
+                          label="NPC"
+                          data={npcs.map((npc) => ({ value: npc.id, label: npc.name }))}
+                          value={contract.npcId || null}
+                          onChange={(value) => updateBeatContract(index, { npcId: value || '' })}
+                          searchable
+                        />
+
+                        <Textarea
+                          label="Objective"
+                          value={contract.objective}
+                          onChange={(e) => updateBeatContract(index, { objective: e.currentTarget.value })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Textarea
+                          label="Required Facts"
+                          description="One per line (or comma-separated)."
+                          value={(contract.requiredFacts || []).join('\n')}
+                          onChange={(e) => updateBeatContract(index, { requiredFacts: parseList(e.currentTarget.value) })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Textarea
+                          label="Forbidden Facts"
+                          description="Optional. One per line (or comma-separated)."
+                          value={(contract.forbiddenFacts || []).join('\n')}
+                          onChange={(e) => updateBeatContract(index, { forbiddenFacts: parseList(e.currentTarget.value) })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Select
+                          label="Completion Rule"
+                          data={[
+                            { value: 'player_ack', label: 'Player Acknowledges' },
+                            { value: 'player_action', label: 'Player Action' },
+                            { value: 'engine_flag', label: 'Engine Flag' },
+                          ]}
+                          value={contract.completionRule}
+                          onChange={(value) =>
+                            updateBeatContract(index, {
+                              completionRule: (value as AgentBeatContract['completionRule']) || 'player_ack',
+                            })
+                          }
+                        />
+
+                        <TextInput
+                          label="Completion Target"
+                          description="Optional target token/flag key depending on completion rule."
+                          value={contract.completionTarget || ''}
+                          onChange={(e) => updateBeatContract(index, { completionTarget: e.currentTarget.value || undefined })}
+                        />
+
+                        <NumberInput
+                          label="Max Turns"
+                          value={contract.maxTurns ?? 3}
+                          min={1}
+                          step={1}
+                          onChange={(value) =>
+                            updateBeatContract(index, {
+                              maxTurns: typeof value === 'number' && Number.isFinite(value)
+                                ? Math.max(1, Math.floor(value))
+                                : undefined,
+                            })
+                          }
+                        />
+
+                        <Select
+                          label="Fallback Dialogue"
+                          description="Scripted fallback dialogue when turn budget is exceeded."
+                          data={dialogues.map((dialogue) => ({
+                            value: dialogue.id,
+                            label: dialogue.name || dialogue.id,
+                          }))}
+                          value={contract.fallbackScriptId || null}
+                          onChange={(value) => updateBeatContract(index, { fallbackScriptId: value || undefined })}
+                          searchable
+                          clearable
+                        />
+
+                        <Select
+                          label="Stage Binding"
+                          description="Optional: only active in this stage."
+                          data={stageOptions}
+                          value={contract.stageId || null}
+                          onChange={(value) =>
+                            updateBeatContract(index, {
+                              stageId: value || undefined,
+                              objectiveId: value ? contract.objectiveId : undefined,
+                            })
+                          }
+                          clearable
+                        />
+
+                        <Select
+                          label="Objective Binding"
+                          description="Optional: only active while this objective is active."
+                          data={objectiveOptions}
+                          value={contract.objectiveId || null}
+                          onChange={(value) => updateBeatContract(index, { objectiveId: value || undefined })}
+                          disabled={!contract.stageId}
+                          clearable
+                        />
+                      </Stack>
+                    </Paper>
+                  );
+                })}
+              </Stack>
+            )}
+          </Paper>
 
           {/* Validation warnings */}
           {warnings.length > 0 && (
