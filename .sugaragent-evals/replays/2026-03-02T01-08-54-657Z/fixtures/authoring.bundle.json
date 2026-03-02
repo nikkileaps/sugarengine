@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-03-02T01:08:54.658Z",
+  "source": {
+    "gameId": "rackwick",
+    "name": "Rackwick"
+  },
+  "profiles": [
+    {
+      "npcId": "baker",
+      "persona": "Warm neighborhood baker.",
+      "tone": "friendly",
+      "safetyBounds": [
+        "no-harassment"
+      ],
+      "loreScopes": [
+        "town.market"
+      ]
+    }
+  ],
+  "beatContracts": [
+    {
+      "id": "beat.baker.intro",
+      "questId": "quest.baker.intro",
+      "npcId": "baker",
+      "objective": "Welcome the player and mention fresh bread.",
+      "requiredFacts": [
+        "Fresh bread just came out of the oven."
+      ],
+      "forbiddenFacts": [],
+      "completionRule": "player_ack",
+      "maxTurns": 1
+    }
+  ]
+}

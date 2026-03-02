@@ -1,0 +1,43 @@
+[
+  {
+    "chunkId": "lore.history.events.creation_of_rackwick_city#creation",
+    "pageId": "lore.history.events.creation_of_rackwick_city",
+    "title": "Creation of Rackwick City",
+    "canonLevel": "hard",
+    "sourceFile": "history/events/creation_of_rackwick_city.md",
+    "sourceRepo": "eval-fixture",
+    "sourceCommit": "smoke",
+    "sourceRef": "refs/eval/smoke",
+    "sectionHeading": "Creation",
+    "content": "On October 10, 1980 a dragon appeared over Denver That Was and the city became Rackwick City.",
+    "summary": "On October 10, 1980 a dragon appeared over Denver That Was.",
+    "tokens": [
+      "october",
+      "dragon",
+      "appeared",
+      "denver",
+      "rackwick",
+      "city",
+      "creation"
+    ],
+    "metadata": {
+      "id": "lore.history.events.creation_of_rackwick_city",
+      "title": "Creation of Rackwick City",
+      "canon_level": "hard",
+      "entity_ids": [],
+      "location_ids": [
+        "locations.rackwick_city"
+      ],
+      "faction_ids": [],
+      "time_period": "the-fall",
+      "tags": [
+        "founding",
+        "history",
+        "rackwick_city"
+      ],
+      "beat_ids": [
+        "beat.baker.intro"
+      ]
+    }
+  }
+]

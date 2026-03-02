@@ -31,11 +31,23 @@ interface EnginePlugin {
   resolveInteraction?(
     request: InteractionRequest
   ): PluginInteractionResolution | null | Promise<PluginInteractionResolution | null>;
+  runAgentTurn?(
+    request: PluginAgentTurnRequest
+  ): PluginAgentTurnResult | null | Promise<PluginAgentTurnResult | null>;
 
   serializeState?(): unknown;
   loadState?(state: unknown): void;
 }
 ```
+
+`PluginAgentTurnRequest` includes optional beat context:
+
+- `beatContract?: { id, questId, npcId, objective, requiredFacts[], completionRule, ... }`
+- `beatTurnCount?: number`
+
+`PluginAgentTurnResult` can include:
+
+- `beatEvidence?: { beatId?, coveredFacts[], uncoveredFacts[], completionSignal, confidence }`
 
 ### PluginContext
 
@@ -78,6 +90,10 @@ Plugins should use intents rather than mutating game state directly.
 
 Errors in one plugin are isolated and do not stop core runtime.
 
+`PluginManager` also routes optional in-game agent conversation turns through
+`runAgentTurn(...)` for plugins that implement it, including optional beat context
+provided by the engine host.
+
 ### PluginSystem (ECS)
 
 `PluginSystem` bridges plugin `onUpdate(delta)` into the ECS world update loop.
@@ -108,6 +124,13 @@ NPC interaction in `Game` runs:
 
 If plugins return `null`, scripted flow continues normally.
 
+`PluginInteractionResolution` can return:
+
+- `startDialogue`
+- `intent`
+- `openAgentConversation`
+- `handled`
+
 ## Persistence
 
 `GameSaveData` supports plugin namespaced state:
@@ -121,6 +144,14 @@ interface GameSaveData {
 
 `SaveManager` gathers plugin state through a bridge and restores it on load if plugins are present.
 Missing plugins are safely ignored.
+
+## SugarAgent (Phase 0)
+
+SugarAgent is now available as a plugin package:
+
+- `src/plugins/sugaragent`
+
+See [SugarAgent Plugin API](./16-sugaragent-plugin.md) for phase-by-phase usage, real local llama runtime simulation, and lore ingestion/citation commands.
 
 ## Example
 

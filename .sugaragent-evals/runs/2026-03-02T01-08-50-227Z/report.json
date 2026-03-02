@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "suite": "smoke",
+  "generatedAt": "2026-03-02T01:08:50.238Z",
+  "status": "pass",
+  "provider": "local",
+  "runtime": "mock",
+  "summary": {
+    "totalCases": 6,
+    "passedCases": 6,
+    "failedCases": 0
+  },
+  "metrics": [
+    {
+      "metricId": "beatCompletionPrecisionRecall",
+      "title": "Beat Completion Precision/Recall",
+      "score": 1,
+      "threshold": 1,
+      "passed": true,
+      "caseIds": [
+        "smoke.beat-completion"
+      ]
+    },
+    {
+      "metricId": "beatCoverageAccuracy",
+      "title": "Beat Coverage Accuracy",
+      "score": 1,
+      "threshold": 1,
+      "passed": true,
+      "caseIds": [
+        "smoke.beat-coverage"
+      ]
+    },
+    {
+      "metricId": "intentSafety",
+      "title": "Intent Safety",
+      "score": 1,
+      "threshold": 1,
+      "passed": true,
+      "caseIds": [
+        "smoke.intent-safety"
+      ]
+    },
+    {
+      "metricId": "latencyPerformance",
+      "title": "Latency/Performance",
+      "score": 1,
+      "threshold": 1,
+      "passed": true,
+      "caseIds": [
+        "smoke.latency-performance"
+      ]
+    },
+    {
+      "metricId": "loreFaithfulness",
+      "title": "Lore Faithfulness",
+      "score": 1,
+      "threshold": 1,
+      "passed": true,
+      "caseIds": [
+        "smoke.lore-faithfulness"
+      ]
+    },
+    {
+      "metricId": "memoryRecall",
+      "title": "Memory Recall",
+      "score": 1,
+      "threshold": 1,
+      "passed": true,
+      "caseIds": [
+        "smoke.memory-recall"
+      ]
+    }
+  ],
+  "releaseGates": [
+    {
+      "gateId": "gate.metric.beatCompletionPrecisionRecall",
+      "metricId": "beatCompletionPrecisionRecall",
+      "title": "Beat Completion Precision/Recall",
+      "score": 1,
+      "threshold": 1,
+      "passed": true
+    },
+    {
+      "gateId": "gate.metric.beatCoverageAccuracy",
+      "metricId": "beatCoverageAccuracy",
+      "title": "Beat Coverage Accuracy",
+      "score": 1,
+      "threshold": 1,
+      "passed": true
+    },
+    {
+      "gateId": "gate.metric.intentSafety",
+      "metricId": "intentSafety",
+      "title": "Intent Safety",
+      "score": 1,
+      "threshold": 1,
+      "passed": true
+    },
+    {
+      "gateId": "gate.metric.latencyPerformance",
+      "metricId": "latencyPerformance",
+      "title": "Latency/Performance",
+      "score": 1,
+      "threshold": 1,
+      "passed": true
+    },
+    {
+      "gateId": "gate.metric.loreFaithfulness",
+      "metricId": "loreFaithfulness",
+      "title": "Lore Faithfulness",
+      "score": 1,
+      "threshold": 1,
+      "passed": true
+    },
+    {
+      "gateId": "gate.metric.memoryRecall",
+      "metricId": "memoryRecall",
+      "title": "Memory Recall",
+      "score": 1,
+      "threshold": 1,
+      "passed": true
+    }
+  ],
+  "beatEvaluation": {
+    "coverage": {
+      "caseId": "smoke.beat-coverage",
+      "passed": true,
+      "coveredCount": 1,
+      "uncoveredCount": 0
+    },
+    "completion": {
+      "caseId": "smoke.beat-completion",
+      "passed": true,
+      "falseCompleteCount": 0,
+      "missedCompleteCount": 0
+    }
+  },
+  "cases": [
+    {
+      "caseId": "smoke.lore-faithfulness",
+      "metricId": "loreFaithfulness",
+      "title": "Lore Faithfulness",
+      "passed": true,
+      "score": 1,
+      "threshold": 1,
+      "reason": null,
+      "details": {
+        "hasCitations": true,
+        "intent": "answer_lore",
+        "citationCount": 1
+      }
+    },
+    {
+      "caseId": "smoke.memory-recall",
+      "metricId": "memoryRecall",
+      "title": "Memory Recall",
+      "passed": true,
+      "score": 1,
+      "threshold": 1,
+      "reason": null,
+      "details": {
+        "rememberedFactsPersisted": true,
+        "rememberedFactCount": 2,
+        "secondTurnUsedFallback": true
+      }
+    },
+    {
+      "caseId": "smoke.intent-safety",
+      "metricId": "intentSafety",
+      "title": "Intent Safety",
+      "passed": true,
+      "score": 1,
+      "threshold": 1,
+      "reason": null,
+      "details": {
+        "rejectedUnsafeIntent": true,
+        "executedSafeIntent": true,
+        "rejectedLine": "intent-rejected=setFlag:intent type \"setFlag\" is not allowed for scenario beat-guard-alert | setFlag:intent type \"setFlag\" is not allowed for scenario beat-guard-alert",
+        "executedLine": "intent-executed=emitEvent,emitEvent"
+      }
+    },
+    {
+      "caseId": "smoke.beat-coverage",
+      "metricId": "beatCoverageAccuracy",
+      "title": "Beat Coverage Accuracy",
+      "passed": true,
+      "score": 1,
+      "threshold": 1,
+      "reason": null,
+      "details": {
+        "coveredCount": 1,
+        "uncoveredCount": 0
+      }
+    },
+    {
+      "caseId": "smoke.beat-completion",
+      "metricId": "beatCompletionPrecisionRecall",
+      "title": "Beat Completion Precision/Recall",
+      "passed": true,
+      "score": 1,
+      "threshold": 1,
+      "reason": null,
+      "details": {
+        "falseCompleteCount": 0,
+        "missedCompleteCount": 0,
+        "firstCompleted": false,
+        "secondCompleted": true
+      }
+    },
+    {
+      "caseId": "smoke.latency-performance",
+      "metricId": "latencyPerformance",
+      "title": "Latency/Performance",
+      "passed": true,
+      "score": 1,
+      "threshold": 1,
+      "reason": null,
+      "details": {
+        "avgMs": 0,
+        "p95Ms": 0,
+        "thresholdMs": 120
+      }
+    }
+  ],
+  "artifacts": {
+    "runDir": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z",
+    "reportPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/report.json",
+    "transcriptsDir": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts",
+    "failedDir": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/failed",
+    "cases": [
+      {
+        "caseId": "smoke.lore-faithfulness",
+        "transcriptPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts/smoke.lore-faithfulness.json"
+      },
+      {
+        "caseId": "smoke.memory-recall",
+        "transcriptPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts/smoke.memory-recall.json"
+      },
+      {
+        "caseId": "smoke.intent-safety",
+        "transcriptPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts/smoke.intent-safety.json"
+      },
+      {
+        "caseId": "smoke.beat-coverage",
+        "transcriptPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts/smoke.beat-coverage.json"
+      },
+      {
+        "caseId": "smoke.beat-completion",
+        "transcriptPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts/smoke.beat-completion.json"
+      },
+      {
+        "caseId": "smoke.latency-performance",
+        "transcriptPath": "/Users/nikki/projects/sugarengine/.sugaragent-evals/runs/2026-03-02T01-08-50-227Z/transcripts/smoke.latency-performance.json"
+      }
+    ]
+  }
+}

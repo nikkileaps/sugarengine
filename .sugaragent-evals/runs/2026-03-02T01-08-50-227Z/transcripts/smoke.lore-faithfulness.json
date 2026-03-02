@@ -1,0 +1,46 @@
+{
+  "suite": "smoke",
+  "caseId": "smoke.lore-faithfulness",
+  "metricId": "loreFaithfulness",
+  "createdAt": "2026-03-02T01:08:50.230Z",
+  "sessionOptions": {
+    "npc": "baker",
+    "provider": "local",
+    "runtime": "mock",
+    "useLore": true
+  },
+  "turns": [
+    {
+      "player": "what do you know about the creation of rackwick city and the dragon?",
+      "durationMs": 1,
+      "output": {
+        "utterance": "From the archives: On October 10, 1980 a dragon appeared over Denver That Was.",
+        "emotion": "warm",
+        "intent": "answer_lore",
+        "proposedIntents": [],
+        "citations": [
+          {
+            "sourceId": "lore.history.events.creation_of_rackwick_city#creation",
+            "snippet": "history/events/creation_of_rackwick_city.md#Creation",
+            "sourceCommit": "smoke",
+            "sourceRepo": "eval-fixture"
+          }
+        ],
+        "beatEvidence": {
+          "coveredFacts": [],
+          "uncoveredFacts": [],
+          "completionSignal": "none",
+          "confidence": 0
+        }
+      },
+      "citations": [
+        "lore.history.events.creation_of_rackwick_city#creation (history/events/creation_of_rackwick_city.md#Creation@smoke)"
+      ],
+      "scenarioLogs": [],
+      "validationErrors": [],
+      "usedFallback": false
+    }
+  ],
+  "reason": null,
+  "passed": true
+}

@@ -23,3 +23,10 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# SugarAgent bundled runtime assets (large binaries/models)
+src/plugins/sugaragent/runtime/bundle/*
+!src/plugins/sugaragent/runtime/bundle/.gitkeep
+
+# SugarAgent sim local session files
+.sugaragent-sim-sessions/

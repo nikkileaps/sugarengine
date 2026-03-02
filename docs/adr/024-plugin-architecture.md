@@ -296,3 +296,9 @@ Tradeoffs:
 - Editor plugin marketplace
 
 Phase 1 is in-process, code-level plugins registered at app startup.
+
+## SugarAgent ADR Location
+
+Plugin-specific architectural decisions for SugarAgent are tracked separately under:
+
+`src/plugins/sugaragent/docs/adr/`

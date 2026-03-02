@@ -10,8 +10,10 @@
  */
 
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { buildSugarAgentAuthoringBundle } from '../src/plugins/sugaragent/authoring/artifacts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -38,6 +40,33 @@ async function exportGame() {
 
     // Write game.json
     await fs.writeFile(outputPath, JSON.stringify(gameData, null, 2));
+
+    // Optional SugarAgent authoring packaging (ADR-008)
+    const sugarAgentPack = buildSugarAgentAuthoringBundle(project);
+    for (const warning of sugarAgentPack.warnings) {
+      console.warn(`[sugaragent:authoring] warning: ${warning}`);
+    }
+    if (sugarAgentPack.enabled) {
+      if (sugarAgentPack.errors.length > 0 || !sugarAgentPack.bundle) {
+        for (const error of sugarAgentPack.errors) {
+          console.error(`[sugaragent:authoring] error: ${error}`);
+        }
+        throw new Error(
+          `SugarAgent authoring validation failed (${sugarAgentPack.errors.length} error${sugarAgentPack.errors.length === 1 ? '' : 's'}).`,
+        );
+      }
+
+      const sugarAgentDir = path.join(projectRoot, 'public', 'plugins', 'sugaragent');
+      const sugarAgentOutPath = path.join(sugarAgentDir, 'authoring.bundle.json');
+      await fs.mkdir(sugarAgentDir, { recursive: true });
+      await fs.writeFile(sugarAgentOutPath, `${JSON.stringify(sugarAgentPack.bundle, null, 2)}\n`);
+      console.log(`  SugarAgent authoring bundle: ${path.relative(projectRoot, sugarAgentOutPath)}`);
+    } else {
+      const stalePath = path.join(projectRoot, 'public', 'plugins', 'sugaragent', 'authoring.bundle.json');
+      if (fsSync.existsSync(stalePath)) {
+        await fs.rm(stalePath, { force: true });
+      }
+    }
 
     console.log(`✓ Exported to: ${outputPath}`);
     console.log(`  Episodes: ${project.episodes?.length || 0}`);
