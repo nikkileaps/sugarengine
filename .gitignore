@@ -5,6 +5,8 @@ node_modules/
 dist/
 dist-game/
 src-tauri/target/
+public/games/
+games/.active-game
 
 # Netlify
 .netlify/

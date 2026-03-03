@@ -27,6 +27,9 @@ let gameInstance: Game | null = null;
 async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
   const runtimePlugins = buildRuntimePluginsFromProject(projectData);
+  const projectMeta = (projectData as { meta?: { gameId?: string; contentBasePath?: string } } | undefined)?.meta;
+  const gameId = projectMeta?.gameId || 'editor-preview';
+  const contentBasePath = projectMeta?.contentBasePath || '';
 
   const isDevelopmentMode = !!projectData;
 
@@ -75,7 +78,10 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     save: {
       ...DEFAULT_GAME_CONFIG.save,
       autoSaveEnabled: !isDevelopmentMode, // Disable auto-save in dev mode
+      namespace: gameId,
     },
+    gameId,
+    contentBasePath,
     startRegion: startRegionPath,
     // In dev mode, Game reads main quest from episode's completionCondition
     // In production, fall back to hardcoded quest

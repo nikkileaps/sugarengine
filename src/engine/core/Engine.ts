@@ -11,6 +11,7 @@ import { getRegionWorldOffset, gridKey } from '../streaming';
 import { EnvironmentAnimation } from '../shaders';
 import { VFXManager, VFXDefinition } from '../vfx';
 import type { Emitter } from '../vfx';
+import { normalizeContentBasePath, resolveContentUrl } from './contentPaths';
 
 export interface CameraConfig {
   style: 'isometric' | 'perspective';
@@ -27,6 +28,8 @@ export interface EngineConfig {
   camera: CameraConfig;
   /** Enable Draco mesh decoder for compressed GLBs (published builds). */
   draco?: boolean;
+  /** Optional project-scoped content base path (e.g. "games/rackwick-city/"). */
+  contentBasePath?: string;
 }
 
 // NPC database entry (matches editor format)
@@ -109,6 +112,7 @@ export class SugarEngine {
   private playerModelPath: string = 'models/player.glb';
   private playerAnimationPaths: Record<string, string> = {};
   private pendingModelLoads: Promise<void>[] = [];
+  private contentBasePath: string;
 
   readonly world: World;
   readonly models: ModelLoader;
@@ -117,6 +121,8 @@ export class SugarEngine {
   readonly regions: RegionLoader;
 
   constructor(config: EngineConfig) {
+    this.contentBasePath = normalizeContentBasePath(config.contentBasePath);
+
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setSize(config.container.clientWidth, config.container.clientHeight);
@@ -151,7 +157,9 @@ export class SugarEngine {
     } : undefined);
     this.characters = new CharacterLoader(this.models);
     this.props = new PropLoader(this.models);
-    this.regions = new RegionLoader(this.models);
+    this.regions = new RegionLoader(this.models, {
+      contentBasePath: this.contentBasePath,
+    });
 
     // ECS World
     this.world = new World();
@@ -1210,9 +1218,9 @@ export class SugarEngine {
     let mesh: THREE.Object3D;
     let clips = new Map<string, THREE.AnimationClip>();
     try {
-      const baseUrl = import.meta.env.BASE_URL + this.playerModelPath;
+      const baseUrl = this.resolveAssetPath(this.playerModelPath);
       const animPaths = Object.fromEntries(
-        Object.entries(this.playerAnimationPaths).map(([k, v]) => [k, import.meta.env.BASE_URL + v])
+        Object.entries(this.playerAnimationPaths).map(([k, v]) => [k, this.resolveAssetPath(v)])
       );
       const character = await this.characters.load(baseUrl, animPaths);
       mesh = character.mesh;
@@ -1287,10 +1295,11 @@ export class SugarEngine {
     x: number, y: number, z: number,
   ): Promise<void> {
     try {
-      const baseUrl = import.meta.env.BASE_URL + npcInfo.model;
+      if (!npcInfo.model) return;
+      const baseUrl = this.resolveAssetPath(npcInfo.model);
       const animPaths = npcInfo.animations
         ? Object.fromEntries(
-            Object.entries(npcInfo.animations).map(([k, v]) => [k, import.meta.env.BASE_URL + v])
+            Object.entries(npcInfo.animations).map(([k, v]) => [k, this.resolveAssetPath(v)])
           )
         : {};
       const character = await this.characters.load(baseUrl, animPaths, npcInfo.modelHeight);
@@ -1337,7 +1346,7 @@ export class SugarEngine {
     x: number, y: number, z: number,
   ): Promise<void> {
     try {
-      const url = import.meta.env.BASE_URL + modelInfo.model;
+      const url = this.resolveAssetPath(modelInfo.model);
       const prop = await this.props.load(url, {}, 1.5, modelInfo.modelColor);
       const newMesh = prop.mesh;
       const scale = modelInfo.modelScale ?? 1;
@@ -1377,7 +1386,7 @@ export class SugarEngine {
     x: number, y: number, z: number,
   ): Promise<void> {
     try {
-      const url = import.meta.env.BASE_URL + modelInfo.model;
+      const url = this.resolveAssetPath(modelInfo.model);
       const prop = await this.props.load(url, {}, 1.5, modelInfo.modelColor);
       const newMesh = prop.mesh;
       const scale = modelInfo.modelScale ?? 1;
@@ -2047,6 +2056,13 @@ export class SugarEngine {
    */
   setPlayerModel(path: string): void {
     this.playerModelPath = path;
+  }
+
+  /**
+   * Resolve an asset path using BASE_URL + project content base.
+   */
+  private resolveAssetPath(path: string): string {
+    return resolveContentUrl(this.contentBasePath, path);
   }
 
   /** Set additional animation clip paths (e.g. { idle: 'models/idle.fbx' }). */

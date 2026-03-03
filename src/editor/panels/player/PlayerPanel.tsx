@@ -146,7 +146,7 @@ export function PlayerPanel({
             <Title order={3}>Player Model</Title>
 
             <Text size="sm" c="dimmed">
-              Path to the player character model file (FBX or GLB). Relative to the public directory.
+              Path to the player character model file (FBX or GLB). Relative to the current game's asset root.
             </Text>
 
             <Paper p="md" withBorder>

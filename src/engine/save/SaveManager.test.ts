@@ -11,6 +11,7 @@ import { SAVE_DATA_VERSION } from './types';
 
 class InMemoryStorageProvider implements StorageProvider {
   private slots = new Map<string, GameSaveData>();
+  readonly migrateLegacySaves = vi.fn(async (_slotIds: string[]) => {});
 
   getCapabilities(): StorageCapabilities {
     return {
@@ -141,6 +142,16 @@ describe('SaveManager plugin persistence', () => {
     const stored = provider.getRaw('slot-plugins');
     expect(stored?.version).toBe(SAVE_DATA_VERSION);
     expect(stored?.plugins).toEqual({ sugaragent: { memoryCount: 5 } });
+  });
+
+  it('runs provider legacy migration hook during init', async () => {
+    const migrationAwareProvider = new InMemoryStorageProvider();
+    const manager = new SaveManager({ autoSaveEnabled: false, namespace: 'rackwick-city' });
+    manager.setProvider(migrationAwareProvider);
+
+    await manager.init();
+
+    expect(migrationAwareProvider.migrateLegacySaves).toHaveBeenCalledWith(['autosave', 'slot1', 'slot2', 'slot3']);
   });
 
   it('loads plugin state when present and stays safe when absent', async () => {

@@ -115,10 +115,38 @@ function normalizeStringArrayValue(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function toGameSlug(value: string | null | undefined): string {
+  const normalized = (value ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'untitled-game';
+}
+
+async function syncCliActiveGame(slug: string): Promise<void> {
+  const cleanSlug = toGameSlug(slug);
+  try {
+    const response = await fetch(`/__sugarengine/active-game?slug=${encodeURIComponent(cleanSlug)}`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.warn(
+        `[Editor] Could not sync CLI active game to "${cleanSlug}" (${response.status} ${response.statusText})`,
+        detail,
+      );
+    }
+  } catch {
+    // Endpoint is only available in local dev server context.
+  }
+}
+
 export function Editor() {
   const activeTab = useEditorStore((s) => s.activeTab);
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
   const projectLoaded = useEditorStore((s) => s.projectLoaded);
+  const projectName = useEditorStore((s) => s.projectName);
   const setProjectLoaded = useEditorStore((s) => s.setProjectLoaded);
   const npcs = useEditorStore((s) => s.npcs);
   const setNPCs = useEditorStore((s) => s.setNPCs);
@@ -172,6 +200,7 @@ export function Editor() {
   // New project dialog state (for creating from menu)
   const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('My Game');
+  const [gameId, setGameId] = useState('my-game');
   const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
 
   // Get current episode
@@ -193,8 +222,9 @@ export function Editor() {
     const projectData = {
       version: 1,
       meta: {
-        gameId: 'editor-preview',
-        name: 'Preview',
+        gameId,
+        name: projectName || 'Preview',
+        contentBasePath: `games/${gameId}/assets/`,
       },
       seasons,
       episodes,
@@ -265,6 +295,7 @@ export function Editor() {
     setVFXDefinitions([]);
     setCurrentSeason(seasonId);
     setCurrentEpisode(episodeId);
+    setGameId(toGameSlug(name));
     setProjectLoaded(true, name);
     setWelcomeDialogOpen(false);
     setNewProjectDialogOpen(false);
@@ -304,7 +335,9 @@ export function Editor() {
     // Gather all project data
     const projectData = {
       meta: {
-        name: 'My Project',
+        gameId,
+        name: projectName || 'My Project',
+        contentBasePath: `games/${gameId}/assets/`,
         version: '1.0.0',
         savedAt: new Date().toISOString(),
       },
@@ -337,7 +370,7 @@ export function Editor() {
             types: { description: string; accept: Record<string, string[]> }[];
           }) => Promise<FileSystemFileHandle>;
         }).showSaveFilePicker({
-          suggestedName: 'project.sgrgame',
+          suggestedName: `${gameId}.sgrgame`,
           types: [{
             description: 'Sugar Engine Project',
             accept: { 'application/json': ['.sgrgame'] },
@@ -353,7 +386,7 @@ export function Editor() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'project.sgrgame';
+        a.download = `${gameId}.sgrgame`;
         a.click();
         URL.revokeObjectURL(url);
         setDirty(false);
@@ -368,6 +401,11 @@ export function Editor() {
     // Build game data for publishing
     const gameData = {
       version: 1,
+      meta: {
+        gameId,
+        name: projectName || 'Untitled Project',
+        contentBasePath: `games/${gameId}/assets/`,
+      },
       defaultEpisode: currentEpisodeId,
       seasons,
       episodes,
@@ -390,7 +428,7 @@ export function Editor() {
     const jsonContent = JSON.stringify(gameData, null, 2);
 
     try {
-      // Use File System Access API to save to public/game.json
+      // Optional export of a runtime game.json snapshot.
       if ('showSaveFilePicker' in window) {
         const handle = await (window as Window & {
           showSaveFilePicker: (options: {
@@ -408,7 +446,10 @@ export function Editor() {
         await writable.write(jsonContent);
         await writable.close();
         console.log('[Editor] Published game.json');
-        alert('Published! Save to the public/ folder, then run:\n\nnpm run publish:local\n\nto preview the build.');
+        alert(
+          'Exported game.json snapshot.\n\n' +
+          `Recommended workflow:\n1) Save project as games/${gameId}/project.sgrgame\n2) Run npm run game:build`
+        );
       } else {
         // Fallback to download
         const blob = new Blob([jsonContent], { type: 'application/json' });
@@ -418,7 +459,10 @@ export function Editor() {
         a.download = 'game.json';
         a.click();
         URL.revokeObjectURL(url);
-        alert('Downloaded game.json!\n\nMove it to the public/ folder, then run:\n\nnpm run publish:local');
+        alert(
+          'Downloaded game.json snapshot.\n\n' +
+          `Recommended workflow:\n1) Save project as games/${gameId}/project.sgrgame\n2) Run npm run game:build`
+        );
       }
     } catch (err) {
       // User cancelled or error
@@ -473,7 +517,8 @@ export function Editor() {
 
       // Parse and load the project data
       const data = JSON.parse(fileText);
-      const projectName = data.meta?.name || fileName.replace('.sgrgame', '').replace('.json', '') || 'Untitled Project';
+      const loadedProjectName = data.meta?.name || fileName.replace('.sgrgame', '').replace('.json', '') || 'Untitled Project';
+      const loadedGameId = data.meta?.gameId || toGameSlug(loadedProjectName);
 
       // Load seasons and episodes
       const loadedSeasons = (data.seasons || []).map((s: { id: string; name: string; order: number }) => ({
@@ -528,7 +573,9 @@ export function Editor() {
         }
       }
 
-      setProjectLoaded(true, projectName);
+      setGameId(loadedGameId);
+      await syncCliActiveGame(loadedGameId);
+      setProjectLoaded(true, loadedProjectName);
       setWelcomeDialogOpen(false);
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -802,7 +849,7 @@ export function Editor() {
                                         ▶ Preview
                                       </Button>
 
-                                      {/* Publish button */}
+                                      {/* Export game.json snapshot button */}
                                       <Button
                                         variant="subtle"
                                         disabled={!isEditorEnabled}
@@ -816,7 +863,7 @@ export function Editor() {
                                           },
                                         }}
                                       >
-                                        🚀 Publish
+                                        🚀 Export JSON
                                       </Button>
                                     </Group>
                                   </AppShell.Header>

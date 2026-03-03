@@ -1,37 +1,12 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-DIST_DIR="dist-game"
-RACKWICK_DIR="$HOME/projects/rackwickcity"
-DEPLOY_DIR="$RACKWICK_DIR/dist"
+export GAME_SLUG="${GAME_SLUG:-rackwick-city}"
+export SITE_DIR="${SITE_DIR:-$HOME/projects/rackwickcity}"
+export LANDING_DIR="${LANDING_DIR:-pubsite}"
+export DEPLOY_DIR_NAME="${DEPLOY_DIR_NAME:-dist}"
+export GAME_MOUNT_PATH="${GAME_MOUNT_PATH:-game}"
+export DEPLOY_URL="${DEPLOY_URL:-https://rackwickcity.com}"
 
-echo "Building game for deploy..."
-DEPLOY_BUILD=true npm run game:build
-
-echo "Compressing GLB files with Draco..."
-node scripts/compress-glb.mjs "$DIST_DIR"
-
-echo "Copying Draco decoder to build..."
-cp -r node_modules/three/examples/jsm/libs/draco/gltf/ "$DIST_DIR/draco/"
-
-echo "Preparing deploy directory..."
-cd "$RACKWICK_DIR"
-
-# Create clean deploy directory
-rm -rf "$DEPLOY_DIR"
-mkdir -p "$DEPLOY_DIR"
-
-# Copy landing page (pubsite) to root
-cp -r pubsite/* "$DEPLOY_DIR/"
-
-# Copy game build to /game subdirectory
-mkdir -p "$DEPLOY_DIR/game"
-cp -r "$OLDPWD/$DIST_DIR"/* "$DEPLOY_DIR/game/"
-
-echo "Deploying to Netlify..."
-netlify deploy --prod --dir="$DEPLOY_DIR"
-
-echo ""
-echo "Deployed!"
-echo "  Landing page: https://rackwickcity.com"
-echo "  Game: https://rackwickcity.com/game"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/deploy-game.sh"

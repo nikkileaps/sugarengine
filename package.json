@@ -21,10 +21,14 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "game:build": "vite build --config vite.config.game.ts && mv dist-game/game.html dist-game/index.html",
+    "game:use": "node scripts/game-use.mjs",
+    "game:stage": "node scripts/stage-game-assets.mjs",
+    "game:export": "node scripts/export-game.mjs",
+    "game:build": "node scripts/build-game.mjs",
     "game:build:compressed": "npm run game:build && node scripts/compress-glb.mjs dist-game && cp -r node_modules/three/examples/jsm/libs/draco/gltf/ dist-game/draco/",
     "publish:local": "npm run game:build:compressed && vite preview --outDir dist-game --port 4173",
-    "publish:deploy": "./scripts/deploy-to-rackwick.sh"
+    "publish:deploy": "./scripts/deploy-game.sh",
+    "publish:deploy:rackwick": "./scripts/deploy-to-rackwick.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.6",

@@ -20,6 +20,9 @@ import { ResonancePointLoader } from '../resonance';
 import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
 import { FadeOverlay } from '../ui/FadeOverlay';
 import { PluginManager, PluginSystem } from '../plugins';
+import { normalizeContentBasePath, resolveContentUrl } from './contentPaths';
+import type { ItemView } from '../inventory/types';
+import type { InspectionData } from '../inspection/types';
 import type {
   EnginePlugin,
   PluginAgentTurnResult,
@@ -52,6 +55,10 @@ export interface GameConfig {
   engine?: Partial<EngineConfig>;
   save?: Partial<SaveManagerConfig>;
   audio?: Partial<AudioConfig>;
+  /** Stable game identifier used for save namespace isolation. */
+  gameId?: string;
+  /** Project-scoped content base path for asset resolution. */
+  contentBasePath?: string;
   /** Optional runtime plugins (ADR-024). Omit for scripted-only games. */
   plugins?: EnginePlugin[];
   startRegion?: string;
@@ -123,6 +130,7 @@ export class Game {
   private fadeOverlay: FadeOverlay;
   private pluginManager: PluginManager | null = null;
   private agentBeatContractsByNpc = new Map<string, RuntimeAgentBeatContract[]>();
+  private contentBasePath: string;
 
   // World state (ADR-018)
   readonly flags: FlagsManager;
@@ -140,6 +148,7 @@ export class Game {
   constructor(config: GameConfig) {
     this.config = config;
     const { container } = config;
+    this.contentBasePath = normalizeContentBasePath(config.contentBasePath);
 
     // Store project data for development mode
     if (config.projectData) {
@@ -154,6 +163,7 @@ export class Game {
         zoom: { min: 0.5, max: 2.0, default: 1.0 }
       },
       draco: config.engine?.draco,
+      contentBasePath: this.contentBasePath,
     });
 
     // Create systems
@@ -163,7 +173,8 @@ export class Game {
     this.inventory = new InventoryManager();
     this.saveManager = new SaveManager({
       autoSaveEnabled: config.save?.autoSaveEnabled ?? true,
-      autoSaveDebounceMs: config.save?.autoSaveDebounceMs ?? 10000
+      autoSaveDebounceMs: config.save?.autoSaveDebounceMs ?? 10000,
+      namespace: config.save?.namespace ?? config.gameId,
     });
     this.sceneManager = new SceneManager(container);
     this.audio = new AudioManager(config.audio);
@@ -361,7 +372,10 @@ export class Game {
     // Register items
     if (project.items) {
       for (const item of project.items) {
-        this.inventory.registerItem(item);
+        const itemToRegister = item.view
+          ? { ...item, view: this.rebaseItemViewAssets(item.view) }
+          : item;
+        this.inventory.registerItem(itemToRegister);
         if (item.model) {
           const color = item.modelColor ? parseInt(item.modelColor.replace('#', ''), 16) : undefined;
           this.engine.registerItemModel(item.id, item.model, item.modelScale, color);
@@ -372,7 +386,7 @@ export class Game {
     // Register inspections
     if (project.inspections) {
       for (const insp of project.inspections) {
-        this.inspection.registerInspection(insp.id, insp);
+        this.inspection.registerInspection(insp.id, this.rebaseInspectionAssets(insp));
         if (insp.model) {
           const color = insp.modelColor ? parseInt(insp.modelColor.replace('#', ''), 16) : undefined;
           this.engine.registerInspectionModel(insp.id, insp.model, insp.modelScale, color);
@@ -1280,14 +1294,14 @@ export class Game {
   private async loadAudioAssets(): Promise<void> {
     // Load menu music
     try {
-      await this.audio.load('menu-music', import.meta.env.BASE_URL + 'audio/music/menu.mp3', 'music', { loop: true });
+      await this.audio.load('menu-music', this.resolveRuntimeAssetUrl('audio/music/menu.mp3'), 'music', { loop: true });
     } catch {
       console.warn('[Game] Menu music not found');
     }
 
     // Load SFX
     try {
-      await this.audio.load('footstep', import.meta.env.BASE_URL + 'audio/sfx/footstep.mp3', 'sfx', { loop: true });
+      await this.audio.load('footstep', this.resolveRuntimeAssetUrl('audio/sfx/footstep.mp3'), 'sfx', { loop: true });
       // Wire up footstep handler - loops while walking, stops when stopped
       this.engine.onFootstep(
         () => this.audio.play('footstep'),
@@ -1298,20 +1312,20 @@ export class Game {
     }
 
     try {
-      await this.audio.load('interact', import.meta.env.BASE_URL + 'audio/sfx/interact.mp3', 'sfx');
+      await this.audio.load('interact', this.resolveRuntimeAssetUrl('audio/sfx/interact.mp3'), 'sfx');
     } catch {
       console.warn('[Game] Interact sound not found');
     }
 
     try {
-      await this.audio.load('pickup', import.meta.env.BASE_URL + 'audio/sfx/pickup.mp3', 'sfx');
+      await this.audio.load('pickup', this.resolveRuntimeAssetUrl('audio/sfx/pickup.mp3'), 'sfx');
     } catch {
       console.warn('[Game] Pickup sound not found');
     }
 
     // Load ambient sounds
     try {
-      await this.audio.load('wind', import.meta.env.BASE_URL + 'audio/ambient/wind.mp3', 'ambient', { loop: true });
+      await this.audio.load('wind', this.resolveRuntimeAssetUrl('audio/ambient/wind.mp3'), 'ambient', { loop: true });
       this.ambient.add({
         id: 'wind',
         minInterval: 20,
@@ -1324,7 +1338,7 @@ export class Game {
     }
 
     try {
-      await this.audio.load('owl', import.meta.env.BASE_URL + 'audio/ambient/owl.mp3', 'ambient');
+      await this.audio.load('owl', this.resolveRuntimeAssetUrl('audio/ambient/owl.mp3'), 'ambient');
       this.ambient.add({ id: 'owl', minInterval: 30, maxInterval: 90 });
     } catch {
       console.warn('[Game] Owl sound not found');
@@ -1351,6 +1365,34 @@ export class Game {
     // In production mode, get from episode content
     // TODO: implement production mode quest loading
     return [];
+  }
+
+  private resolveRuntimeAssetUrl(path: string): string {
+    return resolveContentUrl(this.contentBasePath, path);
+  }
+
+  private rebaseItemViewAssets(view: ItemView): ItemView {
+    if (view.type !== 'readable') return view;
+    return {
+      ...view,
+      cover: view.cover ? this.resolveRuntimeAssetUrl(view.cover) : view.cover,
+      image: view.image ? this.resolveRuntimeAssetUrl(view.image) : view.image,
+      pages: view.pages?.map((page) => this.resolveRuntimeAssetUrl(page)),
+    };
+  }
+
+  private rebaseInspectionAssets<T extends InspectionData>(inspection: T): T {
+    const sections = inspection.sections?.map((section) => ({
+      ...section,
+      image: section.image ? this.resolveRuntimeAssetUrl(section.image) : section.image,
+    }));
+    return {
+      ...inspection,
+      headerImage: inspection.headerImage
+        ? this.resolveRuntimeAssetUrl(inspection.headerImage)
+        : inspection.headerImage,
+      sections,
+    };
   }
 
   // TODO: Implement episode main quest auto-start

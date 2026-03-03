@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ModelLoader } from './ModelLoader';
 import type { EnvironmentAnimationEntry } from '../shaders';
+import { normalizeContentBasePath } from '../core/contentPaths';
 
 export interface Vec3 {
   x: number;
@@ -95,10 +96,10 @@ export interface RegionStreamingConfig {
 
 /**
  * Reference to geometry exported from Sugarbuilder.
- * Points to public/regions/{path}/ which contains geometry.glb and map.json.
+ * Points to <contentBase>/regions/{path}/ which contains geometry.glb and map.json.
  */
 export interface RegionGeometry {
-  path: string;      // "cafe-nollie" -> public/regions/cafe-nollie/
+  path: string;      // "cafe-nollie" -> <contentBase>/regions/cafe-nollie/
   version?: number;  // Export version from Sugarbuilder
 }
 
@@ -216,14 +217,21 @@ export interface LoadedRegion {
 }
 
 export class RegionLoader {
-  constructor(private modelLoader: ModelLoader) {}
+  private contentBasePath: string;
+
+  constructor(
+    private modelLoader: ModelLoader,
+    options?: { contentBasePath?: string },
+  ) {
+    this.contentBasePath = normalizeContentBasePath(options?.contentBasePath);
+  }
 
   /**
    * Load a region using RegionData from Sugar Engine.
    * Loads geometry and map.json from the path specified in RegionData.geometry.
    */
   async load(regionData: RegionData): Promise<LoadedRegion> {
-    const basePath = `${import.meta.env.BASE_URL}regions/${regionData.geometry.path}/`;
+    const basePath = `${import.meta.env.BASE_URL}${this.contentBasePath}regions/${regionData.geometry.path}/`;
 
     // Load map.json and geometry.glb in parallel
     const [mapData, geometry] = await Promise.all([

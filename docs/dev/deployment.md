@@ -1,176 +1,191 @@
 # Deployment & Publication
 
-This document describes how to build and deploy the game for production.
+This document describes the multi-game publish/deploy workflow.
+
+## Select Active Game
+
+Set an active game once per workspace session:
+
+```bash
+npm run game:use -- rackwick-city
+```
+
+You can check the current selection:
+
+```bash
+npm run game:use
+```
+
+All build/export/stage/deploy commands use this active game by default.
+
+Overrides still work when needed:
+
+- `--slug <slug>` for `game:export` and `game:stage`
+- `GAME_SLUG=<slug>` for deploy/build commands
 
 ## Architecture Overview
 
-```
-sugarengine/              (this repo - engine + editor)
-├── src/game.ts           Production game entry point
-├── game.html             Production game HTML template
-├── dist-game/            Build output (generated)
+```text
+sugarengine/                       (engine + editor repo)
+├── games/
+│   ├── .active-game              (local workspace selection)
+│   └── <slug>/
+│       ├── project.sgrgame
+│       └── assets/
+├── public/games/<slug>/           (generated staging area)
+├── dist-game/                     (generated game build)
 └── scripts/
-    └── deploy-to-rackwick.sh
+    ├── deploy-game.sh             (generic deploy)
+    └── deploy-to-rackwick.sh      (Rackwick defaults wrapper)
 
-rackwickcity/             (separate repo - deployed site)
-├── pubsite/              Landing page & marketing site
-│   ├── index.html        Homepage (login/signup)
-│   ├── about.html
-│   ├── news.html
-│   └── *.css, *.png
-├── game/                 Game build (copied during deploy)
-└── dist/                 Combined deploy directory (generated)
+<site-repo>/                       (separate deployed site repo)
+├── <landing-dir>/                 (landing/marketing site content)
+└── <deploy-dir>/                  (generated combined deploy directory)
 ```
 
-**Deployed URLs:**
-- `rackwickcity.com` → Landing page (pubsite)
-- `rackwickcity.com/game` → The game
+## Build Commands
 
-## Build & Deploy Commands
-
-### Local Preview
-
-Preview the built game locally:
+Local preview (compressed game build):
 
 ```bash
 npm run publish:local
 ```
 
-This builds the game and serves it at `http://localhost:4173`.
+`game:build` resolves the active game and injects `VITE_GAME_SLUG` into the build, so runtime startup does not depend on a hardcoded fallback slug.
 
-### Deploy to Production
+## Production Deploy (Generic)
 
-Deploy to Netlify (rackwickcity.com):
+Use the generic deploy script:
 
 ```bash
+SITE_DIR=~/projects/<site-repo> npm run publish:deploy
+```
+
+Required environment variables:
+
+- `SITE_DIR` - absolute path to external site repo (unless `deploy.siteDir` is set in game config)
+
+Required game selection:
+
+- Active game (`npm run game:use -- <slug>`) or explicit `GAME_SLUG`
+
+Optional environment variables:
+
+- `LANDING_DIR` - landing content folder inside site repo (default: `pubsite`)
+- `DEPLOY_DIR_NAME` - generated deploy folder inside site repo (default: `dist`)
+- `GAME_MOUNT_PATH` - URL subpath where game build is mounted (default: `game`)
+- `DEPLOY_URL` - printed post-deploy URL (for convenience)
+- `DIST_DIR` - local build directory to compress/copy (default: `dist-game`)
+
+Per-game deploy defaults are read from `games/<slug>/config/game.config.json`:
+
+- `deploy.siteDir`
+- `deploy.landingDir`
+- `deploy.deployDirName`
+- `deploy.gameMountPath`
+- `deploy.deployUrl`
+
+Environment variables override config values.
+
+Example (Rackwick):
+
+```bash
+npm run game:use -- rackwick-city
+SITE_DIR=~/projects/rackwickcity \
+LANDING_DIR=pubsite \
+GAME_MOUNT_PATH=game \
+DEPLOY_URL=https://rackwickcity.com \
 npm run publish:deploy
 ```
 
-This script:
-1. Builds the game with `DEPLOY_BUILD=true` (sets `base: '/game/'` in vite config)
-2. Creates `rackwickcity/dist/` directory
-3. Copies `rackwickcity/pubsite/*` to `dist/` (landing page at root)
-4. Copies game build to `dist/game/`
-5. Deploys `dist/` to Netlify
-
-### Prerequisites
-
-Before first deploy, set up Netlify CLI in the rackwickcity repo:
+Example (Wordlark):
 
 ```bash
-cd ~/projects/rackwickcity
+npm run game:use -- wordlark
+SITE_DIR=~/projects/wordlark-site \
+LANDING_DIR=site \
+GAME_MOUNT_PATH=play \
+DEPLOY_URL=https://wordlark.com \
+npm run publish:deploy
+```
+
+## Rackwick Compatibility Wrapper
+
+Rackwick defaults are still available:
+
+```bash
+npm run publish:deploy:rackwick
+```
+
+This calls `deploy-game.sh` with:
+
+- `GAME_SLUG=rackwick-city`
+- `SITE_DIR=~/projects/rackwickcity`
+- `LANDING_DIR=pubsite`
+- `DEPLOY_DIR_NAME=dist`
+- `GAME_MOUNT_PATH=game`
+- `DEPLOY_URL=https://rackwickcity.com`
+
+## What `publish:deploy` Does
+
+`deploy-game.sh` runs these steps:
+
+1. Resolves game selection (active game or `GAME_SLUG`)
+2. Loads deploy defaults from `games/<slug>/config/game.config.json`
+3. Applies env overrides (if provided)
+4. Builds the selected game via `npm run game:build`
+5. Sets `DEPLOY_BUILD=true` and `DEPLOY_BASE_PATH` from `GAME_MOUNT_PATH`
+6. Compresses `dist-game/**/*.glb` with Draco
+7. Copies Draco decoder files into `dist-game/draco/`
+8. Rebuilds `<site-repo>/<deploy-dir>` from scratch
+9. Copies landing site to deploy root
+10. Copies game build to `<deploy-dir>/<game-mount-path>/` (or root when mount is `/`)
+11. Runs `netlify deploy --prod --dir=<deploy-dir>` from `SITE_DIR`
+
+## Export/Stage Data Flow
+
+`game:build` runs both export and stage steps before the Vite game build:
+
+```text
+games/<slug>/project.sgrgame
+  └─(game:export)→ public/games/<slug>/game.json
+
+games/<slug>/assets/**
+  └─(game:stage)→  public/games/<slug>/assets/**
+```
+
+Slug selection sources (in order):
+
+1. `--slug <slug>` (where supported)
+2. `GAME_SLUG=<slug>` env var
+3. `games/.active-game`
+
+## Prerequisites
+
+Before first deploy from a given site repo:
+
+```bash
+cd ~/projects/<site-repo>
 netlify login
 netlify link
 ```
 
-## How It Works
-
-### Entry Points
-
-| Entry Point | Purpose | Used By |
-|-------------|---------|---------|
-| `src/main.tsx` | Editor application | `npm run dev` |
-| `src/preview.ts` | Editor preview pane | Editor iframe |
-| `src/game.ts` | Production game | `npm run publish:*` |
-
-### Build Configuration
-
-The game build uses `vite.config.game.ts`:
-
-```typescript
-export default defineConfig({
-  // When DEPLOY_BUILD=true, assets load from /game/ path
-  base: process.env.DEPLOY_BUILD ? '/game/' : '/',
-  build: {
-    outDir: 'dist-game',
-  },
-  // ...
-})
-```
-
-### Asset Loading
-
-All asset paths in the engine use `import.meta.env.BASE_URL` to work in both local and deployed environments:
-
-```typescript
-// Correct - works everywhere
-fetch(import.meta.env.BASE_URL + 'game.json')
-this.models.load(import.meta.env.BASE_URL + 'models/player.glb')
-
-// Wrong - breaks on deployed site
-fetch('/game.json')
-this.models.load('/models/player.glb')
-```
-
-### Project Data Flow
-
-```
-Editor                          Production
-───────                         ──────────
-.sgrgame file
-    │
-    ▼
-npm run game:export
-    │
-    ▼
-public/game.json ──────────────► Bundled in dist-game/
-public/regions/*.glb
-public/models/*.glb
-```
-
-The export script (`scripts/export-game.ts`) reads the `.sgrgame` project file and writes:
-- `public/game.json` - All game data (NPCs, items, dialogues, quests, regions, etc.)
-- Region geometry files stay in `public/regions/`
-
-### Loading Indicator
-
-The production build (`game.html`) includes a loading spinner that displays while assets download. It's automatically removed when the game finishes loading:
-
-```html
-<div id="loading">
-  <div class="spinner"></div>
-  <div>Loading...</div>
-</div>
-```
-
-Removed in `game.ts` after `loadRegion()` completes:
-```typescript
-await game.loadRegion(startRegionPath);
-document.getElementById('loading')?.remove();
-```
-
 ## Troubleshooting
 
-### Assets not loading (404)
+Deploy fails with `Missing game selection`:
 
-Check that paths use `import.meta.env.BASE_URL`:
-```typescript
-// In Engine.ts, Game.ts, etc.
-fetch(import.meta.env.BASE_URL + 'path/to/asset')
-```
+- Run `npm run game:use -- <slug>`
+- Or set `GAME_SLUG=<slug>` for one-off runs
 
-### Game shows orange cube instead of player
+Deploy fails with `Missing SITE_DIR`:
 
-The player model path needs the base URL prefix. Check `Engine.ts`:
-```typescript
-mesh = await this.models.load(import.meta.env.BASE_URL + 'models/player.glb');
-```
+- Set `SITE_DIR` to your external site repo path
 
-### Deploy fails with "not linked"
+Deploy fails with `not linked`:
 
-Run `netlify link` in the rackwickcity repo to connect it to your Netlify site.
+- Run `netlify link` in the site repo
 
-### Changes not appearing after deploy
+Game assets 404 after deploy:
 
-1. Hard refresh the browser (Cmd+Shift+R)
-2. Check browser dev tools Network tab for cached responses
-3. Verify the deploy completed successfully in Netlify dashboard
-
-## File Size Considerations
-
-The player model (`public/models/player.glb`) is ~22MB, which causes a 30+ second load time on slower connections. The loading spinner helps communicate this to users.
-
-Future optimizations:
-- Compress/optimize the GLB file
-- Use Draco compression
-- Implement progressive loading
+- Verify `meta.contentBasePath` points to `games/<slug>/assets/`
+- Verify `GAME_MOUNT_PATH` matches deployed URL path
