@@ -1,4 +1,5 @@
 export { MockLocalRuntimeBridge } from './MockLocalRuntimeBridge';
+export { HttpLocalRuntimeBridge } from './HttpLocalRuntimeBridge';
 export type {
   LocalRuntimeBridge,
   RuntimeGenerateStructuredRequest,

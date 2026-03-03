@@ -54,6 +54,12 @@ export interface SaveManagerConfig {
   autoSaveEnabled: boolean;
   autoSaveSlotId: string;
   autoSaveDebounceMs: number;
+  /** Optional save namespace (usually gameId) to isolate saves per game. */
+  namespace?: string;
+}
+
+interface LegacySaveMigrationProvider extends StorageProvider {
+  migrateLegacySaves?: (slotIds: string[]) => Promise<void>;
 }
 
 const DEFAULT_CONFIG: SaveManagerConfig = {
@@ -61,6 +67,8 @@ const DEFAULT_CONFIG: SaveManagerConfig = {
   autoSaveSlotId: 'autosave',
   autoSaveDebounceMs: 5000
 };
+
+const LEGACY_SAVE_SLOT_IDS = ['autosave', 'slot1', 'slot2', 'slot3'];
 
 /**
  * Orchestrates save/load operations across all game systems
@@ -90,7 +98,7 @@ export class SaveManager {
     this.gameStartTime = Date.now();
 
     // Default to localStorage, will be updated in init() if Tauri is detected
-    this.provider = new LocalStorageProvider();
+    this.provider = new LocalStorageProvider(this.config.namespace);
   }
 
   /**
@@ -99,7 +107,13 @@ export class SaveManager {
   async init(): Promise<SaveResult> {
     // Auto-detect and initialize the best storage provider
     await this.detectAndInitProvider();
-    return await this.provider.init();
+    const initResult = await this.provider.init();
+    if (!initResult.success) {
+      return initResult;
+    }
+
+    await this.migrateLegacySaves();
+    return initResult;
   }
 
   /**
@@ -111,11 +125,22 @@ export class SaveManager {
       try {
         // Dynamic import to avoid bundling Tauri deps in browser builds
         const { TauriFileProvider } = await import('./TauriFileProvider');
-        this.provider = new TauriFileProvider();
+        this.provider = new TauriFileProvider(this.config.namespace);
       } catch {
         // Fall back to localStorage if Tauri import fails
         console.warn('Failed to load TauriFileProvider, using localStorage');
       }
+    }
+  }
+
+  private async migrateLegacySaves(): Promise<void> {
+    const provider = this.provider as LegacySaveMigrationProvider;
+    if (typeof provider.migrateLegacySaves !== 'function') return;
+
+    try {
+      await provider.migrateLegacySaves(LEGACY_SAVE_SLOT_IDS);
+    } catch (err) {
+      console.warn('[SaveMigration] Failed to migrate legacy saves:', err);
     }
   }
 

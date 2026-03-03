@@ -10,6 +10,9 @@ import type {
   PluginAgentTurnResult,
   PluginEvent,
 } from '../../engine/plugins';
+import { LocalLLMProvider } from './providers/llm/LocalLLMProvider';
+import type { LocalRuntimeBridge } from './runtime';
+import { HttpLocalRuntimeBridge } from './runtime';
 
 export interface SugarAgentPluginOptions {
   /**
@@ -21,6 +24,15 @@ export interface SugarAgentPluginOptions {
    * Collects lightweight event counters for phase-0 smoke checks.
    */
   captureEvents?: boolean;
+  /**
+   * Optional runtime bridge override for local-LLM turn generation.
+   * If omitted, browser runtime defaults to HttpLocalRuntimeBridge.
+   */
+  runtimeBridge?: LocalRuntimeBridge;
+  /**
+   * Disable provider-backed generation and force deterministic turns.
+   */
+  disableProvider?: boolean;
 }
 
 export interface SugarAgentPlayerModelV1 {
@@ -684,6 +696,16 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
   const captureEvents = options.captureEvents ?? true;
   let state: SugarAgentPluginStateV1 = createDefaultState(Date.now());
   let lastNpcId: string | null = null;
+  let localProvider: LocalLLMProvider | null = null;
+
+  function resolveRuntimeBridge(): LocalRuntimeBridge | null {
+    if (options.disableProvider) return null;
+    if (options.runtimeBridge) return options.runtimeBridge;
+    if (typeof window !== 'undefined') {
+      return new HttpLocalRuntimeBridge();
+    }
+    return null;
+  }
 
   const trackEvent = (event: PluginEvent): void => {
     if (!captureEvents) return;
@@ -793,7 +815,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     } as const;
   };
 
-  const runAgentTurn = (request: PluginAgentTurnRequest): PluginAgentTurnResult | null => {
+  const runAgentTurn = async (request: PluginAgentTurnRequest): Promise<PluginAgentTurnResult | null> => {
     const message = request.playerMessage?.trim();
     if (!message) return null;
 
@@ -807,11 +829,36 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
 
     rememberPlayerFacts(npc, message, now);
 
-    let turn = buildDeterministicAgentTurn({
-      npcName: request.npcName,
-      playerMessage: message,
-      npc,
-    });
+    let turn: PluginAgentTurnResult;
+    if (localProvider) {
+      try {
+        const generated = await localProvider.generateStructured({
+          npcId: request.npcId,
+          npcName: request.npcName ?? 'Friend',
+          playerMessage: message,
+        });
+        turn = {
+          utterance: generated.output.utterance,
+          emotion: generated.output.emotion,
+          intent: generated.output.intent,
+          citations: generated.output.citations,
+          beatEvidence: generated.output.beatEvidence,
+        };
+      } catch (error) {
+        console.warn('[sugaragent] Local provider failed in runAgentTurn, using deterministic fallback.', error);
+        turn = buildDeterministicAgentTurn({
+          npcName: request.npcName,
+          playerMessage: message,
+          npc,
+        });
+      }
+    } else {
+      turn = buildDeterministicAgentTurn({
+        npcName: request.npcName,
+        playerMessage: message,
+        npc,
+      });
+    }
     if (beatContract) {
       const enriched = enrichTurnWithBeatEvidence({
         turn,
@@ -849,6 +896,32 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     return turn;
   };
 
+  const init = async (): Promise<void> => {
+    const runtimeBridge = resolveRuntimeBridge();
+    if (!runtimeBridge) {
+      localProvider = null;
+      return;
+    }
+
+    const provider = new LocalLLMProvider({
+      runtime: runtimeBridge,
+      maxAttempts: 3,
+    });
+
+    try {
+      const health = await provider.health();
+      if (!health.ok) {
+        console.warn('[sugaragent] Local provider unavailable; deterministic fallback will be used.', health.detail);
+        localProvider = null;
+        return;
+      }
+      localProvider = provider;
+    } catch (error) {
+      console.warn('[sugaragent] Failed to initialize local provider; deterministic fallback will be used.', error);
+      localProvider = null;
+    }
+  };
+
   const loadState = (raw: unknown): void => {
     if (!isRecord(raw)) return;
     const schemaVersion = raw.schemaVersion;
@@ -875,7 +948,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
       version: '0.5.0',
       apiVersion: PLUGIN_API_VERSION,
     },
-    init: () => {},
+    init,
     dispose: () => {},
     onEvent: trackEvent,
     resolveInteraction,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PLUGIN_API_VERSION } from '../../engine/plugins';
 import { createSugarAgentPlugin } from './plugin';
+import { MockLocalRuntimeBridge } from './runtime';
 
 describe('createSugarAgentPlugin (phase 3)', () => {
   it('exposes valid plugin descriptor metadata', () => {
@@ -45,6 +46,30 @@ describe('createSugarAgentPlugin (phase 3)', () => {
       playerMessage: 'what do you remember about me?',
     });
     expect(recall?.utterance.toLowerCase()).toContain('player name is nikki');
+  });
+
+  it('uses LocalLLMProvider when a runtime bridge is configured', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: new MockLocalRuntimeBridge({ mode: 'valid' }),
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'what are you doing here?',
+    });
+
+    expect(turn?.utterance).toContain('I heard you say');
   });
 
   it('returns beatEvidence when a beat contract is active', async () => {
