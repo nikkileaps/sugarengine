@@ -11,6 +11,9 @@ export interface AgentConversationTurnView {
 
 type AgentConversationSubmitHandler = (message: string) => Promise<AgentConversationTurnView>;
 type AgentConversationCloseHandler = () => void;
+type AgentConversationResetHandler = (
+  session: AgentConversationSessionView,
+) => Promise<{ detail?: string } | void>;
 
 export class AgentConversationUI {
   private container: HTMLDivElement;
@@ -20,9 +23,13 @@ export class AgentConversationUI {
   private formEl: HTMLFormElement;
   private inputEl: HTMLInputElement;
   private sendEl: HTMLButtonElement;
+  private resetEl: HTMLButtonElement;
   private closeEl: HTMLButtonElement;
   private submitHandler: AgentConversationSubmitHandler | null = null;
   private closeHandler: AgentConversationCloseHandler | null = null;
+  private resetHandler: AgentConversationResetHandler | null = null;
+  private activeSession: AgentConversationSessionView | null = null;
+  private resetting = false;
   private visible = false;
 
   constructor(parent: HTMLElement) {
@@ -42,12 +49,27 @@ export class AgentConversationUI {
     this.titleEl.textContent = 'Conversation';
     header.appendChild(this.titleEl);
 
+    const headerActions = document.createElement('div');
+    headerActions.className = 'agent-chat-header-actions';
+
+    this.resetEl = document.createElement('button');
+    this.resetEl.className = 'agent-chat-reset';
+    this.resetEl.type = 'button';
+    this.resetEl.textContent = 'Reset Memory';
+    this.resetEl.style.display = 'none';
+    this.resetEl.addEventListener('click', () => {
+      void this.resetSession();
+    });
+    headerActions.appendChild(this.resetEl);
+
     this.closeEl = document.createElement('button');
     this.closeEl.className = 'agent-chat-close';
     this.closeEl.type = 'button';
     this.closeEl.textContent = 'Close';
     this.closeEl.addEventListener('click', () => this.closeHandler?.());
-    header.appendChild(this.closeEl);
+    headerActions.appendChild(this.closeEl);
+
+    header.appendChild(headerActions);
 
     this.historyEl = document.createElement('div');
     this.historyEl.className = 'agent-chat-history';
@@ -136,6 +158,13 @@ export class AgentConversationUI {
         letter-spacing: 0.3px;
       }
 
+      .agent-chat-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .agent-chat-reset,
       .agent-chat-close {
         border: 1px solid rgba(180, 160, 140, 0.35);
         background: rgba(255, 255, 255, 0.04);
@@ -146,6 +175,7 @@ export class AgentConversationUI {
         cursor: pointer;
       }
 
+      .agent-chat-reset:hover,
       .agent-chat-close:hover {
         background: rgba(255, 255, 255, 0.1);
       }
@@ -243,7 +273,7 @@ export class AgentConversationUI {
   }
 
   private async submit(): Promise<void> {
-    if (!this.submitHandler) return;
+    if (!this.submitHandler || this.resetting) return;
 
     const message = this.inputEl.value.trim();
     if (!message) return;
@@ -268,6 +298,7 @@ export class AgentConversationUI {
   }
 
   show(session: AgentConversationSessionView): void {
+    this.activeSession = { ...session };
     const displayName = session.npcName?.trim() || session.npcId;
     this.titleEl.textContent = `Talking to ${displayName}`;
     this.historyEl.innerHTML = '';
@@ -280,6 +311,7 @@ export class AgentConversationUI {
   hide(): void {
     this.container.classList.remove('visible');
     this.visible = false;
+    this.activeSession = null;
     this.historyEl.innerHTML = '';
     this.inputEl.value = '';
   }
@@ -295,5 +327,33 @@ export class AgentConversationUI {
   setOnClose(handler: AgentConversationCloseHandler): void {
     this.closeHandler = handler;
   }
-}
 
+  setOnReset(handler: AgentConversationResetHandler | null): void {
+    this.resetHandler = handler;
+    this.resetEl.style.display = handler ? '' : 'none';
+  }
+
+  private async resetSession(): Promise<void> {
+    if (!this.resetHandler || !this.activeSession || this.resetting) return;
+
+    this.resetting = true;
+    this.inputEl.disabled = true;
+    this.sendEl.disabled = true;
+    this.resetEl.disabled = true;
+
+    try {
+      const result = await this.resetHandler({ ...this.activeSession });
+      this.historyEl.innerHTML = '';
+      this.addLine('system', result?.detail ?? 'Conversation memory reset. Type your message.');
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Could not reset conversation memory.';
+      this.addLine('system', messageText);
+    } finally {
+      this.resetting = false;
+      this.inputEl.disabled = false;
+      this.sendEl.disabled = false;
+      this.resetEl.disabled = false;
+      this.inputEl.focus();
+    }
+  }
+}

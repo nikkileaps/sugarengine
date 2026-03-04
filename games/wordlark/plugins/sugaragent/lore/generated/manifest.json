@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repo": "git@github.com:nikkileaps/rackwick-lore.git",
+    "commit": "17c297a695d086d7ce3e61438b3fc6970ec9068b",
+    "ref": "refs/heads/main"
+  },
+  "generatedAt": "2026-03-04T05:19:22.341Z",
+  "toolVersion": "phase2",
+  "counts": {
+    "files": 5,
+    "chunks": 6,
+    "issues": 1
+  }
+}

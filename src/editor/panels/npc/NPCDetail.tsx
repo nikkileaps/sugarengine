@@ -2,7 +2,7 @@
  * NPCDetail - Main content view for a selected NPC
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Stack,
   Text,
@@ -36,6 +36,10 @@ interface NPCDetailProps {
 export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDelete }: NPCDetailProps) {
   const setDirty = useEditorStore((s) => s.setDirty);
   const [showBehaviorTree, setShowBehaviorTree] = useState(false);
+  const [agentConstraintsDraft, setAgentConstraintsDraft] = useState('');
+  const [agentLoreScopesDraft, setAgentLoreScopesDraft] = useState('');
+  const [agentSelfLoreScopesDraft, setAgentSelfLoreScopesDraft] = useState('');
+  const [agentRelatedLoreScopesDraft, setAgentRelatedLoreScopesDraft] = useState('');
 
   // Find dialogues where this NPC speaks
   const npcDialogues = dialogues.filter((d) =>
@@ -53,6 +57,21 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
     value: d.id,
     label: d.name || d.id,
   }));
+
+  useEffect(() => {
+    const initialConstraints = (
+      npc.agentProfile?.constraints
+      || npc.agentProfile?.safetyBounds
+      || []
+    ).join('\n');
+    const initialLoreScopes = (npc.agentProfile?.loreScopes || []).join('\n');
+    const initialSelfLoreScopes = (npc.agentProfile?.selfLoreScopes || []).join('\n');
+    const initialRelatedLoreScopes = (npc.agentProfile?.relatedLoreScopes || []).join('\n');
+    setAgentConstraintsDraft(initialConstraints);
+    setAgentLoreScopesDraft(initialLoreScopes);
+    setAgentSelfLoreScopesDraft(initialSelfLoreScopes);
+    setAgentRelatedLoreScopesDraft(initialRelatedLoreScopes);
+  }, [npc.id]);
 
   const handleChange = (field: keyof NPCEntry, value: string | null) => {
     onChange({ ...npc, [field]: value || undefined });
@@ -80,26 +99,39 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
     const next = {
       persona: updates.persona ?? current.persona,
       tone: updates.tone ?? current.tone,
+      selfEntityId: updates.selfEntityId ?? current.selfEntityId,
       constraints: updates.constraints ?? currentConstraints,
       loreScopes: updates.loreScopes ?? current.loreScopes,
+      selfLoreScopes: updates.selfLoreScopes ?? current.selfLoreScopes,
+      relatedLoreScopes: updates.relatedLoreScopes ?? current.relatedLoreScopes,
     };
 
     const normalized = {
       persona: normalizeOptionalText(next.persona),
       tone: normalizeOptionalText(next.tone),
+      selfEntityId: normalizeOptionalText(next.selfEntityId),
       constraints: Array.isArray(next.constraints) && next.constraints.length > 0
         ? next.constraints
         : undefined,
       loreScopes: Array.isArray(next.loreScopes) && next.loreScopes.length > 0
         ? next.loreScopes
         : undefined,
+      selfLoreScopes: Array.isArray(next.selfLoreScopes) && next.selfLoreScopes.length > 0
+        ? next.selfLoreScopes
+        : undefined,
+      relatedLoreScopes: Array.isArray(next.relatedLoreScopes) && next.relatedLoreScopes.length > 0
+        ? next.relatedLoreScopes
+        : undefined,
     };
 
     const hasData = !!(
       normalized.persona
       || normalized.tone
+      || normalized.selfEntityId
       || normalized.constraints
       || normalized.loreScopes
+      || normalized.selfLoreScopes
+      || normalized.relatedLoreScopes
     );
 
     onChange({
@@ -445,15 +477,24 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                     size="sm"
                   />
 
+                  <TextInput
+                    label="Self Entity ID"
+                    description="Canonical lore entity for this NPC (for identity-aware retrieval)."
+                    value={npc.agentProfile?.selfEntityId || ''}
+                    onChange={(e) => updateAgentProfile({ selfEntityId: e.currentTarget.value })}
+                    placeholder="npc.baker"
+                    size="sm"
+                  />
+
                   <Textarea
                     label="Constraints"
                     description="NPC-specific constraints (one per line or comma-separated)."
-                    value={(
-                      npc.agentProfile?.constraints
-                      || npc.agentProfile?.safetyBounds
-                      || []
-                    ).join('\n')}
-                    onChange={(e) => updateAgentProfile({ constraints: parseList(e.currentTarget.value) })}
+                    value={agentConstraintsDraft}
+                    onChange={(e) => {
+                      const nextText = e.currentTarget.value;
+                      setAgentConstraintsDraft(nextText);
+                      updateAgentProfile({ constraints: parseList(nextText) });
+                    }}
                     placeholder={'Do not reveal Captain Rowan\'s hidden identity before beat.gate_reveal'}
                     minRows={2}
                     autosize
@@ -463,9 +504,43 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                   <Textarea
                     label="Lore Scopes"
                     description="One per line (or comma-separated)."
-                    value={(npc.agentProfile?.loreScopes || []).join('\n')}
-                    onChange={(e) => updateAgentProfile({ loreScopes: parseList(e.currentTarget.value) })}
+                    value={agentLoreScopesDraft}
+                    onChange={(e) => {
+                      const nextText = e.currentTarget.value;
+                      setAgentLoreScopesDraft(nextText);
+                      updateAgentProfile({ loreScopes: parseList(nextText) });
+                    }}
                     placeholder={'town.history\nnpc.baker'}
+                    minRows={2}
+                    autosize
+                    size="sm"
+                  />
+
+                  <Textarea
+                    label="Self Lore Scopes"
+                    description="Lore scopes for facts specifically about this NPC."
+                    value={agentSelfLoreScopesDraft}
+                    onChange={(e) => {
+                      const nextText = e.currentTarget.value;
+                      setAgentSelfLoreScopesDraft(nextText);
+                      updateAgentProfile({ selfLoreScopes: parseList(nextText) });
+                    }}
+                    placeholder={'npc.baker\npeople.bakers.bub'}
+                    minRows={2}
+                    autosize
+                    size="sm"
+                  />
+
+                  <Textarea
+                    label="Related Lore Scopes"
+                    description="Lore scopes for friends/family/acquaintances of this NPC."
+                    value={agentRelatedLoreScopesDraft}
+                    onChange={(e) => {
+                      const nextText = e.currentTarget.value;
+                      setAgentRelatedLoreScopesDraft(nextText);
+                      updateAgentProfile({ relatedLoreScopes: parseList(nextText) });
+                    }}
+                    placeholder={'npc.baker.family\nnpc.baker.friends'}
                     minRows={2}
                     autosize
                     size="sm"

@@ -25,6 +25,9 @@ function normalizeProfile(npcId, profile) {
         tone: toNonEmptyString(profile.tone),
         constraints: normalizeStringArray(profile.constraints ?? profile.safetyBounds),
         loreScopes: normalizeStringArray(profile.loreScopes),
+        selfEntityId: toNonEmptyString(profile.selfEntityId),
+        selfLoreScopes: normalizeStringArray(profile.selfLoreScopes),
+        relatedLoreScopes: normalizeStringArray(profile.relatedLoreScopes),
     };
 }
 function extractGlobalSafetyBounds(project) {
@@ -83,6 +86,9 @@ function normalizePackedProfile(raw) {
         tone: toNonEmptyString(raw.tone),
         constraints: normalizeStringArray(raw.constraints ?? raw.safetyBounds),
         loreScopes: normalizeStringArray(raw.loreScopes),
+        selfEntityId: toNonEmptyString(raw.selfEntityId),
+        selfLoreScopes: normalizeStringArray(raw.selfLoreScopes),
+        relatedLoreScopes: normalizeStringArray(raw.relatedLoreScopes),
     };
 }
 function normalizePackedBeatContract(raw) {

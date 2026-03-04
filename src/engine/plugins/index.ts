@@ -13,6 +13,8 @@ export type {
   PluginIntentResult,
   PluginAgentBeatContract,
   PluginAgentBeatEvidence,
+  PluginAgentContext,
+  PluginAgentProfile,
   PluginAgentTurnRequest,
   PluginAgentTurnResult,
   PluginInteractionResolution,

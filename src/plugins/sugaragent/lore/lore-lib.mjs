@@ -2,6 +2,62 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
+const STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'by',
+  'for',
+  'from',
+  'have',
+  'has',
+  'how',
+  'i',
+  'in',
+  'is',
+  'it',
+  'its',
+  'me',
+  'my',
+  'of',
+  'on',
+  'or',
+  'our',
+  'that',
+  'the',
+  'their',
+  'them',
+  'there',
+  'these',
+  'they',
+  'this',
+  'to',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'who',
+  'why',
+  'with',
+  'you',
+  'your',
+  'about',
+  'know',
+  'tell',
+]);
+const VALID_QUERY_TYPES = new Set([
+  'conversation',
+  'self_query',
+  'other_query',
+  'world_query',
+  'mixed_query',
+]);
 
 function normalizeWhitespace(text) {
   return text.replace(/\s+/g, ' ').trim();
@@ -139,7 +195,7 @@ function tokenize(text) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .map((token) => token.trim())
-    .filter((token) => token.length >= 3);
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
 }
 
 function stemToken(token) {
@@ -165,6 +221,148 @@ function normalizeOptionalString(value) {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeScopeToken(value) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('lore.') && trimmed.length > 5) {
+    return trimmed.slice(5);
+  }
+  return trimmed;
+}
+
+function normalizeQueryType(value) {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return VALID_QUERY_TYPES.has(normalized) ? normalized : undefined;
+}
+
+function collectChunkScopeTokens(chunk) {
+  const chunkMetadata = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+  const rawCandidates = [
+    chunk.chunkId,
+    chunk.pageId,
+    chunkMetadata.id,
+    ...(normalizeStringArray(chunkMetadata.tags)),
+    ...(normalizeStringArray(chunkMetadata.entity_ids)),
+    ...(normalizeStringArray(chunkMetadata.location_ids)),
+    ...(normalizeStringArray(chunkMetadata.faction_ids)),
+    ...(normalizeStringArray(chunkMetadata.beat_ids)),
+  ];
+
+  const tokens = new Set();
+  for (const candidate of rawCandidates) {
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.trim().toLowerCase();
+    if (!normalized) continue;
+    tokens.add(normalized);
+    for (const part of normalized.split(/[.#/_-]+/)) {
+      if (part.length >= 3) {
+        tokens.add(part);
+      }
+    }
+    const withoutLorePrefix = normalizeScopeToken(candidate);
+    if (withoutLorePrefix) {
+      tokens.add(withoutLorePrefix);
+      for (const part of withoutLorePrefix.split(/[.#/_-]+/)) {
+        if (part.length >= 3) {
+          tokens.add(part);
+        }
+      }
+    }
+  }
+  return tokens;
+}
+
+function collectChunkEntityIds(chunk) {
+  const chunkMetadata = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+  return normalizeStringArray(chunkMetadata.entity_ids)
+    .map((entry) => entry.toLowerCase());
+}
+
+function poolRank(pool) {
+  if (pool === 'self') return 0;
+  if (pool === 'related') return 1;
+  return 2;
+}
+
+function buildIdentityRetrievalConfig(options = {}) {
+  const queryType = normalizeQueryType(options.queryType) ?? 'conversation';
+  const selfEntityId = normalizeOptionalString(options.selfEntityId)?.toLowerCase();
+  const loreScopes = normalizeStringArray(options.loreScopes)
+    .map((entry) => normalizeScopeToken(entry))
+    .filter((entry) => typeof entry === 'string');
+  const selfLoreScopes = normalizeStringArray(options.selfLoreScopes)
+    .map((entry) => normalizeScopeToken(entry))
+    .filter((entry) => typeof entry === 'string');
+  const relatedLoreScopes = normalizeStringArray(options.relatedLoreScopes)
+    .map((entry) => normalizeScopeToken(entry))
+    .filter((entry) => typeof entry === 'string');
+  const scopeFilters = Array.from(new Set([
+    ...loreScopes,
+    ...selfLoreScopes,
+    ...relatedLoreScopes,
+  ]));
+  return {
+    queryType,
+    selfEntityId,
+    loreScopes,
+    selfLoreScopes,
+    relatedLoreScopes,
+    scopeFilters,
+  };
+}
+
+function classifyChunkIdentity(chunk, identityConfig) {
+  const chunkEntityIds = collectChunkEntityIds(chunk);
+  const selfEntityMatch = Boolean(
+    identityConfig.selfEntityId
+    && chunkEntityIds.includes(identityConfig.selfEntityId),
+  );
+  const inSelfScopes = identityConfig.selfLoreScopes.length > 0
+    && matchesLoreScope(chunk, identityConfig.selfLoreScopes);
+  const inRelatedScopes = identityConfig.relatedLoreScopes.length > 0
+    && matchesLoreScope(chunk, identityConfig.relatedLoreScopes);
+  const inLoreScopes = identityConfig.loreScopes.length > 0
+    && matchesLoreScope(chunk, identityConfig.loreScopes);
+
+  let pool = 'ambient';
+  if (selfEntityMatch || inSelfScopes) {
+    pool = 'self';
+  } else if (inRelatedScopes) {
+    pool = 'related';
+  } else if (inLoreScopes || identityConfig.scopeFilters.length === 0) {
+    pool = 'ambient';
+  }
+
+  return {
+    pool,
+    poolRank: poolRank(pool),
+    selfEntityMatch,
+    hasForeignEntity: Boolean(
+      identityConfig.selfEntityId
+      && chunkEntityIds.length > 0
+      && !selfEntityMatch,
+    ),
+  };
+}
+
+function matchesLoreScope(chunk, scopeFilters) {
+  if (scopeFilters.length === 0) return true;
+  const chunkTokens = collectChunkScopeTokens(chunk);
+  for (const scope of scopeFilters) {
+    if (chunkTokens.has(scope)) {
+      return true;
+    }
+    for (const token of chunkTokens) {
+      if (token.startsWith(`${scope}.`) || token.endsWith(`.${scope}`)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function ingestLoreDirectory({
@@ -314,6 +512,7 @@ function scoreChunk(queryTokens, chunk, options = {}) {
   const headingTokens = tokenize(`${chunk.sectionHeading ?? ''}`);
   const headingSet = new Set(headingTokens);
   const headingStemSet = new Set(headingTokens.map((token) => stemToken(token)));
+  const scopeTokenSet = collectChunkScopeTokens(chunk);
 
   let score = 0;
   for (const token of queryTokens) {
@@ -328,6 +527,12 @@ function scoreChunk(queryTokens, chunk, options = {}) {
       score += 0.5;
     } else if (headingStemSet.has(queryStem)) {
       score += 0.4;
+    }
+
+    if (scopeTokenSet.has(token)) {
+      score += 0.9;
+    } else if (scopeTokenSet.has(queryStem)) {
+      score += 0.7;
     }
   }
 
@@ -365,6 +570,46 @@ function scoreChunk(queryTokens, chunk, options = {}) {
     score += 1;
   }
 
+  const identityConfig = options.identityConfig ?? buildIdentityRetrievalConfig(options);
+  const chunkIdentity = options.chunkIdentity ?? classifyChunkIdentity(chunk, identityConfig);
+  const queryType = identityConfig.queryType;
+
+  if (queryType === 'self_query') {
+    if (chunkIdentity.selfEntityMatch) {
+      score += 4;
+    }
+    if (chunkIdentity.pool === 'self') {
+      score += 1.8;
+    }
+    if (chunkIdentity.pool === 'related') {
+      score -= 0.8;
+    }
+    if (chunkIdentity.hasForeignEntity) {
+      score -= 2.4;
+    }
+  } else if (queryType === 'other_query') {
+    if (chunkIdentity.pool === 'related') {
+      score += 1.2;
+    }
+    if (chunkIdentity.pool === 'self') {
+      score -= 0.3;
+    }
+  } else if (queryType === 'world_query') {
+    if (chunkIdentity.pool === 'ambient') {
+      score += 0.8;
+    }
+    if (chunkIdentity.pool === 'self') {
+      score -= 0.2;
+    }
+  } else if (queryType === 'mixed_query') {
+    if (chunkIdentity.pool === 'self') {
+      score += 0.9;
+    }
+    if (chunkIdentity.pool === 'ambient') {
+      score += 0.5;
+    }
+  }
+
   return score;
 }
 
@@ -373,15 +618,32 @@ export function retrieveLoreChunks(artifacts, query, options = {}) {
 
   const maxResults = Math.max(1, options.maxResults ?? 3);
   const queryTokens = tokenize(query);
+  const identityConfig = buildIdentityRetrievalConfig(options);
+  const scopeFilters = identityConfig.scopeFilters;
   if (queryTokens.length === 0) return [];
 
   return artifacts.chunks
-    .map((chunk) => ({
-      chunk,
-      score: scoreChunk(queryTokens, chunk, options),
-    }))
+    .filter((chunk) => matchesLoreScope(chunk, scopeFilters))
+    .map((chunk) => {
+      const chunkIdentity = classifyChunkIdentity(chunk, identityConfig);
+      return {
+        chunk,
+        score: scoreChunk(queryTokens, chunk, {
+          ...options,
+          identityConfig,
+          chunkIdentity,
+        }),
+        pool: chunkIdentity.pool,
+        poolRank: chunkIdentity.poolRank,
+        selfEntityMatch: chunkIdentity.selfEntityMatch,
+      };
+    })
     .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.chunk.chunkId.localeCompare(b.chunk.chunkId))
+    .sort((a, b) => (
+      b.score - a.score
+      || a.poolRank - b.poolRank
+      || a.chunk.chunkId.localeCompare(b.chunk.chunkId)
+    ))
     .slice(0, maxResults);
 }
 
@@ -394,7 +656,7 @@ export function buildLoreGroundedTurn(query, matches) {
   if (!topMatch) return null;
 
   return {
-    utterance: `From the archives: ${topMatch.summary}`,
+    utterance: topMatch.summary,
     emotion: 'informed',
     intent: 'answer_lore',
     proposedIntents: [],

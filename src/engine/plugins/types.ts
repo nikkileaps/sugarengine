@@ -28,6 +28,25 @@ export interface PluginAgentTurnRequest {
   playerMessage: string;
   beatContract?: PluginAgentBeatContract;
   beatTurnCount?: number;
+  npcProfile?: PluginAgentProfile;
+  globalSafetyBounds?: string[];
+  context?: PluginAgentContext;
+}
+
+export interface PluginAgentProfile {
+  persona?: string;
+  tone?: string;
+  constraints?: string[];
+  loreScopes?: string[];
+  selfEntityId?: string;
+  selfLoreScopes?: string[];
+  relatedLoreScopes?: string[];
+}
+
+export interface PluginAgentContext {
+  gameId?: string;
+  regionPath?: string;
+  episodeId?: string;
 }
 
 export interface PluginAgentBeatContract {

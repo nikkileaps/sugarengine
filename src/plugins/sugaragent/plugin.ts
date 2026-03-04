@@ -97,6 +97,17 @@ export interface SugarAgentPluginStateV1 {
   playerModel: SugarAgentPlayerModelV1;
   npcs: Record<string, SugarAgentNPCMemoryStateV1>;
   dialogueSessions?: Record<string, SugarAgentDialogueSessionStateV1>;
+  runtime?: SugarAgentRuntimeStatusV1;
+}
+
+export interface SugarAgentRuntimeStatusV1 {
+  provider: 'local' | 'deterministic';
+  healthy: boolean;
+  detail?: string;
+  lastOutcome?: 'ready' | 'provider_ok' | 'provider_fallback_validation' | 'provider_error' | 'provider_unavailable';
+  lastAttempts?: number;
+  lastValidationErrors?: string[];
+  lastUpdated: number;
 }
 
 export interface SugarAgentPluginStateV0 {
@@ -165,6 +176,13 @@ function createDefaultState(now: number): SugarAgentPluginStateV1 {
     playerModel: {},
     npcs: {},
     dialogueSessions: {},
+    runtime: {
+      provider: 'deterministic',
+      healthy: false,
+      detail: 'provider-not-initialized',
+      lastOutcome: 'provider_unavailable',
+      lastUpdated: now,
+    },
   };
 }
 
@@ -620,6 +638,36 @@ function parseDialogueSession(raw: unknown): SugarAgentDialogueSessionStateV1 | 
   };
 }
 
+function parseRuntimeStatus(raw: unknown, now: number): SugarAgentRuntimeStatusV1 | null {
+  if (!isRecord(raw)) return null;
+  const provider = raw.provider === 'local'
+    ? 'local'
+    : raw.provider === 'deterministic'
+      ? 'deterministic'
+      : null;
+  if (!provider) return null;
+  const lastOutcome = raw.lastOutcome === 'ready'
+    || raw.lastOutcome === 'provider_ok'
+    || raw.lastOutcome === 'provider_fallback_validation'
+    || raw.lastOutcome === 'provider_error'
+    || raw.lastOutcome === 'provider_unavailable'
+    ? raw.lastOutcome
+    : undefined;
+  return {
+    provider,
+    healthy: raw.healthy === true,
+    detail: toSafeString(raw.detail),
+    lastOutcome,
+    lastAttempts: typeof raw.lastAttempts === 'number' && Number.isFinite(raw.lastAttempts)
+      ? Math.max(0, Math.floor(raw.lastAttempts))
+      : undefined,
+    lastValidationErrors: Array.isArray(raw.lastValidationErrors)
+      ? raw.lastValidationErrors.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    lastUpdated: toSafeTimestamp(raw.lastUpdated, now),
+  };
+}
+
 function parseStateV1(raw: Record<string, unknown>, now: number): SugarAgentPluginStateV1 {
   const state = createDefaultState(now);
   state.updatedAt = toSafeTimestamp(raw.updatedAt, now);
@@ -669,6 +717,11 @@ function parseStateV1(raw: Record<string, unknown>, now: number): SugarAgentPlug
     state.dialogueSessions = sessions;
   }
 
+  const runtimeStatus = parseRuntimeStatus(raw.runtime, now);
+  if (runtimeStatus) {
+    state.runtime = runtimeStatus;
+  }
+
   compactState(state);
   return state;
 }
@@ -697,6 +750,22 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
   let state: SugarAgentPluginStateV1 = createDefaultState(Date.now());
   let lastNpcId: string | null = null;
   let localProvider: LocalLLMProvider | null = null;
+
+  const updateRuntimeStatus = (
+    patch: Partial<Omit<SugarAgentRuntimeStatusV1, 'provider' | 'healthy'>> & Pick<SugarAgentRuntimeStatusV1, 'provider' | 'healthy'>,
+  ): void => {
+    const now = Date.now();
+    state.runtime = {
+      ...(state.runtime ?? {
+        provider: 'deterministic',
+        healthy: false,
+        lastUpdated: now,
+      }),
+      ...patch,
+      lastUpdated: now,
+    };
+    state.updatedAt = now;
+  };
 
   function resolveRuntimeBridge(): LocalRuntimeBridge | null {
     if (options.disableProvider) return null;
@@ -836,7 +905,25 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           npcId: request.npcId,
           npcName: request.npcName ?? 'Friend',
           playerMessage: message,
+          npcProfile: request.npcProfile,
+          globalSafetyBounds: request.globalSafetyBounds,
+          context: request.context,
         });
+        updateRuntimeStatus({
+          provider: 'local',
+          healthy: true,
+          detail: generated.usedFallback ? 'validation-fallback' : 'provider-ok',
+          lastOutcome: generated.usedFallback ? 'provider_fallback_validation' : 'provider_ok',
+          lastAttempts: generated.attempts,
+          lastValidationErrors: generated.validationErrors.slice(-3),
+        });
+        if (generated.usedFallback) {
+          console.warn('[sugaragent] Local provider returned fallback output after validation failures.', {
+            npcId: request.npcId,
+            attempts: generated.attempts,
+            errors: generated.validationErrors,
+          });
+        }
         turn = {
           utterance: generated.output.utterance,
           emotion: generated.output.emotion,
@@ -845,6 +932,13 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           beatEvidence: generated.output.beatEvidence,
         };
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        updateRuntimeStatus({
+          provider: 'local',
+          healthy: false,
+          detail,
+          lastOutcome: 'provider_error',
+        });
         console.warn('[sugaragent] Local provider failed in runAgentTurn, using deterministic fallback.', error);
         turn = buildDeterministicAgentTurn({
           npcName: request.npcName,
@@ -853,6 +947,12 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         });
       }
     } else {
+      updateRuntimeStatus({
+        provider: 'deterministic',
+        healthy: false,
+        detail: 'provider-unavailable',
+        lastOutcome: 'provider_unavailable',
+      });
       turn = buildDeterministicAgentTurn({
         npcName: request.npcName,
         playerMessage: message,
@@ -900,6 +1000,12 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const runtimeBridge = resolveRuntimeBridge();
     if (!runtimeBridge) {
       localProvider = null;
+      updateRuntimeStatus({
+        provider: 'deterministic',
+        healthy: false,
+        detail: options.disableProvider ? 'provider-disabled' : 'runtime-bridge-unavailable',
+        lastOutcome: 'provider_unavailable',
+      });
       return;
     }
 
@@ -913,12 +1019,31 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
       if (!health.ok) {
         console.warn('[sugaragent] Local provider unavailable; deterministic fallback will be used.', health.detail);
         localProvider = null;
+        updateRuntimeStatus({
+          provider: 'deterministic',
+          healthy: false,
+          detail: health.detail ?? 'provider-unavailable',
+          lastOutcome: 'provider_unavailable',
+        });
         return;
       }
       localProvider = provider;
+      updateRuntimeStatus({
+        provider: 'local',
+        healthy: true,
+        detail: health.detail ?? 'runtime-ready',
+        lastOutcome: 'ready',
+      });
     } catch (error) {
       console.warn('[sugaragent] Failed to initialize local provider; deterministic fallback will be used.', error);
       localProvider = null;
+      const detail = error instanceof Error ? error.message : String(error);
+      updateRuntimeStatus({
+        provider: 'deterministic',
+        healthy: false,
+        detail,
+        lastOutcome: 'provider_unavailable',
+      });
     }
   };
 

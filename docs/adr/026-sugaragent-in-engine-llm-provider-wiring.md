@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -35,7 +35,7 @@ The runtime chain becomes:
 Keep `LocalRuntimeBridge` as the single abstraction and add concrete adapters:
 
 - `MockLocalRuntimeBridge` for tests/dev fallback (existing)
-- `TauriLocalRuntimeBridge` for desktop app/preview runtime
+- `HttpLocalRuntimeBridge` for browser/preview runtime via local runtime endpoint
 - optional `SessionRuntimeBridge` for node-driven harness parity (non-game callers)
 
 ### 2) Plugin-owned turn service

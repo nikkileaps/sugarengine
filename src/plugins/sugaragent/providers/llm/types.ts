@@ -4,6 +4,21 @@ export interface LLMGenerateRequest {
   npcId: string;
   npcName: string;
   playerMessage: string;
+  npcProfile?: {
+    persona?: string;
+    tone?: string;
+    constraints?: string[];
+    loreScopes?: string[];
+    selfEntityId?: string;
+    selfLoreScopes?: string[];
+    relatedLoreScopes?: string[];
+  };
+  globalSafetyBounds?: string[];
+  context?: {
+    gameId?: string;
+    regionPath?: string;
+    episodeId?: string;
+  };
 }
 
 export interface LLMGenerateResult {

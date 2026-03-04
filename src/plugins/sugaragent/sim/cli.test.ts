@@ -317,6 +317,407 @@ describe('sugaragent sim CLI (phase 1)', () => {
     fs.rmSync(sessionPath, { force: true });
   });
 
+  it('rejects prior-familiarity lines on first meeting and falls back to safe intro', () => {
+    const sessionId = `first-meet-guardrail-${Date.now()}`;
+    const sessionPath = path.join(process.cwd(), '.sugaragent-sim-sessions', `${sessionId}.json`);
+
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        'Good to see you again, friend.',
+        '--no-lore',
+        '--session',
+        sessionId,
+        '--ask',
+        'hello there',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('validation=attempt 1: first meeting response implies prior familiarity');
+    expect(output).toContain('local provider fallback engaged');
+    expect(output).toContain('baker> Nice to meet you.');
+
+    fs.rmSync(sessionPath, { force: true });
+  });
+
+  it('rejects ungrounded player assumptions on first-meeting greetings', () => {
+    const sessionId = `first-meet-greeting-assumption-${Date.now()}`;
+    const sessionPath = path.join(process.cwd(), '.sugaragent-sim-sessions', `${sessionId}.json`);
+
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        'I noticed your shop has those new energy loaves. How do they work?',
+        '--no-lore',
+        '--session',
+        sessionId,
+        '--ask',
+        'hello',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('validation=attempt 1: first meeting greeting includes ungrounded player assumptions');
+    expect(output).toContain('local provider fallback engaged');
+    expect(output).toContain('baker> Nice to meet you.');
+
+    fs.rmSync(sessionPath, { force: true });
+  });
+
+  it('blocks unsupported knowledge claims when retrieval confidence is low', () => {
+    const loreDir = fs.mkdtempSync(path.join(process.cwd(), '.tmp-sugaragent-lore-low-confidence-'));
+    fs.writeFileSync(
+      path.join(loreDir, 'manifest.json'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        source: { repo: 'local', commit: 'lowconf-1' },
+        generatedAt: new Date().toISOString(),
+        toolVersion: 'test',
+        counts: { files: 2, chunks: 2, issues: 0 },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(loreDir, 'chunks.json'),
+      `${JSON.stringify([
+        {
+          chunkId: 'lore.town.alpha#overview',
+          pageId: 'lore.town.alpha',
+          title: 'Town Alpha',
+          sectionHeading: 'Overview',
+          sourceFile: 'alpha.md',
+          sourceCommit: 'lowconf-1',
+          sourceRepo: 'local',
+          summary: 'Alpha town has a small market.',
+          tokens: ['town', 'market'],
+          metadata: {
+            id: 'lore.town.alpha',
+            tags: ['town'],
+            entity_ids: [],
+            location_ids: [],
+            faction_ids: [],
+            beat_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.town.beta#overview',
+          pageId: 'lore.town.beta',
+          title: 'Town Beta',
+          sectionHeading: 'Overview',
+          sourceFile: 'beta.md',
+          sourceCommit: 'lowconf-1',
+          sourceRepo: 'local',
+          summary: 'Beta town has an old gate.',
+          tokens: ['town', 'gate'],
+          metadata: {
+            id: 'lore.town.beta',
+            tags: ['town'],
+            entity_ids: [],
+            location_ids: [],
+            faction_ids: [],
+            beat_ids: [],
+          },
+        },
+      ], null, 2)}\n`,
+      'utf8',
+    );
+
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        "Earendale's where the old city walls used to be, before Rackwick was built.",
+        '--lore-dir',
+        loreDir,
+        '--ask',
+        'what do you know about town?',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('baker> I am not sure. I do not have reliable records about that right now.');
+    expect(output).not.toContain("Earendale's where the old city walls used to be");
+    expect(output).not.toContain('From the archives:');
+    expect(output).not.toContain('citations=');
+
+    fs.rmSync(loreDir, { recursive: true, force: true });
+  });
+
+  it('prefers self-attributed lore on self_query when identity profile is configured', () => {
+    const tempDir = fs.mkdtempSync(path.join(process.cwd(), '.tmp-sugaragent-self-query-'));
+    const loreDir = path.join(tempDir, 'lore');
+    const bundlePath = path.join(tempDir, 'authoring.bundle.json');
+    fs.mkdirSync(loreDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(loreDir, 'manifest.json'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        source: { repo: 'local', commit: 'selfquery-1' },
+        generatedAt: new Date().toISOString(),
+        toolVersion: 'test',
+        counts: { files: 2, chunks: 2, issues: 0 },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(loreDir, 'chunks.json'),
+      `${JSON.stringify([
+        {
+          chunkId: 'lore.npcs.baker#background',
+          pageId: 'lore.npcs.baker',
+          title: 'Baker',
+          sectionHeading: 'Background',
+          sourceFile: 'baker.md',
+          sourceCommit: 'selfquery-1',
+          sourceRepo: 'local',
+          summary: 'Baker grew up near the market ovens and apprenticed as a child.',
+          tokens: ['baker', 'background', 'market', 'ovens', 'apprenticed'],
+          metadata: {
+            id: 'lore.npcs.baker',
+            tags: ['baker'],
+            entity_ids: ['npc.baker'],
+            location_ids: ['locations.rackwick_city'],
+            faction_ids: [],
+            beat_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.npcs.rowan#background',
+          pageId: 'lore.npcs.rowan',
+          title: 'Rowan',
+          sectionHeading: 'Background',
+          sourceFile: 'rowan.md',
+          sourceCommit: 'selfquery-1',
+          sourceRepo: 'local',
+          summary: 'Captain Rowan trained with the city watch.',
+          tokens: ['rowan', 'background', 'captain', 'watch', 'trained'],
+          metadata: {
+            id: 'lore.npcs.rowan',
+            tags: ['rowan'],
+            entity_ids: ['npc.rowan'],
+            location_ids: ['locations.rackwick_city'],
+            faction_ids: [],
+            beat_ids: [],
+          },
+        },
+      ], null, 2)}\n`,
+      'utf8',
+    );
+
+    fs.writeFileSync(
+      bundlePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: '2026-03-01T00:00:00.000Z',
+        source: { gameId: 'wordlark', name: 'Wordlark' },
+        policy: { globalSafetyBounds: [] },
+        profiles: [
+          {
+            npcId: 'baker',
+            persona: 'Warm baker',
+            tone: 'friendly',
+            constraints: [],
+            loreScopes: ['npcs.baker', 'npcs.rowan'],
+            selfEntityId: 'npc.baker',
+            selfLoreScopes: ['npcs.baker'],
+            relatedLoreScopes: ['npcs.rowan'],
+          },
+        ],
+        beatContracts: [],
+      }),
+      'utf8',
+    );
+
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--authoring-bundle',
+        bundlePath,
+        '--lore-dir',
+        loreDir,
+        '--ask',
+        'tell me about your background as a baker',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('Baker grew up near the market ovens');
+    expect(output).not.toContain('Captain Rowan trained');
+    expect(output).not.toContain('I am not sure yet');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('forces uncertainty on self_query when only non-self evidence is available', () => {
+    const tempDir = fs.mkdtempSync(path.join(process.cwd(), '.tmp-sugaragent-self-query-uncertain-'));
+    const loreDir = path.join(tempDir, 'lore');
+    const bundlePath = path.join(tempDir, 'authoring.bundle.json');
+    fs.mkdirSync(loreDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(loreDir, 'manifest.json'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        source: { repo: 'local', commit: 'selfquery-2' },
+        generatedAt: new Date().toISOString(),
+        toolVersion: 'test',
+        counts: { files: 1, chunks: 1, issues: 0 },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(loreDir, 'chunks.json'),
+      `${JSON.stringify([
+        {
+          chunkId: 'lore.npcs.rowan#background',
+          pageId: 'lore.npcs.rowan',
+          title: 'Rowan',
+          sectionHeading: 'Background',
+          sourceFile: 'rowan.md',
+          sourceCommit: 'selfquery-2',
+          sourceRepo: 'local',
+          summary: 'Captain Rowan trained with the city watch.',
+          tokens: ['rowan', 'background', 'captain', 'watch', 'trained'],
+          metadata: {
+            id: 'lore.npcs.rowan',
+            tags: ['rowan'],
+            entity_ids: ['npc.rowan'],
+            location_ids: ['locations.rackwick_city'],
+            faction_ids: [],
+            beat_ids: [],
+          },
+        },
+      ], null, 2)}\n`,
+      'utf8',
+    );
+
+    fs.writeFileSync(
+      bundlePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: '2026-03-01T00:00:00.000Z',
+        source: { gameId: 'wordlark', name: 'Wordlark' },
+        policy: { globalSafetyBounds: [] },
+        profiles: [
+          {
+            npcId: 'baker',
+            persona: 'Warm baker',
+            tone: 'friendly',
+            constraints: [],
+            loreScopes: ['npcs.rowan'],
+            selfEntityId: 'npc.baker',
+            selfLoreScopes: ['npcs.baker'],
+            relatedLoreScopes: ['npcs.rowan'],
+          },
+        ],
+        beatContracts: [],
+      }),
+      'utf8',
+    );
+
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--authoring-bundle',
+        bundlePath,
+        '--lore-dir',
+        loreDir,
+        '--ask',
+        'tell me about your background',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('I am not sure yet. I do not want to guess about my own background without records.');
+    expect(output).not.toContain('Captain Rowan trained');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it('persists session memory state between runs', () => {
     const sessionId = `memory-smoke-${Date.now()}`;
     const sessionPath = path.join(process.cwd(), '.sugaragent-sim-sessions', `${sessionId}.json`);

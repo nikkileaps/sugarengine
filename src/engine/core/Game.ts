@@ -25,6 +25,7 @@ import type { ItemView } from '../inventory/types';
 import type { InspectionData } from '../inspection/types';
 import type {
   EnginePlugin,
+  PluginAgentProfile,
   PluginAgentTurnResult,
   PluginEvent,
   PluginIntent,
@@ -100,6 +101,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeAgentProfile(value: unknown): PluginAgentProfile | undefined {
+  if (!isRecord(value)) return undefined;
+  const persona = typeof value.persona === 'string' && value.persona.trim().length > 0
+    ? value.persona.trim()
+    : undefined;
+  const tone = typeof value.tone === 'string' && value.tone.trim().length > 0
+    ? value.tone.trim()
+    : undefined;
+  const selfEntityId = typeof value.selfEntityId === 'string' && value.selfEntityId.trim().length > 0
+    ? value.selfEntityId.trim()
+    : undefined;
+  const constraints = normalizeStringArray(value.constraints ?? value.safetyBounds);
+  const loreScopes = normalizeStringArray(value.loreScopes);
+  const selfLoreScopes = normalizeStringArray(value.selfLoreScopes);
+  const relatedLoreScopes = normalizeStringArray(value.relatedLoreScopes);
+  const profile: PluginAgentProfile = {};
+  if (persona) profile.persona = persona;
+  if (tone) profile.tone = tone;
+  if (selfEntityId) profile.selfEntityId = selfEntityId;
+  if (constraints.length > 0) profile.constraints = constraints;
+  if (loreScopes.length > 0) profile.loreScopes = loreScopes;
+  if (selfLoreScopes.length > 0) profile.selfLoreScopes = selfLoreScopes;
+  if (relatedLoreScopes.length > 0) profile.relatedLoreScopes = relatedLoreScopes;
+  return Object.keys(profile).length > 0 ? profile : undefined;
+}
+
 /**
  * High-level Game class that orchestrates all engine systems.
  * Handles cross-system wiring (dialogue→quests, pickups→inventory, etc.)
@@ -127,6 +161,8 @@ export class Game {
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
   private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
+  private npcAgentProfiles: Map<string, PluginAgentProfile> = new Map();
+  private sugarAgentGlobalSafetyBounds: string[] = [];
   private fadeOverlay: FadeOverlay;
   private pluginManager: PluginManager | null = null;
   private agentBeatContractsByNpc = new Map<string, RuntimeAgentBeatContract[]>();
@@ -292,6 +328,7 @@ export class Game {
     const project = projectData as {
       dialogues?: { id: string }[];
       quests?: { id: string }[];
+      plugins?: unknown[];
       npcs?: {
         id: string;
         name: string;
@@ -302,6 +339,7 @@ export class Game {
         modelHeight?: number;
         animations?: Record<string, string>;
         interactionMode?: NPCInteractionMode;
+        agentProfile?: unknown;
       }[];
       items?: { id: string; name: string; model?: string; modelScale?: number; modelColor?: string; view?: import('../inventory/types').ItemView }[];
       inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[]; model?: string; modelScale?: number; modelColor?: string }[];
@@ -313,6 +351,26 @@ export class Game {
     };
 
     this.agentBeatContractsByNpc = parseRuntimeAgentBeatContracts(projectData);
+    this.sugarAgentGlobalSafetyBounds = [];
+
+    if (isRecord(projectData) && isRecord(projectData.sugaragent)) {
+      const topLevelBounds = normalizeStringArray(
+        projectData.sugaragent.globalSafetyBounds ?? projectData.sugaragent.safetyBounds,
+      );
+      if (topLevelBounds.length > 0) {
+        this.sugarAgentGlobalSafetyBounds = topLevelBounds;
+      }
+    }
+
+    if (Array.isArray(project.plugins)) {
+      for (const plugin of project.plugins) {
+        if (!isRecord(plugin) || plugin.id !== 'sugaragent') continue;
+        const bounds = normalizeStringArray(plugin.globalSafetyBounds ?? plugin.safetyBounds);
+        if (bounds.length > 0) {
+          this.sugarAgentGlobalSafetyBounds = bounds;
+        }
+      }
+    }
 
     // Set player model if specified in project data
     if (project.playerModel) {
@@ -359,12 +417,17 @@ export class Game {
 
     // Register NPCs and optional interaction routing mode.
     this.npcInteractionModes.clear();
+    this.npcAgentProfiles.clear();
     if (project.npcs) {
       for (const npc of project.npcs) {
         this.npcInteractionModes.set(
           npc.id,
           normalizeNPCInteractionMode(npc.interactionMode),
         );
+        const profile = normalizeAgentProfile(npc.agentProfile);
+        if (profile) {
+          this.npcAgentProfiles.set(npc.id, profile);
+        }
         this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode, npc.model, npc.modelHeight, npc.animations);
       }
     }
@@ -457,6 +520,33 @@ export class Game {
     return this.engine.getCurrentRegionInfo();
   }
 
+  getSugarAgentRuntimeDebugInfo(): string | null {
+    if (!this.pluginManager) return null;
+
+    const pluginState = this.pluginManager.serializeState();
+    const sugaragent = pluginState.sugaragent;
+    if (!isRecord(sugaragent) || !isRecord(sugaragent.runtime)) return null;
+
+    const provider = sugaragent.runtime.provider === 'local' ? 'local' : 'deterministic';
+    const healthy = sugaragent.runtime.healthy === true;
+    const outcome = typeof sugaragent.runtime.lastOutcome === 'string'
+      ? sugaragent.runtime.lastOutcome
+      : undefined;
+    const detail = typeof sugaragent.runtime.detail === 'string'
+      ? sugaragent.runtime.detail
+      : undefined;
+
+    const status = healthy ? 'ok' : 'fallback';
+    const parts = [
+      `Agent: ${status}`,
+      `provider=${provider}`,
+      outcome ? `outcome=${outcome}` : undefined,
+      detail ? `detail=${detail}` : undefined,
+    ].filter((entry): entry is string => typeof entry === 'string');
+
+    return parts.join(' | ');
+  }
+
   /**
    * Get the nearby NPC ID (for gift UI, etc.)
    */
@@ -536,6 +626,13 @@ export class Game {
       playerMessage: message,
       beatContract: activeBeatContract ?? undefined,
       beatTurnCount: nextBeatTurnCount,
+      npcProfile: this.npcAgentProfiles.get(active.npcId),
+      globalSafetyBounds: this.sugarAgentGlobalSafetyBounds,
+      context: {
+        gameId: this.config.gameId,
+        regionPath: this.engine.getCurrentRegion(),
+        episodeId: this.config.currentEpisode,
+      },
     });
 
     if (result) {
@@ -654,6 +751,10 @@ export class Game {
       this.inspection.isInspectionActive() ||
       this.isAgentConversationActive()
     );
+  }
+
+  getGameId(): string | undefined {
+    return this.config.gameId;
   }
 
   /**

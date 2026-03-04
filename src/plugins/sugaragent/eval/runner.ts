@@ -162,8 +162,8 @@ function buildSmokeFixtures(runDir: string): SmokeFixtures {
     generatedAt: nowIso(),
     toolVersion: 'adr007-smoke',
     counts: {
-      files: 1,
-      chunks: 1,
+      files: 3,
+      chunks: 3,
       issues: 0,
     },
   };
@@ -201,6 +201,68 @@ function buildSmokeFixtures(runDir: string): SmokeFixtures {
         beat_ids: ['beat.baker.intro'],
       },
     },
+    {
+      chunkId: 'lore.npcs.baker#background',
+      pageId: 'lore.npcs.baker',
+      title: 'Baker',
+      canonLevel: 'hard',
+      sourceFile: 'npcs/baker.md',
+      sourceRepo: 'eval-fixture',
+      sourceCommit: 'smoke',
+      sourceRef: 'refs/eval/smoke',
+      sectionHeading: 'Background',
+      content: 'Baker grew up near the market ovens and apprenticed as a child.',
+      summary: 'Baker grew up near the market ovens and apprenticed as a child.',
+      tokens: [
+        'baker',
+        'background',
+        'market',
+        'ovens',
+        'apprenticed',
+      ],
+      metadata: {
+        id: 'lore.npcs.baker',
+        title: 'Baker',
+        canon_level: 'hard',
+        entity_ids: ['npc.baker'],
+        location_ids: ['locations.rackwick_city'],
+        faction_ids: [],
+        time_period: 'modern',
+        tags: ['baker', 'npc'],
+        beat_ids: [],
+      },
+    },
+    {
+      chunkId: 'lore.npcs.rowan#background',
+      pageId: 'lore.npcs.rowan',
+      title: 'Rowan',
+      canonLevel: 'hard',
+      sourceFile: 'npcs/rowan.md',
+      sourceRepo: 'eval-fixture',
+      sourceCommit: 'smoke',
+      sourceRef: 'refs/eval/smoke',
+      sectionHeading: 'Background',
+      content: 'Captain Rowan trained with the city watch before joining command.',
+      summary: 'Captain Rowan trained with the city watch before joining command.',
+      tokens: [
+        'rowan',
+        'background',
+        'captain',
+        'watch',
+        'command',
+      ],
+      metadata: {
+        id: 'lore.npcs.rowan',
+        title: 'Rowan',
+        canon_level: 'hard',
+        entity_ids: ['npc.rowan'],
+        location_ids: ['locations.rackwick_city'],
+        faction_ids: [],
+        time_period: 'modern',
+        tags: ['rowan', 'captain', 'npc'],
+        beat_ids: [],
+      },
+    },
   ];
   writeJson(path.join(loreDir, 'manifest.json'), manifest);
   writeJson(path.join(loreDir, 'chunks.json'), chunks);
@@ -218,7 +280,14 @@ function buildSmokeFixtures(runDir: string): SmokeFixtures {
         persona: 'Warm neighborhood baker.',
         tone: 'friendly',
         constraints: ['no spoilers about hidden quest rewards'],
-        loreScopes: ['town.market'],
+        loreScopes: [
+          'history.events.creation_of_rackwick_city',
+          'npcs.baker',
+          'npcs.rowan',
+        ],
+        selfEntityId: 'npc.baker',
+        selfLoreScopes: ['npcs.baker'],
+        relatedLoreScopes: ['npcs.rowan'],
       },
     ],
     beatContracts: [
@@ -617,6 +686,64 @@ async function runSmokeLatencyCase(
   };
 }
 
+async function runSmokeIdentityConsistencyCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+  fixtures: SmokeFixtures,
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.identity-consistency';
+  const session = await createSugarAgentSession({
+    npc: 'baker',
+    provider,
+    runtime,
+    useLore: true,
+    loreDir: fixtures.loreDir,
+    useAuthoring: true,
+    authoringBundlePath: fixtures.authoringBundlePath,
+  });
+
+  const turns = [
+    await runTurnWithTiming(session, 'tell me about your background as a baker'),
+  ];
+  const utterance = String(turns[0]?.output?.utterance ?? '');
+  const lower = utterance.toLowerCase();
+  const mentionsSelf = lower.includes('market ovens') || lower.includes('apprenticed');
+  const mentionsForeign = lower.includes('captain rowan');
+  const passed = mentionsSelf && !mentionsForeign;
+  const reason = passed ? null : 'Expected self-query answer grounded in baker self evidence without cross-entity contamination.';
+
+  return {
+    caseId,
+    metricId: 'identityConsistency',
+    title: 'Identity Consistency',
+    passed,
+    score: passed ? 1 : 0,
+    threshold: 1,
+    reason,
+    details: {
+      utterance,
+      mentionsSelf,
+      mentionsForeign,
+    },
+    transcript: {
+      suite: 'smoke',
+      caseId,
+      metricId: 'identityConsistency',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'baker',
+        provider,
+        runtime,
+        useLore: true,
+        useAuthoring: true,
+      },
+      turns,
+      reason,
+      passed,
+    },
+  };
+}
+
 const SMOKE_CASE_RUNNERS: Record<
   string,
   (
@@ -631,6 +758,7 @@ const SMOKE_CASE_RUNNERS: Record<
   'smoke.beat-coverage': runSmokeBeatCoverageCase,
   'smoke.beat-completion': async (provider, runtime) => runSmokeBeatCompletionCase(provider, runtime),
   'smoke.latency-performance': async (provider, runtime) => runSmokeLatencyCase(provider, runtime),
+  'smoke.identity-consistency': runSmokeIdentityConsistencyCase,
 };
 
 function summarizeMetrics(results: EvalCaseResult[]): EvalMetricSummary[] {
@@ -704,6 +832,7 @@ async function runSmokeSuite(
 
   const caseOrder = [
     'smoke.lore-faithfulness',
+    'smoke.identity-consistency',
     'smoke.memory-recall',
     'smoke.intent-safety',
     'smoke.beat-coverage',

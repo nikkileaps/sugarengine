@@ -6,6 +6,9 @@ export interface SugarAgentAgentProfile {
   constraints?: string[];
   safetyBounds?: string[]; // Legacy alias accepted for backward compatibility.
   loreScopes?: string[];
+  selfEntityId?: string;
+  selfLoreScopes?: string[];
+  relatedLoreScopes?: string[];
 }
 
 export interface SugarAgentBeatContract {
@@ -67,6 +70,9 @@ export interface SugarAgentPackedProfile {
   tone?: string;
   constraints: string[];
   loreScopes: string[];
+  selfEntityId?: string;
+  selfLoreScopes: string[];
+  relatedLoreScopes: string[];
 }
 
 export interface SugarAgentPackedBeatContract {
@@ -135,6 +141,9 @@ function normalizeProfile(npcId: string, profile: SugarAgentAgentProfile): Sugar
     tone: toNonEmptyString(profile.tone),
     constraints: normalizeStringArray(profile.constraints ?? profile.safetyBounds),
     loreScopes: normalizeStringArray(profile.loreScopes),
+    selfEntityId: toNonEmptyString(profile.selfEntityId),
+    selfLoreScopes: normalizeStringArray(profile.selfLoreScopes),
+    relatedLoreScopes: normalizeStringArray(profile.relatedLoreScopes),
   };
 }
 
@@ -200,6 +209,9 @@ function normalizePackedProfile(raw: unknown): SugarAgentPackedProfile | null {
     tone: toNonEmptyString(raw.tone),
     constraints: normalizeStringArray(raw.constraints ?? raw.safetyBounds),
     loreScopes: normalizeStringArray(raw.loreScopes),
+    selfEntityId: toNonEmptyString(raw.selfEntityId),
+    selfLoreScopes: normalizeStringArray(raw.selfLoreScopes),
+    relatedLoreScopes: normalizeStringArray(raw.relatedLoreScopes),
   };
 }
 

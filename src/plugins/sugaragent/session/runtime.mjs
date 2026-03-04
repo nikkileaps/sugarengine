@@ -41,9 +41,18 @@ const DEFAULT_BUNDLED_MODEL_PATH = defaultProfile
 const LEGACY_BUNDLED_MODEL_PATH = path.join(BUNDLE_ROOT, 'models', 'qwen2.5-0.5b-instruct-q2_k.gguf');
 const MAX_HISTORY_ENTRIES = 8;
 const MAX_SESSION_FACTS_PER_NPC = 24;
+const LORE_OVERRIDE_MIN_SCORE = 1.2;
+const LORE_OVERRIDE_MIN_MARGIN = 0.35;
 const SESSION_DIR = path.resolve('.sugaragent-sim-sessions');
 const DEFAULT_AUTHORING_BUNDLE_PATH = path.resolve('public/plugins/sugaragent/authoring.bundle.json');
 const CADENCE_SCENARIO_ID = 'crowd-town';
+const VALID_QUERY_TYPES = new Set([
+  'conversation',
+  'self_query',
+  'other_query',
+  'world_query',
+  'mixed_query',
+]);
 const TURN_JSON_SCHEMA = JSON.stringify({
   type: 'object',
   properties: {
@@ -98,6 +107,114 @@ function isRecord(value) {
 
 function isStringArray(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function normalizeOptionalString(value) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const entries = [];
+  for (const entry of value) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    entries.push(normalized);
+  }
+  return entries;
+}
+
+function normalizeQueryType(value) {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return VALID_QUERY_TYPES.has(normalized) ? normalized : undefined;
+}
+
+function normalizeNpcProfile(value) {
+  if (!isRecord(value)) return null;
+  const npcId = normalizeOptionalString(value.npcId);
+  const persona = normalizeOptionalString(value.persona);
+  const tone = normalizeOptionalString(value.tone);
+  const selfEntityId = normalizeOptionalString(value.selfEntityId);
+  const constraints = normalizeStringArray(value.constraints ?? value.safetyBounds);
+  const loreScopes = normalizeStringArray(value.loreScopes);
+  const selfLoreScopes = normalizeStringArray(value.selfLoreScopes);
+  const relatedLoreScopes = normalizeStringArray(value.relatedLoreScopes);
+  const normalized = {};
+  if (npcId) normalized.npcId = npcId;
+  if (persona) normalized.persona = persona;
+  if (tone) normalized.tone = tone;
+  if (selfEntityId) normalized.selfEntityId = selfEntityId;
+  if (constraints.length > 0) normalized.constraints = constraints;
+  if (loreScopes.length > 0) normalized.loreScopes = loreScopes;
+  if (selfLoreScopes.length > 0) normalized.selfLoreScopes = selfLoreScopes;
+  if (relatedLoreScopes.length > 0) normalized.relatedLoreScopes = relatedLoreScopes;
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function mergeStringArrays(base, override) {
+  return normalizeStringArray([...(normalizeStringArray(base)), ...(normalizeStringArray(override))]);
+}
+
+function mergeNpcProfile(base, override) {
+  const baseProfile = normalizeNpcProfile(base) ?? {};
+  const overrideProfile = normalizeNpcProfile(override) ?? {};
+  const merged = {};
+  const npcId = overrideProfile.npcId ?? baseProfile.npcId;
+  const persona = overrideProfile.persona ?? baseProfile.persona;
+  const tone = overrideProfile.tone ?? baseProfile.tone;
+  const selfEntityId = overrideProfile.selfEntityId ?? baseProfile.selfEntityId;
+  const constraints = mergeStringArrays(baseProfile.constraints, overrideProfile.constraints);
+  const loreScopes = mergeStringArrays(baseProfile.loreScopes, overrideProfile.loreScopes);
+  const selfLoreScopes = mergeStringArrays(baseProfile.selfLoreScopes, overrideProfile.selfLoreScopes);
+  const relatedLoreScopes = mergeStringArrays(baseProfile.relatedLoreScopes, overrideProfile.relatedLoreScopes);
+  if (npcId) merged.npcId = npcId;
+  if (persona) merged.persona = persona;
+  if (tone) merged.tone = tone;
+  if (selfEntityId) merged.selfEntityId = selfEntityId;
+  if (constraints.length > 0) merged.constraints = constraints;
+  if (loreScopes.length > 0) merged.loreScopes = loreScopes;
+  if (selfLoreScopes.length > 0) merged.selfLoreScopes = selfLoreScopes;
+  if (relatedLoreScopes.length > 0) merged.relatedLoreScopes = relatedLoreScopes;
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
+function normalizeTurnContext(value) {
+  if (!isRecord(value)) return null;
+  const gameId = normalizeOptionalString(value.gameId);
+  const regionPath = normalizeOptionalString(value.regionPath);
+  const episodeId = normalizeOptionalString(value.episodeId);
+  const queryType = normalizeQueryType(value.queryType);
+  const isFirstMeeting = typeof value.isFirstMeeting === 'boolean'
+    ? value.isFirstMeeting
+    : undefined;
+  const turnIndexWithNpc = typeof value.turnIndexWithNpc === 'number'
+    && Number.isFinite(value.turnIndexWithNpc)
+    ? Math.max(1, Math.floor(value.turnIndexWithNpc))
+    : undefined;
+  const normalized = {};
+  if (gameId) normalized.gameId = gameId;
+  if (regionPath) normalized.regionPath = regionPath;
+  if (episodeId) normalized.episodeId = episodeId;
+  if (queryType) normalized.queryType = queryType;
+  if (isFirstMeeting !== undefined) normalized.isFirstMeeting = isFirstMeeting;
+  if (turnIndexWithNpc !== undefined) normalized.turnIndexWithNpc = turnIndexWithNpc;
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function mergeTurnContext(base, override) {
+  const baseContext = normalizeTurnContext(base) ?? {};
+  const overrideContext = normalizeTurnContext(override) ?? {};
+  const merged = {
+    ...baseContext,
+    ...overrideContext,
+  };
+  return Object.keys(merged).length > 0 ? merged : null;
 }
 
 function validateStructuredOutput(value) {
@@ -325,6 +442,13 @@ function getSessionFactsForNpc(session, npcId) {
   if (!session) return [];
   const npc = session.state.npcs[npcId];
   return Array.isArray(npc?.facts) ? npc.facts : [];
+}
+
+function countPlayerTurns(history) {
+  if (!Array.isArray(history)) return 0;
+  return history.reduce((count, entry) => {
+    return entry?.role === 'player' ? count + 1 : count;
+  }, 0);
 }
 
 function applyTurnToSession(session, npcId, playerMessage, npcReply) {
@@ -669,8 +793,38 @@ function buildNpcProfileBlock(npcProfile) {
   if (Array.isArray(npcProfile.loreScopes) && npcProfile.loreScopes.length > 0) {
     lines.push(`- Lore scopes: ${npcProfile.loreScopes.map((entry) => sanitizePromptText(String(entry))).join(' | ')}`);
   }
+  if (typeof npcProfile.selfEntityId === 'string' && npcProfile.selfEntityId.trim().length > 0) {
+    lines.push(`- Self entity id: ${sanitizePromptText(npcProfile.selfEntityId).slice(0, 120)}`);
+  }
+  if (Array.isArray(npcProfile.selfLoreScopes) && npcProfile.selfLoreScopes.length > 0) {
+    lines.push(`- Self lore scopes: ${npcProfile.selfLoreScopes.map((entry) => sanitizePromptText(String(entry))).join(' | ')}`);
+  }
+  if (Array.isArray(npcProfile.relatedLoreScopes) && npcProfile.relatedLoreScopes.length > 0) {
+    lines.push(`- Related lore scopes: ${npcProfile.relatedLoreScopes.map((entry) => sanitizePromptText(String(entry))).join(' | ')}`);
+  }
   if (lines.length === 0) return null;
   return ['NPC authored profile:', ...lines].join('\n');
+}
+
+function buildIdentityContractBlock(npcProfile, turnContext) {
+  if (!isRecord(npcProfile)) return null;
+  const lines = [];
+  const selfEntityId = typeof npcProfile.selfEntityId === 'string' && npcProfile.selfEntityId.trim().length > 0
+    ? npcProfile.selfEntityId.trim()
+    : '';
+  const hasSelfScopes = Array.isArray(npcProfile.selfLoreScopes) && npcProfile.selfLoreScopes.length > 0;
+  const hasIdentityConfig = Boolean(selfEntityId) || hasSelfScopes;
+  if (!hasIdentityConfig) return null;
+  if (selfEntityId) {
+    lines.push(`- You are canonically entity "${sanitizePromptText(selfEntityId).slice(0, 120)}".`);
+  }
+  if (turnContext?.queryType === 'self_query') {
+    lines.push('- This is a self-question. Use only self-attributed evidence.');
+    lines.push('- Do not answer with facts attributed only to other entities.');
+    lines.push('- If self evidence is missing, say you are not sure.');
+  }
+  if (lines.length === 0) return null;
+  return ['Identity grounding contract:', ...lines].join('\n');
 }
 
 function buildGlobalSafetyBlock(globalSafetyBounds) {
@@ -680,6 +834,135 @@ function buildGlobalSafetyBlock(globalSafetyBounds) {
     .filter((entry) => entry.length > 0);
   if (entries.length === 0) return null;
   return `Global safety policy:\n- ${entries.join('\n- ')}`;
+}
+
+function buildTurnContextBlock(turnContext) {
+  if (!isRecord(turnContext)) return null;
+  const lines = [];
+  if (typeof turnContext.gameId === 'string' && turnContext.gameId.trim().length > 0) {
+    lines.push(`- Game: ${sanitizePromptText(turnContext.gameId).slice(0, 120)}`);
+  }
+  if (typeof turnContext.regionPath === 'string' && turnContext.regionPath.trim().length > 0) {
+    lines.push(`- Region: ${sanitizePromptText(turnContext.regionPath).slice(0, 120)}`);
+  }
+  if (typeof turnContext.episodeId === 'string' && turnContext.episodeId.trim().length > 0) {
+    lines.push(`- Episode: ${sanitizePromptText(turnContext.episodeId).slice(0, 120)}`);
+  }
+  if (typeof turnContext.queryType === 'string' && turnContext.queryType.trim().length > 0) {
+    lines.push(`- Query type: ${sanitizePromptText(turnContext.queryType).slice(0, 64)}`);
+  }
+  if (typeof turnContext.isFirstMeeting === 'boolean') {
+    lines.push(`- First meeting with player: ${turnContext.isFirstMeeting ? 'yes' : 'no'}`);
+  }
+  if (typeof turnContext.turnIndexWithNpc === 'number' && Number.isFinite(turnContext.turnIndexWithNpc)) {
+    lines.push(`- Turn index with player: ${Math.max(1, Math.floor(turnContext.turnIndexWithNpc))}`);
+  }
+  if (lines.length === 0) return null;
+  return ['Runtime context:', ...lines].join('\n');
+}
+
+function classifyTurnQueryType(playerMessage, npcName) {
+  const source = (playerMessage ?? '').trim();
+  if (!source) return 'conversation';
+  const lower = source.toLowerCase();
+  const npcLower = (npcName ?? '').trim().toLowerCase();
+
+  const hasQuestion = source.includes('?');
+  const hasKnowledgeCue = /\b(who|what|when|where|why|how|explain|tell me|do you know|know about|history|origin|founded|creation|remember)\b/.test(lower);
+  if (!hasQuestion && !hasKnowledgeCue) {
+    return 'conversation';
+  }
+
+  const selfCue = /\b(who are you|your name|about you|about yourself|where are you from|your past|your background|your family|remember me|have we met|did we meet|what did i (say|mention|tell you)|what do you remember about me|do you remember what i)\b/.test(lower)
+    || (/\b(you|your)\b/.test(lower) && /\b(name|past|background|family|from|remember|met)\b/.test(lower));
+  const worldCue = /\b(city|town|village|region|history|event|world|place|creation|founded|origin|map|forest|station|gate)\b/.test(lower);
+
+  let otherCue = false;
+  const otherTargetMatch = lower.match(/\b(?:tell me about|know about|what about)\s+([a-z0-9._-]{3,})\b/);
+  if (otherTargetMatch) {
+    const target = otherTargetMatch[1];
+    const excluded = new Set([
+      'you',
+      'yourself',
+      'your',
+      'me',
+      'myself',
+      'town',
+      'city',
+      'world',
+      'history',
+      'place',
+      'this',
+      'that',
+      'here',
+      'there',
+    ]);
+    if (target && !excluded.has(target) && target !== npcLower) {
+      otherCue = true;
+    }
+  }
+
+  if (selfCue && (worldCue || otherCue)) return 'mixed_query';
+  if (selfCue) return 'self_query';
+  if (otherCue && worldCue) return 'mixed_query';
+  if (otherCue) return 'other_query';
+  if (worldCue) return 'world_query';
+  return 'mixed_query';
+}
+
+function isKnowledgeSeekingQueryType(queryType) {
+  return queryType === 'self_query'
+    || queryType === 'other_query'
+    || queryType === 'world_query'
+    || queryType === 'mixed_query';
+}
+
+function evaluateLoreOverrideConfidence(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return {
+      shouldOverride: false,
+      reason: 'no_matches',
+      topScore: 0,
+      secondScore: 0,
+      margin: 0,
+    };
+  }
+
+  const topScore = typeof matches[0]?.score === 'number' && Number.isFinite(matches[0].score)
+    ? matches[0].score
+    : 0;
+  const secondScore = typeof matches[1]?.score === 'number' && Number.isFinite(matches[1].score)
+    ? matches[1].score
+    : 0;
+  const margin = Math.max(0, topScore - secondScore);
+  const meetsScore = topScore >= LORE_OVERRIDE_MIN_SCORE;
+  const meetsMargin = matches.length < 2 || margin >= LORE_OVERRIDE_MIN_MARGIN;
+  const shouldOverride = meetsScore && meetsMargin;
+
+  return {
+    shouldOverride,
+    reason: shouldOverride
+      ? 'ok'
+      : (!meetsScore ? 'top_score_below_threshold' : 'score_margin_below_threshold'),
+    topScore,
+    secondScore,
+    margin,
+  };
+}
+
+function isSelfEvidenceMatch(matchEntry, selfEntityId) {
+  if (!isRecord(matchEntry)) return false;
+  if (matchEntry.selfEntityMatch === true) return true;
+  if (matchEntry.pool === 'self') return true;
+  if (!selfEntityId) return false;
+  const normalizedSelfEntityId = selfEntityId.trim().toLowerCase();
+  if (!normalizedSelfEntityId) return false;
+  const chunk = isRecord(matchEntry.chunk) ? matchEntry.chunk : null;
+  const metadata = chunk && isRecord(chunk.metadata) ? chunk.metadata : null;
+  const entityIds = Array.isArray(metadata?.entity_ids)
+    ? metadata.entity_ids.filter((entry) => typeof entry === 'string').map((entry) => entry.toLowerCase())
+    : [];
+  return entityIds.includes(normalizedSelfEntityId);
 }
 
 function normalizeForEchoCheck(text) {
@@ -790,7 +1073,52 @@ function isLikelyRawMemoryFact(utterance, memoryFacts) {
   return false;
 }
 
-function validateTurnQuality(turn, playerMessage, history, memoryFacts) {
+function isLikelyFirstMeetingFamiliarityClaim(utterance) {
+  const normalized = normalizeForEchoCheck(utterance);
+  if (!normalized) return false;
+  const patterns = [
+    /\byou look familiar\b/,
+    /\byou seem familiar\b/,
+    /\bfamiliar face\b/,
+    /\bwelcome back\b/,
+    /\bgood to see you again\b/,
+    /\bnice to see you again\b/,
+    /\bsee you again\b/,
+    /\bi remember you\b/,
+    /\bremember you\b/,
+    /\bwe have met\b/,
+    /\bwe ve met\b/,
+    /\bmet before\b/,
+    /\bfrom last time\b/,
+    /\bback again\b/,
+  ];
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
+function isLikelyGreetingOnlyMessage(playerMessage) {
+  const normalized = normalizeForEchoCheck(playerMessage);
+  if (!normalized) return false;
+  const patterns = [
+    /^(hi|hello|hey|hola|howdy)$/,
+    /^(hi|hello|hey|hola|howdy)\s+(there|friend|baker|sir|maam|madam)$/,
+    /^(good\s+morning|good\s+afternoon|good\s+evening)$/,
+  ];
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
+function isLikelyUngroundedFirstMeetingGreetingReply(utterance, playerMessage) {
+  if (!isLikelyGreetingOnlyMessage(playerMessage)) return false;
+  const normalized = normalizeForEchoCheck(utterance);
+  if (!normalized) return false;
+  const patterns = [
+    /\bi noticed your\b/,
+    /\byour\s+(shop|store|bakery|business|family|kids|children|mother|father|spouse|team|crew|inventory|quest|mission|castle|farm|house|home|town)\b/,
+    /\byou\s+(own|run|manage|sell|bake|built|founded)\b/,
+  ];
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
+function validateTurnQuality(turn, playerMessage, history, memoryFacts, options = {}) {
   const normalizedReply = normalizeForEchoCheck(turn.utterance);
   const placeholderReplies = new Set([
     'utterance',
@@ -829,6 +1157,18 @@ function validateTurnQuality(turn, playerMessage, history, memoryFacts) {
       reason: 'utterance repeats remembered fact verbatim',
     };
   }
+  if (options.isFirstMeeting === true && isLikelyFirstMeetingFamiliarityClaim(turn.utterance)) {
+    return {
+      valid: false,
+      reason: 'first meeting response implies prior familiarity',
+    };
+  }
+  if (options.isFirstMeeting === true && isLikelyUngroundedFirstMeetingGreetingReply(turn.utterance, playerMessage)) {
+    return {
+      valid: false,
+      reason: 'first meeting greeting includes ungrounded player assumptions',
+    };
+  }
   return { valid: true };
 }
 
@@ -836,18 +1176,23 @@ function buildLlamaPrompt({
   npcName,
   playerMessage,
   repair,
+  repairReason,
   attempt,
   history,
   memoryFacts,
   npcProfile,
   globalSafetyBounds,
+  turnContext,
   scenario,
   scenarioState,
 }) {
   const historyBlock = buildHistoryBlock(history);
   const memoryFactBlock = buildMemoryFactBlock(memoryFacts);
   const npcProfileBlock = buildNpcProfileBlock(npcProfile);
+  const identityContractBlock = buildIdentityContractBlock(npcProfile, turnContext);
   const globalSafetyBlock = buildGlobalSafetyBlock(globalSafetyBounds);
+  const contextBlock = buildTurnContextBlock(turnContext);
+  const isFirstMeeting = turnContext?.isFirstMeeting === true;
   const scenarioPromptBlock = buildScenarioPromptBlock(scenario, scenarioState);
   const responseFormatLines = scenarioPromptBlock
     ? [
@@ -881,10 +1226,20 @@ function buildLlamaPrompt({
     'If the player expresses concern, acknowledge it and offer a grounded response.',
     'If asked what you remember, only use known facts listed below. If there are no known facts, say you do not remember yet.',
     'Do not invent specific memories that are not in known facts or recent conversation.',
+    ...(isFirstMeeting
+      ? [
+        'This is the first meeting with this player.',
+        'Do not imply prior familiarity, prior encounters, or remembered shared history.',
+        'If the player only greets you (for example "hello"), reply with a simple introduction or offer to help.',
+        'Do not assume facts about the player (for example their shop, possessions, or history) unless the player stated them.',
+      ]
+      : []),
     'Keep utterance concise (1-2 sentences).',
     ...(scenarioPromptBlock ? [scenarioPromptBlock] : []),
     ...(globalSafetyBlock ? [globalSafetyBlock] : []),
     ...(npcProfileBlock ? [npcProfileBlock] : []),
+    ...(identityContractBlock ? [identityContractBlock] : []),
+    ...(contextBlock ? [contextBlock] : []),
     memoryFactBlock,
     historyBlock,
     ...responseFormatLines,
@@ -893,8 +1248,9 @@ function buildLlamaPrompt({
     'Return a single JSON object and nothing else.',
     ...(repair
       ? [
-        'Previous attempt was invalid or mirrored the player.',
+        `Previous attempt was invalid: ${sanitizePromptText(repairReason ?? 'invalid output')}.`,
         'Rewrite with fresh wording and do not copy player phrasing.',
+        'If first meeting is true, remove any implication that you already know the player.',
       ]
       : []),
     `attempt=${attempt}`,
@@ -981,11 +1337,13 @@ function createLlamaCppRuntime(args) {
       npcName,
       playerMessage,
       repair,
+      repairReason,
       attempt,
       history,
       memoryFacts,
       npcProfile,
       globalSafetyBounds,
+      context,
       scenario,
       scenarioState,
     }) {
@@ -997,11 +1355,13 @@ function createLlamaCppRuntime(args) {
         npcName,
         playerMessage,
         repair,
+        repairReason,
         attempt,
         history,
         memoryFacts,
         npcProfile,
         globalSafetyBounds,
+        turnContext: context,
         scenario,
         scenarioState,
       });
@@ -1059,9 +1419,48 @@ function createLlamaCppRuntime(args) {
   };
 }
 
+function createFirstMeetingFallbackReply(npcName) {
+  const safeName = typeof npcName === 'string' && npcName.trim().length > 0
+    ? npcName.trim()
+    : 'friend';
+  return {
+    utterance: `Nice to meet you. I'm ${safeName}. What would you like to know?`,
+    emotion: 'warm',
+    intent: 'conversation',
+    proposedIntents: [],
+    citations: [],
+    beatEvidence: {
+      coveredFacts: [],
+      uncoveredFacts: [],
+      completionSignal: 'none',
+      confidence: 0,
+    },
+  };
+}
+
+function createGroundedUncertaintyReply(queryType) {
+  const utterance = queryType === 'self_query'
+    ? 'I am not sure yet. I do not want to guess about my own background without records.'
+    : 'I am not sure. I do not have reliable records about that right now.';
+  return {
+    utterance,
+    emotion: 'uncertain',
+    intent: 'uncertain',
+    proposedIntents: [],
+    citations: [],
+    beatEvidence: {
+      coveredFacts: [],
+      uncoveredFacts: [],
+      completionSignal: 'none',
+      confidence: 0,
+    },
+  };
+}
+
 function createLocalProvider(runtime, options = {}) {
   const maxAttempts = options.maxAttempts ?? 3;
   const loreArtifacts = options.loreArtifacts ?? null;
+  const requireLoreScopeForRetrieval = options.requireLoreScopeForRetrieval === true;
 
   return {
     async generateStructured(input) {
@@ -1081,6 +1480,16 @@ function createLocalProvider(runtime, options = {}) {
       }
 
       const validationErrors = [];
+      const normalizedTurnContext = normalizeTurnContext(input.context);
+      const queryType = normalizedTurnContext?.queryType
+        ?? classifyTurnQueryType(input.playerMessage, input.npcName);
+      const isFirstMeeting = normalizedTurnContext?.isFirstMeeting === true;
+      const runtimeTurnContext = normalizeTurnContext({
+        ...(normalizedTurnContext ?? {}),
+        queryType,
+      });
+      let sawFirstMeetingViolation = false;
+      let lastValidationReason = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         let response;
         try {
@@ -1091,37 +1500,71 @@ function createLocalProvider(runtime, options = {}) {
             memoryFacts: input.memoryFacts ?? [],
             npcProfile: input.npcProfile ?? null,
             globalSafetyBounds: input.globalSafetyBounds ?? [],
+            context: runtimeTurnContext,
             scenario: input.scenario ?? null,
             scenarioState: input.scenarioState ?? null,
             attempt,
             repair: attempt > 1,
+            repairReason: lastValidationReason,
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          validationErrors.push(`attempt ${attempt}: runtime error: ${message}`);
+          const reason = `runtime error: ${message}`;
+          validationErrors.push(`attempt ${attempt}: ${reason}`);
+          lastValidationReason = reason;
           continue;
         }
 
         const parsed = parseStructuredFromText(response.jsonText)
           ?? parseStructuredFromText(response.rawText ?? '');
         if (!parsed) {
-          validationErrors.push(`attempt ${attempt}: invalid JSON`);
+          const reason = 'invalid JSON';
+          validationErrors.push(`attempt ${attempt}: ${reason}`);
+          lastValidationReason = reason;
           continue;
         }
 
         const validation = validateStructuredOutput(parsed);
         if (!validation.valid) {
-          validationErrors.push(`attempt ${attempt}: ${validation.errors.join('; ')}`);
+          const reason = validation.errors.join('; ');
+          validationErrors.push(`attempt ${attempt}: ${reason}`);
+          lastValidationReason = reason;
           continue;
         }
 
         let output = parsed;
         const activeBeatId = input.scenario?.beatContract?.beatId;
-        const loreMatches = retrieveLoreChunks(loreArtifacts, input.playerMessage, {
-          maxResults: 2,
-          activeBeatIds: typeof activeBeatId === 'string' ? [activeBeatId] : [],
-        });
-        if (loreMatches.length > 0) {
+        const loreScopes = normalizeStringArray(input.npcProfile?.loreScopes);
+        const selfLoreScopes = normalizeStringArray(input.npcProfile?.selfLoreScopes);
+        const relatedLoreScopes = normalizeStringArray(input.npcProfile?.relatedLoreScopes);
+        const selfEntityId = normalizeOptionalString(input.npcProfile?.selfEntityId);
+        const shouldAttemptLoreRetrieval = isKnowledgeSeekingQueryType(queryType);
+        const hasAnyScopes = loreScopes.length > 0 || selfLoreScopes.length > 0 || relatedLoreScopes.length > 0;
+        const canRetrieveLore = (hasAnyScopes || !requireLoreScopeForRetrieval)
+          && shouldAttemptLoreRetrieval;
+        const loreMatches = canRetrieveLore
+          ? retrieveLoreChunks(loreArtifacts, input.playerMessage, {
+            maxResults: 2,
+            activeBeatIds: typeof activeBeatId === 'string' ? [activeBeatId] : [],
+            loreScopes,
+            selfLoreScopes,
+            relatedLoreScopes,
+            selfEntityId,
+            queryType,
+          })
+          : [];
+        const loreConfidence = evaluateLoreOverrideConfidence(loreMatches);
+        const topLoreMatch = loreMatches[0];
+        const requiresSelfIdentityEvidence = queryType === 'self_query'
+          && (Boolean(selfEntityId) || selfLoreScopes.length > 0);
+        const topLoreSupportsSelfQuery = queryType === 'self_query'
+          ? (!requiresSelfIdentityEvidence || isSelfEvidenceMatch(topLoreMatch, selfEntityId))
+          : true;
+        const shouldApplyLoreOverride = canRetrieveLore
+          && loreConfidence.shouldOverride
+          && topLoreSupportsSelfQuery;
+        let appliedLoreMatches = [];
+        if (shouldApplyLoreOverride && loreMatches.length > 0) {
           const grounded = buildLoreGroundedTurn(input.playerMessage, loreMatches);
           if (grounded) {
             output = {
@@ -1131,16 +1574,34 @@ function createLocalProvider(runtime, options = {}) {
               citations: grounded.citations,
               beatEvidence: output.beatEvidence ?? grounded.beatEvidence,
             };
+            appliedLoreMatches = loreMatches;
           }
+        }
+        const shouldForceUncertaintyForSelfQuery = requiresSelfIdentityEvidence
+          && (!shouldApplyLoreOverride || !topLoreSupportsSelfQuery);
+        const shouldForceUncertaintyForUnsupportedKnowledge = queryType !== 'self_query'
+          && isKnowledgeSeekingQueryType(queryType)
+          && !shouldApplyLoreOverride;
+        if (shouldForceUncertaintyForSelfQuery || shouldForceUncertaintyForUnsupportedKnowledge) {
+          output = createGroundedUncertaintyReply(queryType);
+          appliedLoreMatches = [];
         }
         const quality = validateTurnQuality(
           output,
           input.playerMessage,
           input.history ?? [],
           input.memoryFacts ?? [],
+          { isFirstMeeting },
         );
         if (!quality.valid) {
           validationErrors.push(`attempt ${attempt}: ${quality.reason}`);
+          lastValidationReason = quality.reason;
+          if (
+            quality.reason === 'first meeting response implies prior familiarity'
+            || quality.reason === 'first meeting greeting includes ungrounded player assumptions'
+          ) {
+            sawFirstMeetingViolation = true;
+          }
           continue;
         }
 
@@ -1149,12 +1610,15 @@ function createLocalProvider(runtime, options = {}) {
           attempts: attempt,
           usedFallback: false,
           validationErrors,
-          loreMatches,
+          loreMatches: appliedLoreMatches,
         };
       }
 
+      const fallbackOutput = isFirstMeeting && sawFirstMeetingViolation
+        ? createFirstMeetingFallbackReply(input.npcName)
+        : createDeterministicFallbackReply(input.playerMessage, input.memoryFacts ?? []);
       return {
-        output: createDeterministicFallbackReply(input.playerMessage, input.memoryFacts ?? []),
+        output: fallbackOutput,
         attempts: maxAttempts,
         usedFallback: true,
         validationErrors,
@@ -1185,6 +1649,10 @@ const DEFAULT_SESSION_OPTIONS = {
   session: null,
   resetSession: null,
   scenario: null,
+  npcProfileOverride: null,
+  globalSafetyBoundsOverride: [],
+  turnContext: null,
+  requireLoreScopeForRetrieval: false,
 };
 
 function normalizeSessionOptions(options = {}) {
@@ -1267,6 +1735,11 @@ function normalizeSessionOptions(options = {}) {
     throw new Error('When both session and resetSession are provided, they must reference the same session ID.');
   }
 
+  normalized.npcProfileOverride = normalizeNpcProfile(normalized.npcProfileOverride);
+  normalized.globalSafetyBoundsOverride = normalizeStringArray(normalized.globalSafetyBoundsOverride);
+  normalized.turnContext = normalizeTurnContext(normalized.turnContext);
+  normalized.requireLoreScopeForRetrieval = normalized.requireLoreScopeForRetrieval === true;
+
   return normalized;
 }
 
@@ -1287,6 +1760,7 @@ function createSessionStartupInfo({
   reset,
   session,
   loreArtifacts,
+  turnContext,
   runtimeMode,
   runtimeWarning,
   runtimeHealth,
@@ -1314,6 +1788,7 @@ function createSessionStartupInfo({
         pathToFile: session.pathToFile,
       }
       : null,
+    context: turnContext ?? null,
     lore: loreArtifacts
       ? {
         loaded: true,
@@ -1365,9 +1840,15 @@ export async function createSugarAgentSession(options = {}) {
   const npcProfile = authoring.bundle
     ? findSugarAgentProfile(authoring.bundle, args.npc)
     : null;
-  const globalSafetyBounds = Array.isArray(authoring.bundle?.policy?.globalSafetyBounds)
+  const globalSafetyBoundsFromAuthoring = Array.isArray(authoring.bundle?.policy?.globalSafetyBounds)
     ? authoring.bundle.policy.globalSafetyBounds
     : [];
+  const globalSafetyBounds = mergeStringArrays(
+    globalSafetyBoundsFromAuthoring,
+    args.globalSafetyBoundsOverride,
+  );
+  const mergedNpcProfile = mergeNpcProfile(npcProfile, args.npcProfileOverride);
+  const turnContext = args.turnContext;
 
   let selectedBeatContract = null;
   if (authoring.bundle && requestedAuthoringContractId) {
@@ -1440,6 +1921,7 @@ export async function createSugarAgentSession(options = {}) {
 
     localProvider = createLocalProvider(runtime, {
       loreArtifacts,
+      requireLoreScopeForRetrieval: args.requireLoreScopeForRetrieval,
     });
   }
 
@@ -1460,8 +1942,9 @@ export async function createSugarAgentSession(options = {}) {
     runtimeMode,
     conversation: session ? [...(session.state.npcs[args.npc]?.history ?? [])] : [],
     session,
-    npcProfile,
+    npcProfile: mergedNpcProfile,
     globalSafetyBounds,
+    turnContext,
     scenario,
     scenarioState,
     cadenceConfig,
@@ -1473,12 +1956,13 @@ export async function createSugarAgentSession(options = {}) {
       args,
       scenario: scenarioInfo,
       authoring,
-      npcProfile,
+      npcProfile: mergedNpcProfile,
       globalSafetyBounds,
       beatContract: cadenceBeatContract ?? selectedBeatContract,
       reset,
       session,
       loreArtifacts,
+      turnContext,
       runtimeMode,
       runtimeWarning,
       runtimeHealth,
@@ -1490,12 +1974,28 @@ export async function createSugarAgentSession(options = {}) {
       const requestedTicks = Number.isFinite(ticks) ? Math.max(1, Math.floor(ticks)) : 1;
       return runCrowdTownCadenceSimulation(requestedTicks, context.cadenceConfig);
     },
-    async runTurn(playerMessage) {
+    async runTurn(playerMessage, turnOptions = {}) {
       if (typeof playerMessage !== 'string' || playerMessage.trim().length === 0) {
         throw new Error('playerMessage must be a non-empty string');
       }
 
       const message = playerMessage.trim();
+      const turnOptionRecord = isRecord(turnOptions) ? turnOptions : {};
+      const turnNpcProfile = mergeNpcProfile(
+        context.npcProfile,
+        turnOptionRecord.npcProfileOverride ?? turnOptionRecord.npcProfile,
+      );
+      const turnGlobalSafetyBounds = mergeStringArrays(
+        context.globalSafetyBounds,
+        turnOptionRecord.globalSafetyBoundsOverride ?? turnOptionRecord.globalSafetyBounds,
+      );
+      const baseTurnContext = mergeTurnContext(context.turnContext, turnOptionRecord.context);
+      const priorPlayerTurnCount = countPlayerTurns(context.conversation);
+      const derivedTurnContext = {
+        isFirstMeeting: priorPlayerTurnCount === 0,
+        turnIndexWithNpc: priorPlayerTurnCount + 1,
+      };
+      const turnContext = mergeTurnContext(baseTurnContext, derivedTurnContext);
 
       if (args.provider === 'echo') {
         const output = createEchoReply(message);
@@ -1515,8 +2015,9 @@ export async function createSugarAgentSession(options = {}) {
         playerMessage: message,
         history: context.conversation,
         memoryFacts: getSessionFactsForNpc(context.session, args.npc),
-        npcProfile: context.npcProfile,
-        globalSafetyBounds: context.globalSafetyBounds,
+        npcProfile: turnNpcProfile,
+        globalSafetyBounds: turnGlobalSafetyBounds,
+        context: turnContext,
         scenario: context.scenario,
         scenarioState: context.scenarioState,
       });

@@ -119,6 +119,12 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     (level) => game.engine.setForcedLOD(level),
     () => game.engine.getForcedLOD()
   );
+  const updateAgentDebugInfo = () => {
+    debugHUD.setCustomInfo(game.getSugarAgentRuntimeDebugInfo());
+  };
+  updateAgentDebugInfo();
+  const debugInfoInterval = window.setInterval(updateAgentDebugInfo, 500);
+  window.addEventListener('beforeunload', () => window.clearInterval(debugInfoInterval), { once: true });
 
   // Free camera controller for positioning title screen camera (F2 to toggle)
   const freeCam = new FreeCameraController(game.engine.getCamera(), container);

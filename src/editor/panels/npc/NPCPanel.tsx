@@ -34,6 +34,9 @@ export interface NPCEntry {
     constraints?: string[];
     safetyBounds?: string[]; // Legacy alias, accepted for backward compatibility.
     loreScopes?: string[];
+    selfEntityId?: string;
+    selfLoreScopes?: string[];
+    relatedLoreScopes?: string[];
   };
   model?: string;
   modelHeight?: number;
@@ -73,6 +76,27 @@ export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], item
       warnings.push('No default dialogue assigned');
     } else if (dialogues.length > 0 && !dialogues.some((d) => d.id === npc.defaultDialogue)) {
       warnings.push(`Default dialogue "${npc.defaultDialogue}" not found`);
+    }
+
+    const usesSugarAgent = npc.interactionMode === 'agent' || npc.interactionMode === 'hybrid';
+    const profile = npc.agentProfile;
+    const selfEntityId = typeof profile?.selfEntityId === 'string' ? profile.selfEntityId.trim() : '';
+    const loreScopesCount = Array.isArray(profile?.loreScopes) ? profile.loreScopes.filter(Boolean).length : 0;
+    const selfScopesCount = Array.isArray(profile?.selfLoreScopes) ? profile.selfLoreScopes.filter(Boolean).length : 0;
+    const relatedScopesCount = Array.isArray(profile?.relatedLoreScopes) ? profile.relatedLoreScopes.filter(Boolean).length : 0;
+    const totalScopeCount = loreScopesCount + selfScopesCount + relatedScopesCount;
+
+    if (usesSugarAgent && !selfEntityId) {
+      warnings.push('Agent mode: missing self entity id');
+    }
+    if (usesSugarAgent && selfEntityId && (selfScopesCount + loreScopesCount) === 0) {
+      warnings.push('Agent mode: no self lore scopes configured');
+    }
+    if (usesSugarAgent && relatedScopesCount > 0 && !selfEntityId) {
+      warnings.push('Agent mode: related scopes set without self entity id');
+    }
+    if ((selfEntityId || selfScopesCount > 0 || relatedScopesCount > 0) && totalScopeCount === 0) {
+      warnings.push('Identity fields set but no lore scopes configured');
     }
     return warnings;
   };

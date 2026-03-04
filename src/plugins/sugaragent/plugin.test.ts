@@ -70,6 +70,16 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     });
 
     expect(turn?.utterance).toContain('I heard you say');
+    const snapshot = plugin.serializeState?.() as {
+      runtime?: {
+        provider?: string;
+        healthy?: boolean;
+        lastOutcome?: string;
+      };
+    };
+    expect(snapshot.runtime?.provider).toBe('local');
+    expect(snapshot.runtime?.healthy).toBe(true);
+    expect(snapshot.runtime?.lastOutcome).toBe('provider_ok');
   });
 
   it('returns beatEvidence when a beat contract is active', async () => {

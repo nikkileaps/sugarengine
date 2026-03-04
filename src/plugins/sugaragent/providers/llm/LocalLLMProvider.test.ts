@@ -91,4 +91,76 @@ describe('LocalLLMProvider', () => {
     expect(result.usedFallback).toBe(true);
     expect(result.validationErrors.some((entry) => entry.includes('runtime error'))).toBe(true);
   });
+
+  it('forwards npc profile, global safety bounds, and context to the runtime bridge', async () => {
+    let capturedRequest: any = null;
+    const provider = new LocalLLMProvider({
+      runtime: {
+        async health() {
+          return { ok: true };
+        },
+        async loadModel() {},
+        async generateStructured(request) {
+          capturedRequest = request as unknown as Record<string, unknown>;
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'Acknowledged.',
+              emotion: 'neutral',
+              intent: 'conversation',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+
+    const result = await provider.generateStructured({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'Hello',
+      npcProfile: {
+        persona: 'Warm baker',
+        tone: 'friendly',
+        constraints: ['stay in character'],
+        loreScopes: ['history.events.creation_of_rackwick_city'],
+        selfEntityId: 'npc.baker',
+        selfLoreScopes: ['npc.baker'],
+        relatedLoreScopes: ['npc.baker.family'],
+      },
+      globalSafetyBounds: ['no legal advice'],
+      context: {
+        gameId: 'wordlark',
+        regionPath: 'station',
+        episodeId: 's1e1',
+      },
+    });
+
+    expect(result.usedFallback).toBe(false);
+    expect(capturedRequest?.npcProfile).toEqual({
+      persona: 'Warm baker',
+      tone: 'friendly',
+      constraints: ['stay in character'],
+      loreScopes: ['history.events.creation_of_rackwick_city'],
+      selfEntityId: 'npc.baker',
+      selfLoreScopes: ['npc.baker'],
+      relatedLoreScopes: ['npc.baker.family'],
+    });
+    expect(capturedRequest?.globalSafetyBounds).toEqual(['no legal advice']);
+    expect(capturedRequest?.context).toEqual({
+      gameId: 'wordlark',
+      regionPath: 'station',
+      episodeId: 's1e1',
+    });
+  });
 });

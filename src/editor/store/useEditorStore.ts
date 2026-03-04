@@ -31,6 +31,9 @@ export interface NPCData {
     constraints?: string[];
     safetyBounds?: string[]; // Legacy alias, accepted for backward compatibility.
     loreScopes?: string[];
+    selfEntityId?: string;
+    selfLoreScopes?: string[];
+    relatedLoreScopes?: string[];
   };
   model?: string;
   modelHeight?: number;

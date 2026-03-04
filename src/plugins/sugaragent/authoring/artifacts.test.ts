@@ -32,6 +32,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
             tone: 'firm',
             constraints: ['do not reveal captain identity before beat.gate.reveal'],
             loreScopes: ['city.gate', 'captain.rowan'],
+            selfEntityId: 'npc.guard',
+            selfLoreScopes: ['npc.guard'],
+            relatedLoreScopes: ['npc.captain.rowan'],
           },
         },
       ],
@@ -71,6 +74,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
     expect(result.bundle?.policy.globalSafetyBounds).toEqual(['no profanity', 'no legal advice']);
     expect(result.bundle?.profiles.length).toBe(1);
     expect(result.bundle?.profiles[0]?.constraints).toEqual(['do not reveal captain identity before beat.gate.reveal']);
+    expect(result.bundle?.profiles[0]?.selfEntityId).toBe('npc.guard');
+    expect(result.bundle?.profiles[0]?.selfLoreScopes).toEqual(['npc.guard']);
+    expect(result.bundle?.profiles[0]?.relatedLoreScopes).toEqual(['npc.captain.rowan']);
     expect(result.bundle?.beatContracts.length).toBe(1);
     expect(result.bundle?.beatContracts[0]?.questId).toBe('quest.gate.alert');
   });
@@ -132,6 +138,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
           tone: 'firm',
           constraints: ['do not reveal gate key', 'do not reveal gate key'],
           loreScopes: ['city.gate'],
+          selfEntityId: 'npc.guard',
+          selfLoreScopes: ['npc.guard'],
+          relatedLoreScopes: ['npc.captain.rowan', 'npc.captain.rowan'],
         },
         {
           npcId: 'npc.guard',
@@ -139,6 +148,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
           tone: 'steady',
           constraints: [],
           loreScopes: [],
+          selfEntityId: 'npc.guard',
+          selfLoreScopes: ['npc.guard'],
+          relatedLoreScopes: [],
         },
       ],
       beatContracts: [
@@ -159,6 +171,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
     expect(parsed?.profiles.length).toBe(1);
     expect(parsed?.profiles[0]?.persona).toBe('Newest');
     expect(parsed?.profiles[0]?.constraints).toEqual([]);
+    expect(parsed?.profiles[0]?.selfEntityId).toBe('npc.guard');
+    expect(parsed?.profiles[0]?.selfLoreScopes).toEqual(['npc.guard']);
+    expect(parsed?.profiles[0]?.relatedLoreScopes).toEqual([]);
     expect(parsed?.beatContracts.length).toBe(1);
   });
 
@@ -174,6 +189,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
           tone: 'friendly',
           constraints: ['no insults'],
           loreScopes: [],
+          selfEntityId: 'npc.baker',
+          selfLoreScopes: ['npc.baker'],
+          relatedLoreScopes: ['npc.baker.family'],
         },
       ],
       beatContracts: [
@@ -195,6 +213,9 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
     const beatByNpc = findSugarAgentBeatContract(bundle, { npcId: 'npc.baker' });
 
     expect(profile?.persona).toBe('Warm baker');
+    expect(profile?.selfEntityId).toBe('npc.baker');
+    expect(profile?.selfLoreScopes).toEqual(['npc.baker']);
+    expect(profile?.relatedLoreScopes).toEqual(['npc.baker.family']);
     expect(beatById?.id).toBe('beat.baker.greeting');
     expect(beatByNpc?.id).toBe('beat.baker.greeting');
   });

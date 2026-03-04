@@ -202,6 +202,13 @@ export function Editor() {
   const [newProjectName, setNewProjectName] = useState('My Game');
   const [gameId, setGameId] = useState('my-game');
   const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
+  const [resettingSugarAgentRuntime, setResettingSugarAgentRuntime] = useState(false);
+  const [resettingSugarAgentSessions, setResettingSugarAgentSessions] = useState(false);
+  const [reingestingSugarAgentLore, setReingestingSugarAgentLore] = useState(false);
+  const [sugarAgentRuntimeMessage, setSugarAgentRuntimeMessage] = useState<{
+    kind: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
 
   // Get current episode
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId);
@@ -643,6 +650,123 @@ export function Editor() {
     setDirty(true);
   };
 
+  const handleResetSugarAgentRuntime = async () => {
+    if (resettingSugarAgentRuntime) return;
+    setResettingSugarAgentRuntime(true);
+    setSugarAgentRuntimeMessage({
+      kind: 'info',
+      text: 'Resetting SugarAgent runtime cache...',
+    });
+    try {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'unloadModel' }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      const payload = await response.json().catch(() => ({} as { detail?: string }));
+      setSugarAgentRuntimeMessage({
+        kind: 'success',
+        text: payload.detail ?? 'SugarAgent runtime cache cleared.',
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSugarAgentRuntimeMessage({
+        kind: 'error',
+        text: `Could not reset SugarAgent runtime cache: ${detail}`,
+      });
+    } finally {
+      setResettingSugarAgentRuntime(false);
+    }
+  };
+
+  const handleReingestSugarAgentLore = async () => {
+    if (reingestingSugarAgentLore) return;
+    setReingestingSugarAgentLore(true);
+    setSugarAgentRuntimeMessage({
+      kind: 'info',
+      text: 'Re-ingesting lore and clearing runtime cache...',
+    });
+    try {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          op: 'reingestLore',
+          gameId,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      const payload = await response.json().catch(() => ({} as {
+        detail?: string;
+        counts?: { chunks?: number; files?: number };
+      }));
+      const chunkCount = typeof payload.counts?.chunks === 'number'
+        ? payload.counts.chunks
+        : null;
+      const detail = payload.detail ?? 'Lore re-ingested and runtime cache cleared.';
+      setSugarAgentRuntimeMessage({
+        kind: 'success',
+        text: chunkCount !== null ? `${detail} (${chunkCount} chunks)` : detail,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSugarAgentRuntimeMessage({
+        kind: 'error',
+        text: `Could not re-ingest lore: ${detail}`,
+      });
+    } finally {
+      setReingestingSugarAgentLore(false);
+    }
+  };
+
+  const handleResetSugarAgentSessions = async () => {
+    if (resettingSugarAgentSessions) return;
+    setResettingSugarAgentSessions(true);
+    setSugarAgentRuntimeMessage({
+      kind: 'info',
+      text: `Clearing all persisted NPC sessions for ${gameId}...`,
+    });
+    try {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          op: 'clearSessionsForGame',
+          gameId,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      const payload = await response.json().catch(() => ({} as {
+        detail?: string;
+        removedFiles?: string[];
+      }));
+      const removedCount = Array.isArray(payload.removedFiles) ? payload.removedFiles.length : null;
+      const detail = payload.detail ?? `Persisted NPC sessions cleared for ${gameId}.`;
+      setSugarAgentRuntimeMessage({
+        kind: 'success',
+        text: removedCount !== null ? `${detail} (${removedCount} files removed)` : detail,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSugarAgentRuntimeMessage({
+        kind: 'error',
+        text: `Could not clear persisted NPC sessions: ${detail}`,
+      });
+    } finally {
+      setResettingSugarAgentSessions(false);
+    }
+  };
+
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
       {/* All panels are rendered to maintain hook consistency - they use render props */}
@@ -1015,16 +1139,66 @@ export function Editor() {
               </Group>
 
               {plugin.id === 'sugaragent' && (
-                <Textarea
-                  label="Global Safety Bounds"
-                  description="Baseline safety policy applied to all SugarAgent NPCs (one per line or comma-separated)."
-                  value={sugarAgentGlobalSafetyBounds.join('\n')}
-                  onChange={(event) => handleSetSugarAgentGlobalSafetyBounds(event.currentTarget.value)}
-                  placeholder={'No profanity\nNo legal advice\nNo medical advice'}
-                  minRows={3}
-                  autosize
-                  disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
-                />
+                <Stack gap={8}>
+                  <Textarea
+                    label="Global Safety Bounds"
+                    description="Baseline safety policy applied to all SugarAgent NPCs (one per line or comma-separated)."
+                    value={sugarAgentGlobalSafetyBounds.join('\n')}
+                    onChange={(event) => handleSetSugarAgentGlobalSafetyBounds(event.currentTarget.value)}
+                    placeholder={'No profanity\nNo legal advice\nNo medical advice'}
+                    minRows={3}
+                    autosize
+                    disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
+                  />
+                  <Group justify="space-between" align="center">
+                    <Text size="xs" c="dimmed">
+                      Clear preview runtime cache after lore updates.
+                    </Text>
+                    <Group gap={8}>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        onClick={handleReingestSugarAgentLore}
+                        loading={reingestingSugarAgentLore}
+                        disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
+                      >
+                        Re-ingest Lore + Reset
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        onClick={handleResetSugarAgentSessions}
+                        loading={resettingSugarAgentSessions}
+                        disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
+                      >
+                        Reset All NPC Sessions (Game)
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        onClick={handleResetSugarAgentRuntime}
+                        loading={resettingSugarAgentRuntime}
+                        disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
+                      >
+                        Reset Runtime (Preview)
+                      </Button>
+                    </Group>
+                  </Group>
+                  {sugarAgentRuntimeMessage && (
+                    <Text
+                      size="xs"
+                      c={
+                        sugarAgentRuntimeMessage.kind === 'success'
+                          ? 'green'
+                          : sugarAgentRuntimeMessage.kind === 'error'
+                            ? 'red'
+                            : 'dimmed'
+                      }
+                    >
+                      {sugarAgentRuntimeMessage.text}
+                    </Text>
+                  )}
+                </Stack>
               )}
             </Group>
           ))}

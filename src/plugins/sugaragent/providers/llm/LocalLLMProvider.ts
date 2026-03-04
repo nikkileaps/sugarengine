@@ -88,6 +88,9 @@ export class LocalLLMProvider implements LLMProvider {
           playerMessage: request.playerMessage,
           attempt,
           repair: attempt > 1,
+          npcProfile: request.npcProfile,
+          globalSafetyBounds: request.globalSafetyBounds,
+          context: request.context,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

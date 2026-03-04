@@ -166,7 +166,7 @@ describe('SugarAgent lore phase-2 flow', () => {
 
     expect(simOutput).toContain('lore loaded:');
     expect(simOutput).toContain('citations=');
-    expect(simOutput).toContain('From the archives:');
+    expect(simOutput).not.toContain('From the archives:');
     expect(simOutput).toContain('founded by Mayor Alba');
     expect(simOutput).toContain('@def456');
   });

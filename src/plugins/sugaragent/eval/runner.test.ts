@@ -21,6 +21,7 @@ describe('SugarAgent eval runner (ADR-007 MVP)', () => {
     expect(report.status).toBe('pass');
     expect(Array.isArray(report.metrics)).toBe(true);
     expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'loreFaithfulness')).toBe(true);
+    expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'identityConsistency')).toBe(true);
     expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'beatCompletionPrecisionRecall')).toBe(true);
     expect(report.beatEvaluation?.coverage?.coveredCount).toBeGreaterThanOrEqual(1);
     expect(report.beatEvaluation?.completion?.falseCompleteCount).toBe(0);

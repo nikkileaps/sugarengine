@@ -62,6 +62,32 @@ export function setupGameUI(game: Game, container: HTMLElement) {
 
   agentConversationUI.setOnSubmit((message) => game.submitAgentConversationTurn(message));
   agentConversationUI.setOnClose(() => game.closeAgentConversation());
+  const isPreviewRuntime = window.location.pathname.includes('preview.html');
+  if (isPreviewRuntime) {
+    agentConversationUI.setOnReset(async (session) => {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          op: 'clearSession',
+          gameId: game.getGameId(),
+          npcId: session.npcId,
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+
+      const payload = await response.json().catch(() => ({} as { detail?: string }));
+      return {
+        detail: payload.detail ?? `Conversation memory reset for ${session.npcId}.`,
+      };
+    });
+  } else {
+    agentConversationUI.setOnReset(null);
+  }
 
   // ========================================
   // Game Event Handlers → UI Updates
