@@ -1,4 +1,4 @@
-# ADR-027: SugarAgent Identity-Aware Lore Retrieval
+# ADR-012: SugarAgent Identity-Aware Lore Retrieval
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-ADR-026 wired SugarAgent to local provider/runtime and scoped lore retrieval, but NPC identity grounding is still weak when multiple lore scopes are configured.
+ADR-011 wired SugarAgent to local provider/runtime and scoped lore retrieval, but NPC identity grounding is still weak when multiple lore scopes are configured.
 
 Current failure mode:
 
@@ -111,33 +111,33 @@ Inject identity contract into runtime prompt:
 
 ## Implementation Plan
 
-### Phase 27A: Authoring + Types
+### Phase 12A: Authoring + Types
 
 1. Extend editor store/types for `selfEntityId`, `selfLoreScopes`, `relatedLoreScopes`.
 2. Extend engine plugin request types and provider/runtime request types.
 3. Preserve backward compatibility with existing `loreScopes`.
 
-### Phase 27B: Runtime Retrieval Engine
+### Phase 12B: Runtime Retrieval Engine
 
 1. Add turn query classifier (`self/other/world/mixed`).
 2. Add pool-based retrieval in `lore-lib` and session runtime.
 3. Add identity-weighted ranking and self-query penalties.
 
-### Phase 27C: Prompt + Safety Enforcement
+### Phase 12C: Prompt + Safety Enforcement
 
 1. Add identity contract block to llama prompt builder.
 2. Add post-retrieval/self-query sanity checks:
    - reject citations that are only non-self for self questions,
    - force uncertainty response when self evidence is absent.
 
-### Phase 27D: Editor UX + Validation
+### Phase 12D: Editor UX + Validation
 
 1. NPC panel fields for identity-aware settings.
 2. Validation:
    - warn when `interactionMode=agent` and no `selfEntityId`,
    - warn when identity fields exist but no matching lore scopes.
 
-### Phase 27E: Tests + Evals
+### Phase 12E: Tests + Evals
 
 1. Unit tests for classifier and ranking.
 2. Integration tests for self vs related scope behavior.
@@ -145,7 +145,7 @@ Inject identity contract into runtime prompt:
    - self identity recall precision,
    - cross-entity contamination rate.
 
-### Phase 27F: Conversation Grounding Hardening
+### Phase 12F: Conversation Grounding Hardening
 
 1. Add runtime turn-state fields:
    - `isFirstMeeting` (derived from empty per-NPC history),
@@ -165,21 +165,21 @@ Inject identity contract into runtime prompt:
 
 All phases in this ADR are implemented:
 
-- 27A complete:
+- 12A complete:
   - identity fields added to editor/engine/provider/runtime/authoring contracts:
     - `selfEntityId`
     - `selfLoreScopes`
     - `relatedLoreScopes`
-- 27B complete:
+- 12B complete:
   - query-type-aware retrieval now applies identity-weighted scoring and self/related/ambient pool ranking.
-- 27C complete:
+- 12C complete:
   - runtime prompt includes identity contract when identity config exists.
   - self-query lore override now requires self-supporting evidence; otherwise runtime emits uncertainty.
-- 27D complete:
+- 12D complete:
   - NPC editor surface includes identity fields and validation warnings for missing identity configuration in agent/hybrid mode.
-- 27E complete:
+- 12E complete:
   - identity-focused retrieval/unit tests and sim/eval coverage added.
-- 27F complete:
+- 12F complete:
   - first-meeting guards, repair/fallback path, confidence gating, and regression tests are wired.
 
 ## Acceptance Criteria

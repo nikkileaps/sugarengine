@@ -4,12 +4,16 @@ import { SugarAgent } from './sugaragent';
 interface ProjectPluginObject {
   id?: unknown;
   enabled?: unknown;
+  runtimeMode?: unknown;
+  runtime?: unknown;
 }
 
 interface ProjectLike {
   plugins?: unknown;
   sugaragent?: {
     enabled?: unknown;
+    runtimeMode?: unknown;
+    runtime?: unknown;
   };
 }
 
@@ -19,6 +23,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPluginObject(value: unknown): value is ProjectPluginObject {
   return isRecord(value);
+}
+
+function normalizeSugarAgentRuntimeMode(value: unknown): 'llama' | 'auto' | 'mock' {
+  if (value === 'auto' || value === 'mock' || value === 'llama') {
+    return value;
+  }
+  return 'llama';
 }
 
 function isSugarAgentEnabledFromProject(projectData: unknown): boolean {
@@ -50,6 +61,26 @@ function isSugarAgentEnabledFromProject(projectData: unknown): boolean {
   return false;
 }
 
+function resolveSugarAgentRuntimeMode(projectData: unknown): 'llama' | 'auto' | 'mock' {
+  if (!isRecord(projectData)) return 'llama';
+  const project = projectData as ProjectLike;
+
+  if (project.sugaragent && isRecord(project.sugaragent)) {
+    return normalizeSugarAgentRuntimeMode(project.sugaragent.runtimeMode ?? project.sugaragent.runtime);
+  }
+
+  if (!Array.isArray(project.plugins)) {
+    return 'llama';
+  }
+
+  for (const plugin of project.plugins) {
+    if (!isPluginObject(plugin) || plugin.id !== 'sugaragent') continue;
+    return normalizeSugarAgentRuntimeMode(plugin.runtimeMode ?? plugin.runtime);
+  }
+
+  return 'llama';
+}
+
 /**
  * Build runtime plugin instances from project configuration.
  *
@@ -60,9 +91,10 @@ export function buildRuntimePluginsFromProject(projectData: unknown): EnginePlug
   const plugins: EnginePlugin[] = [];
 
   if (isSugarAgentEnabledFromProject(projectData)) {
-    plugins.push(SugarAgent.createPlugin());
+    plugins.push(SugarAgent.createPlugin({
+      runtimeMode: resolveSugarAgentRuntimeMode(projectData),
+    }));
   }
 
   return plugins;
 }
-

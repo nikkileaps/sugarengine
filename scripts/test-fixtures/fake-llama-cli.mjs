@@ -10,7 +10,14 @@ function hasArg(args, flag) {
   return args.includes(flag);
 }
 
-function buildOutput({ prompt, alwaysInvalid, forceValid, forcedUtterance }) {
+function buildOutput({
+  prompt,
+  alwaysInvalid,
+  forceValid,
+  forcedUtterance,
+  forcedInitialUtterance,
+  forcedRepairUtterance,
+}) {
   if (alwaysInvalid) {
     return '{"utterance": ';
   }
@@ -18,6 +25,19 @@ function buildOutput({ prompt, alwaysInvalid, forceValid, forcedUtterance }) {
   const repairMode = /repair_mode=yes/.test(prompt);
   if (!forceValid && !repairMode) {
     return '{"utterance": ';
+  }
+
+  const selectedForcedUtterance = repairMode
+    ? forcedRepairUtterance
+    : forcedInitialUtterance;
+  if (typeof selectedForcedUtterance === 'string' && selectedForcedUtterance.trim().length > 0) {
+    return JSON.stringify({
+      utterance: selectedForcedUtterance.trim(),
+      emotion: 'curious',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+    });
   }
 
   if (typeof forcedUtterance === 'string' && forcedUtterance.trim().length > 0) {
@@ -47,8 +67,17 @@ function main() {
   const alwaysInvalid = hasArg(args, '--always-invalid');
   const forceValid = hasArg(args, '--force-valid');
   const forcedUtterance = getArgValue(args, '--force-utterance');
+  const forcedInitialUtterance = getArgValue(args, '--force-utterance-initial');
+  const forcedRepairUtterance = getArgValue(args, '--force-utterance-repair');
   const emitTrailingNoise = hasArg(args, '--emit-trailing-noise');
-  const output = buildOutput({ prompt, alwaysInvalid, forceValid, forcedUtterance });
+  const output = buildOutput({
+    prompt,
+    alwaysInvalid,
+    forceValid,
+    forcedUtterance,
+    forcedInitialUtterance,
+    forcedRepairUtterance,
+  });
   const trailingNoise = emitTrailingNoise ? '\ntrace: {{ bad-template }}\n' : '\n';
 
   process.stdout.write(`model loaded\n${output}${trailingNoise}`);

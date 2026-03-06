@@ -110,6 +110,17 @@ describe('SugarAgent command API facade', () => {
     ).rejects.toThrow('Do not combine beatContractId with a built-in scenario');
   });
 
+  it('enforces learned reranker contract for llama runtime sessions', async () => {
+    await expect(
+      SugarAgent.createAgentSession({
+        npc: 'baker',
+        provider: 'local',
+        runtime: 'llama',
+        rerankerClass: 'heuristic',
+      }),
+    ).rejects.toThrow('runtime=llama requires rerankerClass=learned');
+  });
+
   it('throws for unknown commands in programmatic mode', async () => {
     await expect(
       SugarAgent.execute({

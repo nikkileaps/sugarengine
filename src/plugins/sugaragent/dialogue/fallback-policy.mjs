@@ -14,6 +14,7 @@ function normalizeForRecallCheck(text) {
 }
 
 function isRecallPrompt(message) {
+  const source = (message ?? '').trim();
   const normalized = normalizeForRecallCheck(message);
   if (!normalized) return false;
 
@@ -23,6 +24,12 @@ function isRecallPrompt(message) {
     || normalized.includes('what did i say before')
   ) {
     return true;
+  }
+
+  const hasQuestionForm = source.includes('?')
+    || /^(what|when|where|who|why|how|do|did|can|could|would|will|have|has|is|are)\b/.test(normalized);
+  if (!hasQuestionForm) {
+    return false;
   }
 
   if (!normalized.includes('remember') && !normalized.includes('mention') && !normalized.includes('said')) {

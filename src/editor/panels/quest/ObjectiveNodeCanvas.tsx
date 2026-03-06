@@ -22,9 +22,12 @@ import {
   Menu,
 } from '@mantine/core';
 import { NodeCanvas, CanvasNode, CanvasConnection } from '../../components';
+import { useEditorStore } from '../../store';
+import { resolveTalkDeliveryOptions } from '../../utils/talkDeliveryOptions';
 import {
   QuestStage,
   QuestObjective,
+  QuestObjectiveAgentContract,
   BeatAction,
   BeatNodeType,
   NarrativeSubtype,
@@ -83,6 +86,27 @@ const ACTION_TYPES = [
   { value: 'custom', label: 'Custom' },
 ];
 
+function parseContractList(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .filter((entry) => entry.trim().length > 0);
+}
+
+function defaultContractId(questId: string, stageId: string, objectiveId: string): string {
+  return `beat.${questId}.${stageId}.${objectiveId}`;
+}
+
+function createDefaultAgentContract(questId: string, stageId: string, objectiveId: string): QuestObjectiveAgentContract {
+  return {
+    enabled: true,
+    id: defaultContractId(questId, stageId, objectiveId),
+    requiredFacts: [],
+    forbiddenFacts: [],
+    completionRule: 'player_ack',
+    maxTurns: 3,
+  };
+}
+
 /** Build canvas nodes, adding pass/fail output ports where needed */
 function buildCanvasNodes(
   objectives: QuestObjective[],
@@ -134,6 +158,7 @@ function buildAllConnections(objectives: QuestObjective[]): CanvasConnection[] {
 }
 
 interface ObjectiveNodeCanvasProps {
+  questId: string;
   stage: QuestStage;
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
@@ -145,6 +170,7 @@ interface ObjectiveNodeCanvasProps {
 }
 
 export function ObjectiveNodeCanvas({
+  questId,
   stage,
   npcs,
   items,
@@ -517,16 +543,23 @@ export function ObjectiveNodeCanvas({
 
   const handleAddNode = (nodeType: string, subtype: string) => {
     const id = `obj-${Date.now()}`;
+    const isContractNode = nodeType === 'objective' && subtype === 'contract';
     const newObj: QuestObjective = {
       id,
-      type: nodeType === 'objective' ? subtype as QuestObjective['type'] : 'custom',
+      type: nodeType === 'objective'
+        ? (isContractNode ? 'talk' : subtype as QuestObjective['type'])
+        : 'custom',
       target: '',
-      description: nodeType === 'objective' ? 'New objective'
+      description: nodeType === 'objective'
+        ? (isContractNode ? 'Contract-guided talk' : 'New objective')
         : subtype === 'voiceover' ? 'Voiceover'
         : nodeType === 'narrative' ? 'Narrative beat'
         : nodeType === 'branch' ? 'Branch route'
         : 'Condition gate',
       nodeType: nodeType as BeatNodeType,
+      ...(isContractNode ? {
+        agentBeatContract: createDefaultAgentContract(questId, stage.id, id),
+      } : {}),
       ...(nodeType === 'narrative' ? {
         narrativeType: (subtype === 'voiceover' ? 'dialogue' : subtype) as NarrativeSubtype,
         autoStart: true,
@@ -649,6 +682,7 @@ export function ObjectiveNodeCanvas({
             </Menu.Target>
             <Menu.Dropdown>
               <Menu.Label>Objective</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('objective', 'contract')}>🤖 Contract Talk Node</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'talk')}>💬 Talk to NPC</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'location')}>📍 Go to Location</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'trigger')}>⚡ Trigger</Menu.Item>
@@ -702,6 +736,8 @@ export function ObjectiveNodeCanvas({
         {selectedObjective && (
           <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 340, zIndex: 10 }}>
             <ObjectiveEditorPanel
+              questId={questId}
+              stageId={stage.id}
               objective={selectedObjective}
               allObjectives={stage.objectives}
               npcs={npcs}
@@ -723,6 +759,8 @@ export function ObjectiveNodeCanvas({
 }
 
 interface ObjectiveEditorPanelProps {
+  questId: string;
+  stageId: string;
   objective: QuestObjective;
   allObjectives: QuestObjective[];
   npcs: { id: string; name: string }[];
@@ -989,6 +1027,8 @@ function ActionListEditor({
 }
 
 function ObjectiveEditorPanel({
+  questId,
+  stageId,
   objective,
   allObjectives,
   npcs,
@@ -1002,6 +1042,13 @@ function ObjectiveEditorPanel({
   onRemoveFailTarget,
   onClose,
 }: ObjectiveEditorPanelProps) {
+  const plugins = useEditorStore((state) => state.plugins);
+  const talkDeliveryOptions = resolveTalkDeliveryOptions(plugins);
+  const talkDeliveryOptionsData = talkDeliveryOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+  }));
+  const talkDeliveryOptionIds = new Set(talkDeliveryOptions.map((option) => option.id));
   const isEntry = !objective.prerequisites || objective.prerequisites.length === 0;
   const nodeType = objective.nodeType || 'objective';
   const nodeTypeColor = NODE_TYPE_COLORS[nodeType] || '#89b4fa';
@@ -1034,6 +1081,83 @@ function ObjectiveEditorPanel({
     : [];
 
   const dialogueOptions = dialogues.map((d) => ({ value: d.id, label: d.name }));
+  const contractDefaultId = defaultContractId(questId, stageId, objective.id);
+
+  const resolveContractDraft = (): QuestObjectiveAgentContract => {
+    const existing = objective.agentBeatContract ?? {};
+    return {
+      ...createDefaultAgentContract(questId, stageId, objective.id),
+      ...existing,
+      id: typeof existing.id === 'string' && existing.id.trim().length > 0
+        ? existing.id.trim()
+        : contractDefaultId,
+      requiredFacts: Array.isArray(existing.requiredFacts) ? existing.requiredFacts : [],
+      forbiddenFacts: Array.isArray(existing.forbiddenFacts) ? existing.forbiddenFacts : [],
+      completionRule: existing.completionRule ?? 'player_ack',
+      maxTurns: typeof existing.maxTurns === 'number' && Number.isFinite(existing.maxTurns)
+        ? Math.max(1, Math.floor(existing.maxTurns))
+        : 3,
+    };
+  };
+
+  const updateContract = (updates: Partial<QuestObjectiveAgentContract>) => {
+    const merged = {
+      ...resolveContractDraft(),
+      ...updates,
+    };
+    if (typeof merged.id === 'string' && merged.id.trim().length === 0) {
+      merged.id = contractDefaultId;
+    }
+    if (typeof merged.maxTurns === 'number' && (!Number.isFinite(merged.maxTurns) || merged.maxTurns < 1)) {
+      merged.maxTurns = 1;
+    }
+    onChange({
+      ...objective,
+      agentBeatContract: merged,
+    });
+  };
+  const contractDraft = resolveContractDraft();
+  const contractEnabled = contractDraft.enabled === true;
+  const isTalkObjective = objective.type === 'talk';
+  const configuredAgentModeId = typeof contractDraft.deliveryModeId === 'string'
+    && contractDraft.deliveryModeId.trim().length > 0
+    ? contractDraft.deliveryModeId.trim()
+    : 'agent';
+  const activeAgentModeId = talkDeliveryOptionIds.has(configuredAgentModeId)
+    ? configuredAgentModeId
+    : (
+      talkDeliveryOptions.find((option) => option.id === 'agent')?.id
+      ?? talkDeliveryOptions.find((option) => option.id !== 'scripted')?.id
+      ?? 'agent'
+    );
+  const talkDeliveryMode = isTalkObjective && contractEnabled && talkDeliveryOptionIds.has(activeAgentModeId)
+    ? activeAgentModeId
+    : 'scripted';
+  const setTalkDeliveryMode = (mode: string) => {
+    if (!isTalkObjective) return;
+    if (mode !== 'scripted') {
+      const nextDraft = resolveContractDraft();
+      nextDraft.enabled = true;
+      nextDraft.deliveryModeId = mode;
+      if (!nextDraft.npcId || nextDraft.npcId.trim().length === 0) {
+        nextDraft.npcId = objective.target || '';
+      }
+      onChange({
+        ...objective,
+        dialogue: undefined,
+        completeOn: undefined,
+        agentBeatContract: nextDraft,
+      });
+      return;
+    }
+    const nextDraft = resolveContractDraft();
+    nextDraft.enabled = false;
+    nextDraft.deliveryModeId = 'scripted';
+    onChange({
+      ...objective,
+      agentBeatContract: nextDraft,
+    });
+  };
 
   // Get prerequisite objective names
   const prerequisites = objective.prerequisites || [];
@@ -1063,6 +1187,11 @@ function ObjectiveEditorPanel({
           <Badge size="xs" color={nodeTypeColor} variant="light">
             {nodeType}
           </Badge>
+          {objective.agentBeatContract?.enabled === true && (
+            <Badge size="xs" color="teal" variant="light">
+              contract
+            </Badge>
+          )}
           {isEntry && (
             <Badge size="xs" color="green">Entry</Badge>
           )}
@@ -1107,7 +1236,21 @@ function ObjectiveEditorPanel({
                 label="Type"
                 data={typeOptions}
                 value={objective.type}
-                onChange={(value) => value && handleChange('type', value as QuestObjective['type'])}
+                onChange={(value) => {
+                  if (!value) return;
+                  const nextType = value as QuestObjective['type'];
+                  if (nextType !== 'talk' && objective.agentBeatContract?.enabled === true) {
+                    const nextDraft = resolveContractDraft();
+                    nextDraft.enabled = false;
+                    onChange({
+                      ...objective,
+                      type: nextType,
+                      agentBeatContract: nextDraft,
+                    });
+                    return;
+                  }
+                  handleChange('type', nextType);
+                }}
               />
 
               {targetOptions.length > 0 && (
@@ -1122,7 +1265,20 @@ function ObjectiveEditorPanel({
                 />
               )}
 
-              {objective.type !== 'location' && objective.type !== 'trigger' && (
+              {isTalkObjective && (
+                <Select
+                  label="Talk Delivery"
+                  data={talkDeliveryOptionsData}
+                  value={talkDeliveryMode}
+                  onChange={(value) => {
+                    if (!value) return;
+                    setTalkDeliveryMode(value);
+                  }}
+                  allowDeselect={false}
+                />
+              )}
+
+              {objective.type !== 'location' && objective.type !== 'trigger' && (!isTalkObjective || talkDeliveryMode === 'scripted') && (
                 <Select
                   label="Dialogue"
                   data={dialogueOptions}
@@ -1135,7 +1291,7 @@ function ObjectiveEditorPanel({
                 />
               )}
 
-              {objective.dialogue && (
+              {objective.dialogue && (!isTalkObjective || talkDeliveryMode === 'scripted') && (
                 <Select
                   label="Complete On"
                   data={[
@@ -1145,6 +1301,109 @@ function ObjectiveEditorPanel({
                   value={objective.completeOn || 'dialogueEnd'}
                   onChange={(value) => handleChange('completeOn', value || 'dialogueEnd')}
                 />
+              )}
+
+              {isTalkObjective && talkDeliveryMode !== 'scripted' && (
+                <Paper p="sm" style={{ background: '#11111b', border: '1px solid #313244' }}>
+                  <Stack gap="xs">
+                    <Text size="sm" fw={500}>SugarAgent Contract</Text>
+                    <Text size="xs" c="dimmed">
+                      Attach a beat contract directly to this node; runtime contract bindings are generated automatically.
+                    </Text>
+
+                    <>
+                        <TextInput
+                          label="Contract ID"
+                          value={contractDraft.id || contractDefaultId}
+                          onChange={(e) => updateContract({ id: e.currentTarget.value })}
+                        />
+
+                        <Select
+                          label="NPC Override"
+                          description="Defaults to this node's talk target if left blank."
+                          data={[
+                            { value: '', label: '(Use Talk Target)' },
+                            ...npcs.map((npc) => ({ value: npc.id, label: npc.name })),
+                          ]}
+                          value={contractDraft.npcId || ''}
+                          onChange={(value) => updateContract({ npcId: value || undefined })}
+                          searchable
+                        />
+
+                        <Textarea
+                          label="Contract Objective"
+                          description="Optional authoring note for the beat objective."
+                          value={contractDraft.objective || ''}
+                          onChange={(e) => updateContract({ objective: e.currentTarget.value || undefined })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Textarea
+                          label="Required Facts"
+                          description="One per line (or comma-separated)."
+                          value={(contractDraft.requiredFacts || []).join('\n')}
+                          onChange={(e) => updateContract({ requiredFacts: parseContractList(e.currentTarget.value) })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Textarea
+                          label="Forbidden Facts"
+                          description="Optional. One per line (or comma-separated)."
+                          value={(contractDraft.forbiddenFacts || []).join('\n')}
+                          onChange={(e) => updateContract({ forbiddenFacts: parseContractList(e.currentTarget.value) })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Select
+                          label="Completion Rule"
+                          data={[
+                            { value: 'player_ack', label: 'Player Acknowledges' },
+                            { value: 'player_action', label: 'Player Action' },
+                            { value: 'engine_flag', label: 'Engine Flag' },
+                          ]}
+                          value={contractDraft.completionRule || 'player_ack'}
+                          onChange={(value) => updateContract({ completionRule: (value as QuestObjectiveAgentContract['completionRule']) || 'player_ack' })}
+                        />
+
+                        <TextInput
+                          label="Completion Target"
+                          description="Optional target token/flag key depending on completion rule."
+                          value={contractDraft.completionTarget || ''}
+                          onChange={(e) => updateContract({ completionTarget: e.currentTarget.value || undefined })}
+                        />
+
+                        <NumberInput
+                          label="Max Turns"
+                          value={contractDraft.maxTurns ?? 3}
+                          min={1}
+                          step={1}
+                          onChange={(value) =>
+                            updateContract({
+                              maxTurns: typeof value === 'number' && Number.isFinite(value)
+                                ? Math.max(1, Math.floor(value))
+                                : 3,
+                            })
+                          }
+                        />
+
+                        <Select
+                          label="Fallback Dialogue"
+                          description="Scripted fallback dialogue when turn budget is exceeded."
+                          data={dialogues.map((dialogue) => ({
+                            value: dialogue.id,
+                            label: dialogue.name || dialogue.id,
+                          }))}
+                          value={contractDraft.fallbackScriptId || null}
+                          onChange={(value) => updateContract({ fallbackScriptId: value || undefined })}
+                          searchable
+                          clearable
+                        />
+                    </>
+                  </Stack>
+                </Paper>
               )}
             </>
           )}

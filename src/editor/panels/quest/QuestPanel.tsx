@@ -39,6 +39,20 @@ export interface MoveNpcAction {
 
 export type ObjectiveAction = MoveNpcAction;
 
+export interface QuestObjectiveAgentContract {
+  enabled?: boolean;
+  deliveryModeId?: string;
+  id?: string;
+  npcId?: string;
+  objective?: string;
+  requiredFacts?: string[];
+  forbiddenFacts?: string[];
+  completionRule?: 'player_ack' | 'player_action' | 'engine_flag';
+  completionTarget?: string;
+  maxTurns?: number;
+  fallbackScriptId?: string;
+}
+
 export interface QuestObjective {
   id: string;
   type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'castSpell' | 'custom';
@@ -71,6 +85,10 @@ export interface QuestObjective {
 
   // Display control (ADR-016)
   showInHUD?: boolean;
+
+  // SugarAgent contract authoring metadata (editor surface).
+  // Runtime contracts are normalized into quest.agentBeatContracts.
+  agentBeatContract?: QuestObjectiveAgentContract;
 }
 
 export interface QuestStage {
@@ -148,6 +166,12 @@ export function validateQuest(quest: QuestEntry): string[] {
       if (nodeType === 'objective') {
         if (!obj.target && obj.type !== 'voiceover') {
           warnings.push(`Objective ${label} has no target`);
+        }
+        if (obj.agentBeatContract?.enabled === true && obj.type !== 'talk') {
+          warnings.push(`Objective ${label} enables SugarAgent contract but is not Talk type`);
+        }
+        if (obj.agentBeatContract?.enabled === true && obj.type === 'talk' && obj.dialogue) {
+          warnings.push(`Objective ${label} has both Talk Dialogue and Agent Contract enabled; choose one`);
         }
       }
 

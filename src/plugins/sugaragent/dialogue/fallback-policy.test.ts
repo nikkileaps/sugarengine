@@ -38,4 +38,12 @@ describe('SugarAgent dialogue fallback policy', () => {
     expect(reply.intent).toBe('recall');
     expect(reply.utterance).toBe('You mentioned that your name is nikki, and you like dogs and coffee.');
   });
+
+  it('does not treat plain statements with \"i said\" as recall prompts', () => {
+    const reply = createDeterministicFallbackReply('i said my name is mim.', [
+      'my name is mim',
+    ]);
+
+    expect(reply).toEqual(createConversationFallbackReply());
+  });
 });

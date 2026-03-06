@@ -27,6 +27,41 @@ function buildValidPayload(request: RuntimeGenerateStructuredRequest): string {
   });
 }
 
+function buildDiagnostics() {
+  return {
+    mode: 'character',
+    initiative: {
+      initiator: 'player',
+      action: 'player_respond',
+      primaryGoal: 'character_goal',
+      expectedPlayerResponseType: 'free_text',
+      reason: 'mock-runtime',
+      policyBounded: false,
+    },
+    evidenceBudget: {
+      usage: { facts: 0, spans: 0, contextTokens: 0, memoryItems: 0, beatFacts: 0 },
+      budget: { facts: 12, spans: 12, contextTokens: 2048, memoryItems: 24, beatFacts: 8 },
+      withinBudget: true,
+    },
+    retrieval: {
+      attempted: false,
+      candidateCount: 0,
+      selectedCount: 0,
+      qualityPath: 'not_required',
+      qualityReason: 'mock-runtime',
+      correctiveAttempted: false,
+    },
+    validation: {
+      decision: 'accept',
+      errors: [],
+      unsupportedClaims: 0,
+      requiresRepair: false,
+    },
+    pipelineVersion: 'mock',
+    timestampMs: Date.now(),
+  };
+}
+
 export class MockLocalRuntimeBridge implements LocalRuntimeBridge {
   private calls = 0;
   private loaded = false;
@@ -61,7 +96,10 @@ export class MockLocalRuntimeBridge implements LocalRuntimeBridge {
       return { jsonText: '{"utterance": ' };
     }
 
-    return { jsonText: buildValidPayload(request) };
+    return {
+      jsonText: buildValidPayload(request),
+      diagnostics: buildDiagnostics(),
+    };
   }
 
   async embed(texts: string[]): Promise<number[][]> {

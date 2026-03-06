@@ -1,12 +1,16 @@
 import type {
   LocalRuntimeBridge,
+  RuntimeHealthRequest,
   RuntimeGenerateStructuredRequest,
   RuntimeGenerateStructuredResponse,
   RuntimeHealthStatus,
+  SugarAgentRuntimeMode,
 } from './types';
 
 interface RuntimeBridgeRequest {
   op: 'health' | 'loadModel' | 'generateStructured' | 'embed' | 'unloadModel';
+  runtimeMode?: SugarAgentRuntimeMode;
+  gameId?: string;
   modelId?: string;
   request?: RuntimeGenerateStructuredRequest;
   texts?: string[];
@@ -16,12 +20,15 @@ interface RuntimeBridgeResponse {
   ok: boolean;
   detail?: string;
   jsonText?: string;
+  diagnostics?: Record<string, unknown>;
   vectors?: number[][];
   error?: string;
 }
 
 export interface HttpLocalRuntimeBridgeOptions {
   endpoint?: string;
+  runtimeMode?: SugarAgentRuntimeMode;
+  gameId?: string;
 }
 
 /**
@@ -30,9 +37,13 @@ export interface HttpLocalRuntimeBridgeOptions {
  */
 export class HttpLocalRuntimeBridge implements LocalRuntimeBridge {
   private endpoint: string;
+  private runtimeMode?: SugarAgentRuntimeMode;
+  private gameId?: string;
 
   constructor(options: HttpLocalRuntimeBridgeOptions = {}) {
     this.endpoint = options.endpoint ?? '/__sugaragent/runtime';
+    this.runtimeMode = options.runtimeMode;
+    this.gameId = options.gameId;
   }
 
   private async call(payload: RuntimeBridgeRequest): Promise<RuntimeBridgeResponse> {
@@ -50,8 +61,12 @@ export class HttpLocalRuntimeBridge implements LocalRuntimeBridge {
     return parsed as RuntimeBridgeResponse;
   }
 
-  async health(): Promise<RuntimeHealthStatus> {
-    const result = await this.call({ op: 'health' });
+  async health(request?: RuntimeHealthRequest): Promise<RuntimeHealthStatus> {
+    const result = await this.call({
+      op: 'health',
+      runtimeMode: request?.runtimeMode ?? this.runtimeMode,
+      gameId: request?.gameId ?? this.gameId,
+    });
     return {
       ok: result.ok === true,
       detail: result.detail,
@@ -69,6 +84,9 @@ export class HttpLocalRuntimeBridge implements LocalRuntimeBridge {
     });
     return {
       jsonText: typeof result.jsonText === 'string' ? result.jsonText : '{}',
+      diagnostics: (typeof result.diagnostics === 'object' && result.diagnostics !== null)
+        ? result.diagnostics
+        : undefined,
     };
   }
 

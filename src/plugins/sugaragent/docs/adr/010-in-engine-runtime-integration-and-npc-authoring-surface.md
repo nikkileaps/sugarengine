@@ -138,12 +138,16 @@ Implementation:
 1. Add an in-game text input panel for active NPC conversations.
 2. Connect UI submit action to SugarAgent turn API.
 3. Show returned `utterance` and minimal metadata for debug mode.
+4. When turn diagnostics indicate `initiative.action === "close"`, keep the final NPC close utterance visible and then auto-close the conversation panel (UI concern only; dialogue policy remains plugin-owned).
 
 Nikki MVP test:
 
 1. Start game and interact with agent NPC.
 2. Type free-form input in English/Spanish.
 3. Observe natural response continuity across multiple turns.
+4. Trigger a close turn and verify:
+   - NPC emits a graceful closing line.
+   - UI panel auto-closes after showing that final line.
 
 ### Phase 10D: Quest/beat contract binding in live runtime
 
@@ -228,6 +232,8 @@ Current implementation in this repo now delivers:
    - Engine runtime hooks:
      - `openAgentConversation` plugin interaction resolution path
      - `Game.submitAgentConversationTurn(...)` delegates turn processing through plugin manager `runAgentTurn(...)`
+   - Remaining Phase 10C UI hardening:
+     - auto-close panel behavior when `initiative.action === "close"` after rendering final NPC close utterance.
    - SugarAgent plugin now provides deterministic turn handling for in-game path (`runAgentTurn`) while preserving plugin state persistence.
 5. Phase 10D quest/beat contract binding in live runtime:
    - New engine helper module for deterministic contract parsing/selection/evaluation:

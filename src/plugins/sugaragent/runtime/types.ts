@@ -1,6 +1,13 @@
+export type SugarAgentRuntimeMode = 'llama' | 'auto' | 'mock';
+
 export interface RuntimeHealthStatus {
   ok: boolean;
   detail?: string;
+}
+
+export interface RuntimeHealthRequest {
+  runtimeMode?: SugarAgentRuntimeMode;
+  gameId?: string;
 }
 
 export interface RuntimeGenerateStructuredRequest {
@@ -23,15 +30,28 @@ export interface RuntimeGenerateStructuredRequest {
     gameId?: string;
     regionPath?: string;
     episodeId?: string;
+    runtimeMode?: SugarAgentRuntimeMode;
+    interactionMode?: 'scripted' | 'agent' | 'hybrid';
+    interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
+    isFirstMeeting?: boolean;
+    turnIndexWithNpc?: number;
+    topicCoverage?: {
+      activeTopic?: string;
+      activeTopicNovelty?: number;
+      exhaustedTopics?: string[];
+      trackedTopicCount?: number;
+      exhausted?: boolean;
+    };
   };
 }
 
 export interface RuntimeGenerateStructuredResponse {
   jsonText: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface LocalRuntimeBridge {
-  health(): Promise<RuntimeHealthStatus>;
+  health(request?: RuntimeHealthRequest): Promise<RuntimeHealthStatus>;
   loadModel(modelId: string): Promise<void>;
   generateStructured(request: RuntimeGenerateStructuredRequest): Promise<RuntimeGenerateStructuredResponse>;
   embed(texts: string[]): Promise<number[][]>;

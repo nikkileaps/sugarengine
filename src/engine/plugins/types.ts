@@ -47,6 +47,125 @@ export interface PluginAgentContext {
   gameId?: string;
   regionPath?: string;
   episodeId?: string;
+  runtimeMode?: 'llama' | 'auto' | 'mock';
+  interactionMode?: 'scripted' | 'agent' | 'hybrid';
+  interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
+  isFirstMeeting?: boolean;
+  turnIndexWithNpc?: number;
+  topicCoverage?: {
+    activeTopic?: string;
+    activeTopicNovelty?: number;
+    exhaustedTopics?: string[];
+    trackedTopicCount?: number;
+    exhausted?: boolean;
+  };
+}
+
+export type PluginAgentConversationMode = 'character' | 'narrative' | 'hybrid' | 'unknown';
+export type PluginAgentInitiativeAction =
+  | 'npc_initiate'
+  | 'player_respond'
+  | 'clarify'
+  | 'abstain'
+  | 'close'
+  | 'unknown';
+export type PluginAgentGoalType =
+  | 'beat_goal'
+  | 'character_goal'
+  | 'social_goal'
+  | 'repair_goal'
+  | 'closure_goal'
+  | 'unknown';
+export type PluginAgentExpectedPlayerResponseType =
+  | 'free_text'
+  | 'ack'
+  | 'choice'
+  | 'action'
+  | 'unknown';
+export type PluginAgentValidationDecision = 'accept' | 'repair' | 'fallback' | 'reject' | 'abstain' | 'unknown';
+export type PluginAgentBeatEvaluationStatus = 'passed' | 'failed' | 'not_applicable';
+
+export interface PluginAgentTurnDiagnostics {
+  mode?: PluginAgentConversationMode;
+  modeReason?: string;
+  modeResolution?: {
+    interactionMode?: 'scripted' | 'agent' | 'hybrid' | 'unknown';
+    interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback' | 'unknown';
+    hasBeatContract?: boolean;
+  };
+  modeTransition?: {
+    from?: PluginAgentConversationMode;
+    to?: PluginAgentConversationMode;
+    changed?: boolean;
+    reason?: string;
+  };
+  initiative?: {
+    initiator?: 'npc' | 'player' | 'system';
+    action?: PluginAgentInitiativeAction;
+    primaryGoal?: PluginAgentGoalType;
+    secondaryGoals?: PluginAgentGoalType[];
+    expectedPlayerResponseType?: PluginAgentExpectedPlayerResponseType;
+    reason?: string;
+    policyBounded?: boolean;
+  };
+  conversation?: {
+    topicCoverage?: {
+      activeTopic?: string;
+      activeTopicNovelty?: number;
+      exhausted?: boolean;
+      exhaustedTopics?: string[];
+      trackedTopicCount?: number;
+    };
+  };
+  evidenceBudget?: {
+    usage?: {
+      facts?: number;
+      spans?: number;
+      contextTokens?: number;
+      memoryItems?: number;
+      beatFacts?: number;
+    };
+    budget?: {
+      facts?: number;
+      spans?: number;
+      contextTokens?: number;
+      memoryItems?: number;
+      beatFacts?: number;
+    };
+    withinBudget?: boolean;
+  };
+  retrieval?: {
+    attempted?: boolean;
+    candidateCount?: number;
+    selectedCount?: number;
+    qualityPath?: string;
+    qualityReason?: string;
+    correctiveAttempted?: boolean;
+  };
+  validation?: {
+    decision?: PluginAgentValidationDecision;
+    errors?: string[];
+    unsupportedClaims?: number;
+    requiresRepair?: boolean;
+  };
+  beatEvaluator?: {
+    status?: PluginAgentBeatEvaluationStatus;
+    beatId?: string;
+    questId?: string;
+    objectiveId?: string;
+    coveragePassed?: boolean;
+    rulePassed?: boolean;
+    beatIdMatched?: boolean;
+    forbiddenPassed?: boolean;
+    confidencePassed?: boolean;
+    missingRequiredFacts?: string[];
+    forbiddenFactMentions?: string[];
+    confidence?: number;
+    completionSignal?: 'none' | 'player_ack' | 'player_action' | 'engine_flag';
+    reason?: string;
+  };
+  pipelineVersion?: string;
+  timestampMs?: number;
 }
 
 export interface PluginAgentBeatContract {
@@ -78,6 +197,7 @@ export interface PluginAgentTurnResult {
   intent?: string;
   citations?: Array<{ sourceId: string; snippet?: string }>;
   beatEvidence?: PluginAgentBeatEvidence;
+  diagnostics?: PluginAgentTurnDiagnostics;
 }
 
 export type PluginInteractionResolution =

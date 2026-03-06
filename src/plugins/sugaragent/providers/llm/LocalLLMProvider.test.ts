@@ -18,6 +18,8 @@ describe('LocalLLMProvider', () => {
     expect(result.attempts).toBe(1);
     expect(result.output.utterance).toContain('hello there');
     expect(result.validationErrors).toEqual([]);
+    expect(result.diagnostics?.mode).toBe('character');
+    expect(result.diagnostics?.initiative?.action).toBe('player_respond');
   });
 
   it('retries once when first payload is invalid and then succeeds', async () => {

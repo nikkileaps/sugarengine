@@ -19,5 +19,14 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.mts",
+    "src/**/*.spec.ts",
+    "src/plugins/sugaragent/eval/**",
+    "src/plugins/sugaragent/authoring/artifacts.ts",
+    "src/plugins/sugaragent/dialogue/scenario-orchestration.ts",
+    "src/plugins/sugaragent/simulation/cadence.ts"
+  ]
 }

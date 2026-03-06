@@ -16,6 +16,18 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - [008-authoring-hooks-and-packaging.md](./008-authoring-hooks-and-packaging.md)
 - [009-deterministic-memory-compaction-and-rollups.md](./009-deterministic-memory-compaction-and-rollups.md)
 - [010-in-engine-runtime-integration-and-npc-authoring-surface.md](./010-in-engine-runtime-integration-and-npc-authoring-surface.md)
+- [011-in-engine-llm-provider-wiring.md](./011-in-engine-llm-provider-wiring.md)
+- [012-identity-aware-lore-retrieval.md](./012-identity-aware-lore-retrieval.md)
+- [013-evidence-based-claim-validation.md](./013-evidence-based-claim-validation.md)
+- [014-optional-constrained-grounded-rewrite-pass.md](./014-optional-constrained-grounded-rewrite-pass.md)
+- [015-hybrid-intent-routing-and-evidence-policy.md](./015-hybrid-intent-routing-and-evidence-policy.md)
+- [016-evidence-first-dialogue-architecture.md](./016-evidence-first-dialogue-architecture.md)
+- [017-dual-mode-npc-conversation-model.md](./017-dual-mode-npc-conversation-model.md)
+- [018-mixed-initiative-policy-and-goal-arbitration.md](./018-mixed-initiative-policy-and-goal-arbitration.md)
+- [019-evidence-pack-governance-and-corrective-retrieval.md](./019-evidence-pack-governance-and-corrective-retrieval.md)
+- [020-fact-id-and-provenance-durability-contract.md](./020-fact-id-and-provenance-durability-contract.md)
+- [021-beat-control-plane-and-deterministic-progression.md](./021-beat-control-plane-and-deterministic-progression.md)
+- [022-evaluation-stack-and-deployment-gate-governance.md](./022-evaluation-stack-and-deployment-gate-governance.md)
 
 ## Mapping to Implementation Phases
 
@@ -29,6 +41,8 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - Phase 8 -> ADR-007
 - Phase 9 -> ADR-010 (in-game integration + creator-facing NPC authoring surface)
 - Deferred post-phase hardening -> ADR-009
+- Dialogue architecture hardening and v2 pipeline -> ADR-011..016
+- Strategic dual-mode and governance contracts -> ADR-017..022
 
 ## Deferred Backlog
 
@@ -36,5 +50,5 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 
 ## Coherence Note
 
-Across ADR-001..010, authored quest/episode data remains canonical.
+Across ADR-001..022, authored quest/episode data remains canonical.
 SugarAgent is responsible for free-form conversational delivery and structured evidence only; engine systems remain the deterministic authority for progression and world mutation.

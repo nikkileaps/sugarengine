@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "jsx": "preserve",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": [
+    "src/plugins/sugaragent/authoring/artifacts.ts",
+    "src/plugins/sugaragent/dialogue/scenario-orchestration.ts",
+    "src/plugins/sugaragent/simulation/cadence.ts",
+    "src/plugins/sugaragent/eval/runner.ts",
+    "src/plugins/sugaragent/eval/**/*.d.ts"
+  ],
+  "exclude": []
+}

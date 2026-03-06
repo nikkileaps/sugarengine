@@ -7,22 +7,28 @@ import {
   runSugarAgentEval,
 } from './runner.ts';
 
-describe('SugarAgent eval runner (ADR-007 MVP)', () => {
-  it('runs smoke suite and emits metric + beat-evaluation report', async () => {
+describe('SugarAgent eval runner (Phase 8)', () => {
+  it('runs smoke suite and emits layered gates + beat evaluation report', async () => {
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sugaragent-eval-smoke-'));
     const report = await runSugarAgentEval({
       suite: 'smoke',
       outputDir,
       provider: 'local',
       runtime: 'mock',
+      deploymentTarget: 'development',
     });
 
     expect(report.suite).toBe('smoke');
     expect(report.status).toBe('pass');
     expect(Array.isArray(report.metrics)).toBe(true);
-    expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'loreFaithfulness')).toBe(true);
+    expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'atomicFactualSupport')).toBe(true);
+    expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'ragFaithfulness')).toBe(true);
     expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'identityConsistency')).toBe(true);
     expect(report.metrics.some((metric: { metricId?: string }) => metric.metricId === 'beatCompletionPrecisionRecall')).toBe(true);
+    expect(Array.isArray(report.releaseGates)).toBe(true);
+    expect(report.gateSummary?.failedBlockingGateCount).toBe(0);
+    expect(report.rerankerPromotion?.passed).toBe(true);
+    expect(report.rerankerPromotion?.blocking).toBe(false);
     expect(report.beatEvaluation?.coverage?.coveredCount).toBeGreaterThanOrEqual(1);
     expect(report.beatEvaluation?.completion?.falseCompleteCount).toBe(0);
     expect(fs.existsSync(path.join(outputDir, 'report.json'))).toBe(true);
@@ -52,5 +58,22 @@ describe('SugarAgent eval runner (ADR-007 MVP)', () => {
     expect(replay.matchesExpectation).toBe(true);
     expect(typeof replay.artifactPath).toBe('string');
     expect(fs.existsSync(replay.artifactPath as string)).toBe(true);
+  });
+
+  it('blocks production deployment when reranker class is heuristic-only', async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sugaragent-eval-prod-gate-'));
+    const report = await runSugarAgentEval({
+      suite: 'smoke',
+      outputDir,
+      provider: 'local',
+      runtime: 'mock',
+      deploymentTarget: 'production',
+      rerankerCandidateClass: 'heuristic',
+    });
+
+    expect(report.status).toBe('fail');
+    expect(report.rerankerPromotion?.passed).toBe(false);
+    expect(report.rerankerPromotion?.blocking).toBe(true);
+    expect(String(report.rerankerPromotion?.reason ?? '')).toContain('learned');
   });
 });

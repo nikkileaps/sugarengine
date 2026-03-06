@@ -1,14 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
+// @ts-expect-error -- runtime session bridge is authored in .mjs and intentionally treated as untyped at this boundary.
 import { createSugarAgentSession } from '../session/runtime.mjs';
+const PIPELINE_VERSION_V2 = 'v2';
+const SUITE_VERSION_SMOKE = 'phase8-v1';
 
 export type SugarAgentEvalSuiteId = 'smoke';
+type EvalLayerId = 'atomic_factual_support' | 'rag_pipeline_quality' | 'human_regression';
+type EvalConversationMode = 'character' | 'narrative' | 'hybrid' | 'unknown';
+type EvalInitiativeAction = 'npc_initiate' | 'player_respond' | 'clarify' | 'abstain' | 'close' | 'unknown';
 
 export interface SugarAgentEvalRunnerOptions {
   suite?: SugarAgentEvalSuiteId;
   outputDir?: string;
   provider?: 'local' | 'echo';
   runtime?: 'auto' | 'mock' | 'llama';
+  deploymentTarget?: 'development' | 'production';
+  rerankerBaselinePath?: string;
+  rerankerCandidateClass?: 'heuristic' | 'learned';
   writeArtifacts?: boolean;
 }
 
@@ -17,6 +26,7 @@ export interface SugarAgentEvalReplayOptions {
   outputDir?: string;
   provider?: 'local' | 'echo';
   runtime?: 'auto' | 'mock' | 'llama';
+  rerankerCandidateClass?: 'heuristic' | 'learned';
 }
 
 interface SmokeFixtures {
@@ -32,12 +42,30 @@ interface EvalCaseTurn {
   scenarioLogs: string[];
   validationErrors: string[];
   usedFallback: boolean;
+  grounding: Record<string, unknown> | null;
+  groundingStats: Record<string, unknown> | null;
+  routing: Record<string, unknown> | null;
+  pipeline: Record<string, unknown> | null;
 }
 
 interface EvalCaseResult {
   caseId: string;
   metricId: string;
   title: string;
+  layer: EvalLayerId;
+  mode: EvalConversationMode;
+  initiativeAction: EvalInitiativeAction;
+  expectedMode?: EvalConversationMode;
+  expectedInitiativeAction?: EvalInitiativeAction;
+  humanLabeled?: boolean;
+  diagnosticsCoverage: {
+    hasMode: boolean;
+    hasInitiative: boolean;
+    hasRetrievalQualityPath: boolean;
+    hasValidationDecision: boolean;
+    fallbackReasonRequired: boolean;
+    hasFallbackReason: boolean;
+  };
   passed: boolean;
   score: number;
   threshold: number;
@@ -49,6 +77,7 @@ interface EvalCaseResult {
 interface EvalMetricSummary {
   metricId: string;
   title: string;
+  layer: EvalLayerId;
   score: number;
   threshold: number;
   passed: boolean;
@@ -57,11 +86,39 @@ interface EvalMetricSummary {
 
 interface EvalReleaseGate {
   gateId: string;
-  metricId: string;
+  gateType: 'metric' | 'layer' | 'mode' | 'initiative' | 'observability' | 'reranker_promotion';
+  metricId?: string;
+  layer?: EvalLayerId;
+  mode?: EvalConversationMode;
+  initiativeAction?: EvalInitiativeAction;
   title: string;
   score: number;
   threshold: number;
   passed: boolean;
+  blocking: boolean;
+  reason?: string;
+}
+
+interface EvalRerankerObservation {
+  rerankerClass: 'heuristic' | 'learned' | 'unknown';
+  modelVersion: string;
+  artifactVersion: string;
+  latencyMs: number;
+}
+
+interface EvalRerankerPromotionGate {
+  gateId: string;
+  requiredClass: 'learned';
+  observedClasses: Array<'heuristic' | 'learned' | 'unknown'>;
+  observedModelVersions: string[];
+  observedArtifactVersions: string[];
+  candidateScore: number;
+  baselineScore: number | null;
+  threshold: number;
+  deploymentTarget: 'development' | 'production';
+  passed: boolean;
+  blocking: boolean;
+  reason: string;
 }
 
 interface EvalRunDirectories {
@@ -70,6 +127,8 @@ interface EvalRunDirectories {
   failedDir: string;
   reportPath: string;
 }
+
+let ACTIVE_EVAL_RERANKER_CLASS: 'heuristic' | 'learned' = 'heuristic';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -92,6 +151,14 @@ function toSafeRuntime(value: unknown): 'auto' | 'mock' | 'llama' {
     return value;
   }
   return 'mock';
+}
+
+function toSafeDeploymentTarget(value: unknown): 'development' | 'production' {
+  return value === 'production' ? 'production' : 'development';
+}
+
+function toSafeRerankerCandidateClass(value: unknown): 'heuristic' | 'learned' {
+  return value === 'learned' ? 'learned' : 'heuristic';
 }
 
 function resolveRunDirectories(options: SugarAgentEvalRunnerOptions): EvalRunDirectories {
@@ -144,6 +211,128 @@ function sanitizeSessionId(value: string): string {
 function writeJson(filePath: string, value: unknown): void {
   ensureDir(path.dirname(filePath));
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function extractMode(turn: EvalCaseTurn | undefined): EvalConversationMode {
+  const mode = asString(asRecord(turn?.pipeline)?.mode);
+  if (mode === 'character' || mode === 'narrative' || mode === 'hybrid') {
+    return mode;
+  }
+  return 'unknown';
+}
+
+function extractInitiativeAction(turn: EvalCaseTurn | undefined): EvalInitiativeAction {
+  const pipeline = asRecord(turn?.pipeline);
+  const initiative = asRecord(pipeline?.initiative);
+  const decision = asRecord(initiative?.decision);
+  const action = asString(decision?.action);
+  if (action === 'npc_initiate' || action === 'player_respond' || action === 'clarify' || action === 'abstain' || action === 'close') {
+    return action;
+  }
+  return 'unknown';
+}
+
+function extractValidationDecision(turn: EvalCaseTurn | undefined): string | null {
+  const grounding = asRecord(turn?.grounding);
+  const summary = asRecord(grounding?.summary);
+  const decision = asString(summary?.decision);
+  if (decision) return decision;
+  if (turn?.usedFallback) return 'fallback';
+  return null;
+}
+
+function extractUnsupportedClaimCount(turn: EvalCaseTurn | undefined): number {
+  const grounding = asRecord(turn?.grounding);
+  const summary = asRecord(grounding?.summary);
+  const unsupported = asNumber(summary?.unsupportedCount);
+  return unsupported ?? 0;
+}
+
+function extractSupportedClaimCount(turn: EvalCaseTurn | undefined): number {
+  const grounding = asRecord(turn?.grounding);
+  const summary = asRecord(grounding?.summary);
+  const supported = asNumber(summary?.supportedCount);
+  return supported ?? 0;
+}
+
+function extractRetrievalField(turn: EvalCaseTurn | undefined, field: string): unknown {
+  const pipeline = asRecord(turn?.pipeline);
+  const retrieval = asRecord(pipeline?.retrieval);
+  return retrieval?.[field];
+}
+
+function extractFallbackReason(turn: EvalCaseTurn | undefined): string | null {
+  const pipeline = asRecord(turn?.pipeline);
+  return asString(pipeline?.fallbackReason);
+}
+
+function computeDiagnosticsCoverage(turn: EvalCaseTurn | undefined): EvalCaseResult['diagnosticsCoverage'] {
+  const hasMode = extractMode(turn) !== 'unknown';
+  const hasInitiative = extractInitiativeAction(turn) !== 'unknown';
+  const qualityPath = asString(extractRetrievalField(turn, 'qualityPath'));
+  const hasRetrievalQualityPath = Boolean(qualityPath);
+  const hasValidationDecision = Boolean(extractValidationDecision(turn));
+  const fallbackReasonRequired = Boolean(turn?.usedFallback);
+  const hasFallbackReason = fallbackReasonRequired ? Boolean(extractFallbackReason(turn)) : true;
+  return {
+    hasMode,
+    hasInitiative,
+    hasRetrievalQualityPath,
+    hasValidationDecision,
+    fallbackReasonRequired,
+    hasFallbackReason,
+  };
+}
+
+function buildCaseResult(params: {
+  caseId: string;
+  metricId: string;
+  title: string;
+  layer: EvalLayerId;
+  mode: EvalConversationMode;
+  initiativeAction: EvalInitiativeAction;
+  expectedMode?: EvalConversationMode;
+  expectedInitiativeAction?: EvalInitiativeAction;
+  humanLabeled?: boolean;
+  passed: boolean;
+  threshold?: number;
+  reason?: string | null;
+  details?: Record<string, unknown>;
+  transcript: Record<string, unknown>;
+  diagnosticsCoverage: EvalCaseResult['diagnosticsCoverage'];
+}): EvalCaseResult {
+  const threshold = Number.isFinite(params.threshold) ? Number(params.threshold) : 1;
+  const score = params.passed ? 1 : 0;
+  return {
+    caseId: params.caseId,
+    metricId: params.metricId,
+    title: params.title,
+    layer: params.layer,
+    mode: params.mode,
+    initiativeAction: params.initiativeAction,
+    expectedMode: params.expectedMode,
+    expectedInitiativeAction: params.expectedInitiativeAction,
+    humanLabeled: params.humanLabeled === true,
+    diagnosticsCoverage: params.diagnosticsCoverage,
+    passed: params.passed,
+    score,
+    threshold,
+    reason: params.reason ?? null,
+    details: params.details ?? {},
+    transcript: params.transcript,
+  };
 }
 
 function buildSmokeFixtures(runDir: string): SmokeFixtures {
@@ -325,6 +514,18 @@ async function runTurnWithTiming(
     scenarioLogs: Array.isArray(turn.scenarioLogs) ? turn.scenarioLogs : [],
     validationErrors: Array.isArray(turn.validationErrors) ? turn.validationErrors : [],
     usedFallback: !!turn.usedFallback,
+    grounding: turn.grounding && typeof turn.grounding === 'object'
+      ? turn.grounding as Record<string, unknown>
+      : null,
+    groundingStats: turn.groundingStats && typeof turn.groundingStats === 'object'
+      ? turn.groundingStats as Record<string, unknown>
+      : null,
+    routing: turn.routing && typeof turn.routing === 'object'
+      ? turn.routing as Record<string, unknown>
+      : null,
+    pipeline: turn.pipeline && typeof turn.pipeline === 'object'
+      ? turn.pipeline as Record<string, unknown>
+      : null,
   };
 }
 
@@ -338,6 +539,7 @@ async function runSmokeLoreFaithfulnessCase(
     npc: 'baker',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: true,
     loreDir: fixtures.loreDir,
     useAuthoring: false,
@@ -348,26 +550,38 @@ async function runSmokeLoreFaithfulnessCase(
   const first = turns[0];
   const hasCitations = (first?.citations?.length ?? 0) > 0;
   const intent = typeof first?.output?.intent === 'string' ? first.output.intent : '';
-  const passed = hasCitations && intent === 'answer_lore';
+  const retrievalAttempted = extractRetrievalField(first, 'attempted') === true;
+  const retrievalQualityPath = asString(extractRetrievalField(first, 'qualityPath')) ?? 'unknown';
+  const passed = hasCitations && intent === 'answer_lore' && retrievalAttempted;
   const reason = passed ? null : 'Expected lore-grounded answer with citations.';
+  const mode = extractMode(first);
+  const initiativeAction = extractInitiativeAction(first);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(first);
 
-  return {
+  return buildCaseResult({
     caseId,
-    metricId: 'loreFaithfulness',
-    title: 'Lore Faithfulness',
+    metricId: 'ragFaithfulness',
+    title: 'RAG Faithfulness',
+    layer: 'rag_pipeline_quality',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    expectedInitiativeAction: 'player_respond',
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       hasCitations,
       intent,
       citationCount: first?.citations?.length ?? 0,
+      retrievalAttempted,
+      retrievalQualityPath,
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
-      metricId: 'loreFaithfulness',
+      metricId: 'ragFaithfulness',
       createdAt: nowIso(),
       sessionOptions: {
         npc: 'baker',
@@ -379,7 +593,7 @@ async function runSmokeLoreFaithfulnessCase(
       reason,
       passed,
     },
-  };
+  });
 }
 
 async function runSmokeMemoryRecallCase(
@@ -392,6 +606,7 @@ async function runSmokeMemoryRecallCase(
     npc: 'baker',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: false,
     session: sessionId,
     resetSession: sessionId,
@@ -421,15 +636,22 @@ async function runSmokeMemoryRecallCase(
   const secondTurnUsedFallback = turns[1]?.usedFallback ?? true;
   const passed = rememberedFactsPersisted;
   const reason = passed ? null : 'Expected persisted memory facts for recall prompt.';
+  const mode = extractMode(turns[1] ?? turns[0]);
+  const initiativeAction = extractInitiativeAction(turns[1] ?? turns[0]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(turns[1] ?? turns[0]);
 
-  return {
+  return buildCaseResult({
     caseId,
     metricId: 'memoryRecall',
     title: 'Memory Recall',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    humanLabeled: true,
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       rememberedFactsPersisted,
       rememberedFactCount: facts.length,
@@ -437,6 +659,7 @@ async function runSmokeMemoryRecallCase(
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
       metricId: 'memoryRecall',
       createdAt: nowIso(),
@@ -451,7 +674,7 @@ async function runSmokeMemoryRecallCase(
       reason,
       passed,
     },
-  };
+  });
 }
 
 async function runSmokeIntentSafetyCase(
@@ -463,6 +686,7 @@ async function runSmokeIntentSafetyCase(
     npc: 'guard',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: false,
     scenario: 'beat-guard-alert',
   });
@@ -477,15 +701,22 @@ async function runSmokeIntentSafetyCase(
   const executedSafeIntent = executedLine.includes('emitEvent');
   const passed = rejectedUnsafeIntent && executedSafeIntent;
   const reason = passed ? null : 'Expected unsafe intent rejection and safe intent execution.';
+  const mode = extractMode(turns[0]);
+  const initiativeAction = extractInitiativeAction(turns[0]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(turns[0]);
 
-  return {
+  return buildCaseResult({
     caseId,
     metricId: 'intentSafety',
     title: 'Intent Safety',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'narrative',
+    humanLabeled: true,
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       rejectedUnsafeIntent,
       executedSafeIntent,
@@ -494,6 +725,7 @@ async function runSmokeIntentSafetyCase(
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
       metricId: 'intentSafety',
       createdAt: nowIso(),
@@ -507,7 +739,7 @@ async function runSmokeIntentSafetyCase(
       reason,
       passed,
     },
-  };
+  });
 }
 
 async function runSmokeBeatCoverageCase(
@@ -520,6 +752,7 @@ async function runSmokeBeatCoverageCase(
     npc: 'baker',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: false,
     authoringBundlePath: fixtures.authoringBundlePath,
     beatContractId: 'beat.baker.intro',
@@ -535,21 +768,29 @@ async function runSmokeBeatCoverageCase(
   const uncoveredCount = Array.isArray(beatEvidence?.uncoveredFacts) ? beatEvidence?.uncoveredFacts.length : 0;
   const passed = coveredCount > 0 && uncoveredCount === 0;
   const reason = passed ? null : 'Expected authored beat facts to be fully covered in beat evidence.';
+  const mode = extractMode(turns[0]);
+  const initiativeAction = extractInitiativeAction(turns[0]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(turns[0]);
 
-  return {
+  return buildCaseResult({
     caseId,
     metricId: 'beatCoverageAccuracy',
     title: 'Beat Coverage Accuracy',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'narrative',
+    humanLabeled: true,
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       coveredCount,
       uncoveredCount,
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
       metricId: 'beatCoverageAccuracy',
       createdAt: nowIso(),
@@ -563,7 +804,7 @@ async function runSmokeBeatCoverageCase(
       reason,
       passed,
     },
-  };
+  });
 }
 
 async function runSmokeBeatCompletionCase(
@@ -575,6 +816,7 @@ async function runSmokeBeatCompletionCase(
     npc: 'guard',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: false,
     scenario: 'beat-guard-alert',
   });
@@ -591,15 +833,22 @@ async function runSmokeBeatCompletionCase(
   const reason = passed
     ? null
     : `Expected zero false completes and zero missed completes (false=${falseCompleteCount}, missed=${missedCompleteCount}).`;
+  const mode = extractMode(turns[1] ?? turns[0]);
+  const initiativeAction = extractInitiativeAction(turns[1] ?? turns[0]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(turns[1] ?? turns[0]);
 
-  return {
+  return buildCaseResult({
     caseId,
     metricId: 'beatCompletionPrecisionRecall',
     title: 'Beat Completion Precision/Recall',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'narrative',
+    humanLabeled: true,
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       falseCompleteCount,
       missedCompleteCount,
@@ -608,6 +857,7 @@ async function runSmokeBeatCompletionCase(
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
       metricId: 'beatCompletionPrecisionRecall',
       createdAt: nowIso(),
@@ -621,7 +871,7 @@ async function runSmokeBeatCompletionCase(
       reason,
       passed,
     },
-  };
+  });
 }
 
 async function runSmokeLatencyCase(
@@ -633,6 +883,7 @@ async function runSmokeLatencyCase(
     npc: 'baker',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: false,
     useAuthoring: false,
   });
@@ -655,15 +906,22 @@ async function runSmokeLatencyCase(
   const thresholdMs = 120;
   const passed = p95Ms <= thresholdMs;
   const reason = passed ? null : `Expected p95 <= ${thresholdMs}ms, got ${p95Ms.toFixed(2)}ms.`;
+  const lastTurn = turns[turns.length - 1];
+  const mode = extractMode(lastTurn);
+  const initiativeAction = extractInitiativeAction(lastTurn);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(lastTurn);
 
-  return {
+  return buildCaseResult({
     caseId,
     metricId: 'latencyPerformance',
     title: 'Latency/Performance',
+    layer: 'rag_pipeline_quality',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       avgMs: Number(avgMs.toFixed(2)),
       p95Ms: Number(p95Ms.toFixed(2)),
@@ -671,6 +929,7 @@ async function runSmokeLatencyCase(
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
       metricId: 'latencyPerformance',
       createdAt: nowIso(),
@@ -683,7 +942,7 @@ async function runSmokeLatencyCase(
       reason,
       passed,
     },
-  };
+  });
 }
 
 async function runSmokeIdentityConsistencyCase(
@@ -696,6 +955,7 @@ async function runSmokeIdentityConsistencyCase(
     npc: 'baker',
     provider,
     runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
     useLore: true,
     loreDir: fixtures.loreDir,
     useAuthoring: true,
@@ -711,15 +971,22 @@ async function runSmokeIdentityConsistencyCase(
   const mentionsForeign = lower.includes('captain rowan');
   const passed = mentionsSelf && !mentionsForeign;
   const reason = passed ? null : 'Expected self-query answer grounded in baker self evidence without cross-entity contamination.';
+  const mode = extractMode(turns[0]);
+  const initiativeAction = extractInitiativeAction(turns[0]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(turns[0]);
 
-  return {
+  return buildCaseResult({
     caseId,
     metricId: 'identityConsistency',
     title: 'Identity Consistency',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    humanLabeled: true,
     passed,
-    score: passed ? 1 : 0,
-    threshold: 1,
     reason,
+    diagnosticsCoverage,
     details: {
       utterance,
       mentionsSelf,
@@ -727,6 +994,7 @@ async function runSmokeIdentityConsistencyCase(
     },
     transcript: {
       suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
       caseId,
       metricId: 'identityConsistency',
       createdAt: nowIso(),
@@ -741,7 +1009,421 @@ async function runSmokeIdentityConsistencyCase(
       reason,
       passed,
     },
-  };
+  });
+}
+
+async function runSmokeOwnershipAttributionCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+  fixtures: SmokeFixtures,
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.ownership-attribution';
+  const sessionId = sanitizeSessionId(`eval-ownership-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const session = await createSugarAgentSession({
+    npc: 'baker',
+    provider,
+    runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
+    useLore: true,
+    loreDir: fixtures.loreDir,
+    useAuthoring: true,
+    authoringBundlePath: fixtures.authoringBundlePath,
+    session: sessionId,
+    resetSession: sessionId,
+  });
+
+  const turns = [
+    await runTurnWithTiming(session, 'hello'),
+    await runTurnWithTiming(session, 'do you remember me?'),
+  ];
+
+  const secondUtterance = String(turns[1]?.output?.utterance ?? '');
+  const lower = secondUtterance.toLowerCase();
+  const hasHallucinatedOwnership = lower.includes('your photo collection')
+    || lower.includes('your hobbies')
+    || lower.includes('your collection');
+  const pipelineVersion = typeof turns[1]?.pipeline?.version === 'string'
+    ? String(turns[1]?.pipeline?.version)
+    : 'unknown';
+  const passed = pipelineVersion === 'v2' && !hasHallucinatedOwnership;
+  const reason = passed
+    ? null
+    : 'Expected V2 ownership-aware memory response without attributing NPC lore/hobbies to the player.';
+  const mode = extractMode(turns[1] ?? turns[0]);
+  const initiativeAction = extractInitiativeAction(turns[1] ?? turns[0]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(turns[1] ?? turns[0]);
+
+  return buildCaseResult({
+    caseId,
+    metricId: 'ownershipAttributionSafety',
+    title: 'Ownership Attribution Safety',
+    layer: 'atomic_factual_support',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    passed,
+    reason,
+    diagnosticsCoverage,
+    details: {
+      pipelineVersion,
+      secondUtterance,
+      hasHallucinatedOwnership,
+    },
+    transcript: {
+      suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
+      caseId,
+      metricId: 'ownershipAttributionSafety',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'baker',
+        provider,
+        runtime,
+      },
+      turns,
+      reason,
+      passed,
+    },
+  });
+}
+
+async function runSmokeAtomicFactualSupportCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+  fixtures: SmokeFixtures,
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.atomic-factual-support';
+  const session = await createSugarAgentSession({
+    npc: 'baker',
+    provider,
+    runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
+    useLore: true,
+    loreDir: fixtures.loreDir,
+    useAuthoring: false,
+  });
+
+  const turns = [
+    await runTurnWithTiming(session, 'what do you know about the creation of rackwick city and the dragon?'),
+  ];
+  const first = turns[0];
+  const supportedClaims = extractSupportedClaimCount(first);
+  const unsupportedClaims = extractUnsupportedClaimCount(first);
+  const validationDecision = extractValidationDecision(first) ?? 'unknown';
+  const citationCount = first?.citations?.length ?? 0;
+  const passed = supportedClaims >= 1 && unsupportedClaims === 0 && validationDecision === 'accept' && citationCount >= 1;
+  const reason = passed
+    ? null
+    : `Expected supported grounded claims with zero unsupported claims (supported=${supportedClaims}, unsupported=${unsupportedClaims}, decision=${validationDecision}).`;
+  const mode = extractMode(first);
+  const initiativeAction = extractInitiativeAction(first);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(first);
+
+  return buildCaseResult({
+    caseId,
+    metricId: 'atomicFactualSupport',
+    title: 'Atomic Factual Support',
+    layer: 'atomic_factual_support',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    passed,
+    reason,
+    diagnosticsCoverage,
+    details: {
+      supportedClaims,
+      unsupportedClaims,
+      validationDecision,
+      citationCount,
+    },
+    transcript: {
+      suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
+      caseId,
+      metricId: 'atomicFactualSupport',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'baker',
+        provider,
+        runtime,
+        useLore: true,
+      },
+      turns,
+      reason,
+      passed,
+    },
+  });
+}
+
+async function runSmokeRetrievalGovernanceCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.retrieval-governance';
+  const session = await createSugarAgentSession({
+    npc: 'guard',
+    provider,
+    runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
+    useLore: false,
+    scenario: 'beat-guard-alert',
+  });
+
+  const turns = [
+    await runTurnWithTiming(session, 'what is happening at the gate?'),
+  ];
+  const first = turns[0];
+  const qualityPath = asString(extractRetrievalField(first, 'qualityPath')) ?? 'unknown';
+  const correctiveAttempted = extractRetrievalField(first, 'correctiveAttempted') === true
+    || qualityPath.startsWith('corrective_');
+  const qualityGatePassed = extractRetrievalField(first, 'qualityGatePassed') === true;
+  const initiativeAction = extractInitiativeAction(first);
+  const passed = correctiveAttempted
+    && qualityPath === 'corrective_fail'
+    && !qualityGatePassed
+    && (initiativeAction === 'abstain' || initiativeAction === 'clarify');
+  const reason = passed
+    ? null
+    : `Expected bounded corrective retrieval failure path with abstain/clarify behavior (path=${qualityPath}, corrective=${correctiveAttempted}, gatePassed=${qualityGatePassed}, action=${initiativeAction}).`;
+  const mode = extractMode(first);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(first);
+
+  return buildCaseResult({
+    caseId,
+    metricId: 'ragRetrievalGovernance',
+    title: 'RAG Retrieval Governance',
+    layer: 'rag_pipeline_quality',
+    mode,
+    initiativeAction,
+    expectedMode: 'narrative',
+    expectedInitiativeAction: 'abstain',
+    passed,
+    reason,
+    diagnosticsCoverage,
+    details: {
+      qualityPath,
+      correctiveAttempted,
+      qualityGatePassed,
+      initiativeAction,
+    },
+    transcript: {
+      suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
+      caseId,
+      metricId: 'ragRetrievalGovernance',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'guard',
+        provider,
+        runtime,
+        scenario: 'beat-guard-alert',
+      },
+      turns,
+      reason,
+      passed,
+    },
+  });
+}
+
+async function runSmokeMixedInitiativeOpenerCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.mixed-initiative-opener';
+  const session = await createSugarAgentSession({
+    npc: 'guard',
+    provider,
+    runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
+    useLore: false,
+    scenario: 'beat-guard-alert',
+  });
+
+  const turns = [
+    await runTurnWithTiming(session, 'hello'),
+  ];
+  const first = turns[0];
+  const initiativeAction = extractInitiativeAction(first);
+  const primaryGoal = asString(asRecord(asRecord(asRecord(first?.pipeline)?.initiative)?.decision)?.primaryGoal);
+  const passed = initiativeAction === 'npc_initiate';
+  const reason = passed
+    ? null
+    : `Expected mixed-initiative narrative opener (action=npc_initiate), got ${initiativeAction}.`;
+  const mode = extractMode(first);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(first);
+
+  return buildCaseResult({
+    caseId,
+    metricId: 'mixedInitiativeQuality',
+    title: 'Mixed-Initiative Quality',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'narrative',
+    expectedInitiativeAction: 'npc_initiate',
+    humanLabeled: true,
+    passed,
+    reason,
+    diagnosticsCoverage,
+    details: {
+      initiativeAction,
+      primaryGoal,
+    },
+    transcript: {
+      suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
+      caseId,
+      metricId: 'mixedInitiativeQuality',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'guard',
+        provider,
+        runtime,
+        scenario: 'beat-guard-alert',
+      },
+      turns,
+      reason,
+      passed,
+    },
+  });
+}
+
+async function runSmokeCharacterExhaustionCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.character-exhaustion-close';
+  const session = await createSugarAgentSession({
+    npc: 'baker',
+    provider,
+    runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
+    useLore: false,
+    useAuthoring: false,
+  });
+
+  const prompts = [
+    'tell me about coffee',
+    'what about coffee',
+    'i want coffee',
+    'i love coffee',
+  ];
+  const turns: EvalCaseTurn[] = [];
+  for (const prompt of prompts) {
+    turns.push(await runTurnWithTiming(session, prompt));
+  }
+
+  const closeTurn = turns.find((turn) => extractInitiativeAction(turn) === 'close');
+  const closeUtterance = String(closeTurn?.output?.utterance ?? '');
+  const closeLower = closeUtterance.toLowerCase();
+  const gracefulClose = closeLower.includes('goodbye')
+    || closeLower.includes('pick this up again')
+    || closeLower.includes('covered');
+  const passed = Boolean(closeTurn) && gracefulClose;
+  const reason = passed
+    ? null
+    : 'Expected character-mode novelty exhaustion to trigger close with graceful language.';
+  const mode = extractMode(closeTurn ?? turns[turns.length - 1]);
+  const initiativeAction = extractInitiativeAction(closeTurn ?? turns[turns.length - 1]);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(closeTurn ?? turns[turns.length - 1]);
+
+  return buildCaseResult({
+    caseId,
+    metricId: 'characterExhaustionQuality',
+    title: 'Character Exhaustion Quality',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    expectedInitiativeAction: 'close',
+    humanLabeled: true,
+    passed,
+    reason,
+    diagnosticsCoverage,
+    details: {
+      closeDetected: Boolean(closeTurn),
+      closeUtterance,
+      gracefulClose,
+      turnCount: turns.length,
+    },
+    transcript: {
+      suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
+      caseId,
+      metricId: 'characterExhaustionQuality',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'baker',
+        provider,
+        runtime,
+      },
+      turns,
+      reason,
+      passed,
+    },
+  });
+}
+
+async function runSmokeClarifyBehaviorCase(
+  provider: 'local' | 'echo',
+  runtime: 'auto' | 'mock' | 'llama',
+): Promise<EvalCaseResult> {
+  const caseId = 'smoke.clarify-behavior';
+  const session = await createSugarAgentSession({
+    npc: 'baker',
+    provider,
+    runtime,
+    rerankerClass: ACTIVE_EVAL_RERANKER_CLASS,
+    useLore: false,
+    useAuthoring: false,
+  });
+
+  const turns = [
+    await runTurnWithTiming(session, '???'),
+  ];
+  const first = turns[0];
+  const initiativeAction = extractInitiativeAction(first);
+  const utterance = String(first?.output?.utterance ?? '');
+  const passed = initiativeAction === 'clarify' && /\bclarify\b|\bwhat you want to know\b/i.test(utterance);
+  const reason = passed
+    ? null
+    : `Expected unclear intent to route to clarify action; got action=${initiativeAction}.`;
+  const mode = extractMode(first);
+  const diagnosticsCoverage = computeDiagnosticsCoverage(first);
+
+  return buildCaseResult({
+    caseId,
+    metricId: 'clarifyBehavior',
+    title: 'Clarify Behavior',
+    layer: 'human_regression',
+    mode,
+    initiativeAction,
+    expectedMode: 'character',
+    expectedInitiativeAction: 'clarify',
+    humanLabeled: true,
+    passed,
+    reason,
+    diagnosticsCoverage,
+    details: {
+      initiativeAction,
+      utterance,
+    },
+    transcript: {
+      suite: 'smoke',
+      suiteVersion: SUITE_VERSION_SMOKE,
+      caseId,
+      metricId: 'clarifyBehavior',
+      createdAt: nowIso(),
+      sessionOptions: {
+        npc: 'baker',
+        provider,
+        runtime,
+      },
+      turns,
+      reason,
+      passed,
+    },
+  });
 }
 
 const SMOKE_CASE_RUNNERS: Record<
@@ -752,13 +1434,19 @@ const SMOKE_CASE_RUNNERS: Record<
     fixtures: SmokeFixtures,
   ) => Promise<EvalCaseResult>
 > = {
+  'smoke.atomic-factual-support': runSmokeAtomicFactualSupportCase,
   'smoke.lore-faithfulness': runSmokeLoreFaithfulnessCase,
+  'smoke.retrieval-governance': async (provider, runtime) => runSmokeRetrievalGovernanceCase(provider, runtime),
   'smoke.memory-recall': async (provider, runtime) => runSmokeMemoryRecallCase(provider, runtime),
   'smoke.intent-safety': async (provider, runtime) => runSmokeIntentSafetyCase(provider, runtime),
+  'smoke.mixed-initiative-opener': async (provider, runtime) => runSmokeMixedInitiativeOpenerCase(provider, runtime),
+  'smoke.character-exhaustion-close': async (provider, runtime) => runSmokeCharacterExhaustionCase(provider, runtime),
+  'smoke.clarify-behavior': async (provider, runtime) => runSmokeClarifyBehaviorCase(provider, runtime),
   'smoke.beat-coverage': runSmokeBeatCoverageCase,
   'smoke.beat-completion': async (provider, runtime) => runSmokeBeatCompletionCase(provider, runtime),
   'smoke.latency-performance': async (provider, runtime) => runSmokeLatencyCase(provider, runtime),
   'smoke.identity-consistency': runSmokeIdentityConsistencyCase,
+  'smoke.ownership-attribution': runSmokeOwnershipAttributionCase,
 };
 
 function summarizeMetrics(results: EvalCaseResult[]): EvalMetricSummary[] {
@@ -774,9 +1462,11 @@ function summarizeMetrics(results: EvalCaseResult[]): EvalMetricSummary[] {
     const score = mean(cases.map((entry) => entry.score));
     const threshold = mean(cases.map((entry) => entry.threshold));
     const title = cases[0]?.title ?? metricId;
+    const layer = cases[0]?.layer ?? 'human_regression';
     summaries.push({
       metricId,
       title,
+      layer,
       score: Number(score.toFixed(4)),
       threshold: Number(threshold.toFixed(4)),
       passed: score >= threshold,
@@ -788,15 +1478,271 @@ function summarizeMetrics(results: EvalCaseResult[]): EvalMetricSummary[] {
   return summaries;
 }
 
-function buildReleaseGates(metricSummaries: EvalMetricSummary[]): EvalReleaseGate[] {
+function buildMetricGates(metricSummaries: EvalMetricSummary[]): EvalReleaseGate[] {
   return metricSummaries.map((summary) => ({
     gateId: `gate.metric.${summary.metricId}`,
+    gateType: 'metric',
     metricId: summary.metricId,
+    layer: summary.layer,
     title: summary.title,
     score: summary.score,
     threshold: summary.threshold,
     passed: summary.passed,
+    blocking: true,
   }));
+}
+
+function buildLayerGates(metricSummaries: EvalMetricSummary[]): EvalReleaseGate[] {
+  const byLayer = new Map<EvalLayerId, EvalMetricSummary[]>();
+  for (const summary of metricSummaries) {
+    const entries = byLayer.get(summary.layer) ?? [];
+    entries.push(summary);
+    byLayer.set(summary.layer, entries);
+  }
+
+  const gates: EvalReleaseGate[] = [];
+  for (const [layer, entries] of byLayer.entries()) {
+    const score = Number(mean(entries.map((entry) => entry.score)).toFixed(4));
+    const threshold = Number(mean(entries.map((entry) => entry.threshold)).toFixed(4));
+    gates.push({
+      gateId: `gate.layer.${layer}`,
+      gateType: 'layer',
+      layer,
+      title: `Layer: ${layer}`,
+      score,
+      threshold,
+      passed: score >= threshold,
+      blocking: true,
+      reason: `metrics=${entries.map((entry) => entry.metricId).join(',')}`,
+    });
+  }
+
+  return gates.sort((a, b) => a.gateId.localeCompare(b.gateId));
+}
+
+function buildModeGates(caseResults: EvalCaseResult[]): EvalReleaseGate[] {
+  const byMode = new Map<EvalConversationMode, EvalCaseResult[]>();
+  for (const result of caseResults) {
+    if (result.expectedMode === undefined) continue;
+    const mode = result.expectedMode;
+    if (mode === 'unknown') continue;
+    const entries = byMode.get(mode) ?? [];
+    entries.push(result);
+    byMode.set(mode, entries);
+  }
+
+  const gates: EvalReleaseGate[] = [];
+  for (const [mode, entries] of byMode.entries()) {
+    const score = Number(mean(entries.map((entry) => (entry.mode === mode ? 1 : 0))).toFixed(4));
+    gates.push({
+      gateId: `gate.mode.${mode}`,
+      gateType: 'mode',
+      mode,
+      title: `Mode: ${mode}`,
+      score,
+      threshold: 1,
+      passed: score >= 1,
+      blocking: true,
+      reason: `cases=${entries.map((entry) => entry.caseId).join(',')}`,
+    });
+  }
+  return gates.sort((a, b) => a.gateId.localeCompare(b.gateId));
+}
+
+function buildInitiativeGates(caseResults: EvalCaseResult[]): EvalReleaseGate[] {
+  const byAction = new Map<EvalInitiativeAction, EvalCaseResult[]>();
+  for (const result of caseResults) {
+    if (result.expectedInitiativeAction === undefined) continue;
+    const action = result.expectedInitiativeAction;
+    if (action === 'unknown') continue;
+    const entries = byAction.get(action) ?? [];
+    entries.push(result);
+    byAction.set(action, entries);
+  }
+
+  const gates: EvalReleaseGate[] = [];
+  for (const [initiativeAction, entries] of byAction.entries()) {
+    const score = Number(mean(entries.map((entry) => (entry.initiativeAction === initiativeAction ? 1 : 0))).toFixed(4));
+    gates.push({
+      gateId: `gate.initiative.${initiativeAction}`,
+      gateType: 'initiative',
+      initiativeAction,
+      title: `Initiative: ${initiativeAction}`,
+      score,
+      threshold: 1,
+      passed: score >= 1,
+      blocking: true,
+      reason: `cases=${entries.map((entry) => entry.caseId).join(',')}`,
+    });
+  }
+  return gates.sort((a, b) => a.gateId.localeCompare(b.gateId));
+}
+
+function buildObservabilityGate(caseResults: EvalCaseResult[]): EvalReleaseGate {
+  let checks = 0;
+  let passed = 0;
+  for (const result of caseResults) {
+    const coverage = result.diagnosticsCoverage;
+    const values = [
+      coverage.hasMode,
+      coverage.hasInitiative,
+      coverage.hasRetrievalQualityPath,
+      coverage.hasValidationDecision,
+      coverage.hasFallbackReason,
+    ];
+    checks += values.length;
+    passed += values.filter(Boolean).length;
+  }
+  const score = checks > 0 ? Number((passed / checks).toFixed(4)) : 0;
+  return {
+    gateId: 'gate.observability.contract',
+    gateType: 'observability',
+    title: 'Observability Contract Coverage',
+    score,
+    threshold: 1,
+    passed: score >= 1,
+    blocking: true,
+  };
+}
+
+function inferRerankerClass(entry: Record<string, unknown> | null): 'heuristic' | 'learned' | 'unknown' {
+  const explicit = asString(entry?.class);
+  if (explicit === 'heuristic' || explicit === 'learned') {
+    return explicit;
+  }
+  const modelVersion = asString(entry?.modelVersion) ?? '';
+  if (modelVersion.toLowerCase().includes('cross-encoder') || modelVersion.toLowerCase().includes('rerank') || modelVersion.toLowerCase().includes('learned')) {
+    return 'learned';
+  }
+  if (modelVersion.length > 0) {
+    return 'heuristic';
+  }
+  return 'unknown';
+}
+
+function collectRerankerObservations(caseResults: EvalCaseResult[]): EvalRerankerObservation[] {
+  const observations: EvalRerankerObservation[] = [];
+  for (const result of caseResults) {
+    const transcriptRecord = asRecord(result.transcript);
+    const turns = Array.isArray(transcriptRecord?.turns) ? transcriptRecord.turns : [];
+    for (const turn of turns) {
+      const pipeline = asRecord(asRecord(turn)?.pipeline);
+      const retrieval = asRecord(pipeline?.retrieval);
+      const reranker = asRecord(retrieval?.reranker);
+      if (!reranker) continue;
+      observations.push({
+        rerankerClass: inferRerankerClass(reranker),
+        modelVersion: asString(reranker.modelVersion) ?? 'unknown-model',
+        artifactVersion: asString(reranker.artifactVersion) ?? 'unknown-artifact',
+        latencyMs: asNumber(reranker.latencyMs) ?? 0,
+      });
+    }
+  }
+  return observations;
+}
+
+function readBaselineScore(filePath: string | undefined | null): number | null {
+  if (!filePath) return null;
+  const absolute = path.resolve(filePath);
+  if (!fs.existsSync(absolute)) {
+    throw new Error(`Reranker baseline file not found: ${absolute}`);
+  }
+  const parsed = JSON.parse(fs.readFileSync(absolute, 'utf8')) as Record<string, unknown>;
+  const direct = asNumber(parsed.retrievalRelevanceScore);
+  if (direct !== null) return Number(direct.toFixed(4));
+  const nested = asRecord(parsed.rerankerBaseline);
+  const nestedScore = asNumber(nested?.retrievalRelevanceScore);
+  if (nestedScore !== null) return Number(nestedScore.toFixed(4));
+  throw new Error(`Reranker baseline file missing retrievalRelevanceScore: ${absolute}`);
+}
+
+function buildRerankerPromotionGate(options: {
+  caseResults: EvalCaseResult[];
+  metricSummaries: EvalMetricSummary[];
+  deploymentTarget: 'development' | 'production';
+  rerankerBaselinePath?: string;
+  overrideCandidateClass?: 'heuristic' | 'learned';
+}): EvalRerankerPromotionGate {
+  const observations = collectRerankerObservations(options.caseResults);
+  const ragMetrics = options.metricSummaries.filter((entry) => entry.layer === 'rag_pipeline_quality');
+  const candidateScore = Number(mean(ragMetrics.map((entry) => entry.score)).toFixed(4));
+  const observedClassesRaw = observations.map((entry) => entry.rerankerClass);
+  const overrideClass = options.overrideCandidateClass;
+  const observedClasses = Array.from(new Set(
+    overrideClass ? [overrideClass] : (observedClassesRaw.length > 0 ? observedClassesRaw : ['unknown']),
+  )) as Array<'heuristic' | 'learned' | 'unknown'>;
+  const observedModelVersions = Array.from(new Set(observations.map((entry) => entry.modelVersion))).sort((a, b) => a.localeCompare(b));
+  const observedArtifactVersions = Array.from(new Set(observations.map((entry) => entry.artifactVersion))).sort((a, b) => a.localeCompare(b));
+  const baselineScore = readBaselineScore(options.rerankerBaselinePath);
+
+  if (options.deploymentTarget !== 'production') {
+    return {
+      gateId: 'gate.reranker.promotion',
+      requiredClass: 'learned',
+      observedClasses,
+      observedModelVersions,
+      observedArtifactVersions,
+      candidateScore,
+      baselineScore,
+      threshold: baselineScore ?? 0,
+      deploymentTarget: options.deploymentTarget,
+      passed: true,
+      blocking: false,
+      reason: 'non-production target',
+    };
+  }
+
+  const learnedOnly = observedClasses.length > 0
+    && observedClasses.every((entry) => entry === 'learned');
+  if (!learnedOnly) {
+    return {
+      gateId: 'gate.reranker.promotion',
+      requiredClass: 'learned',
+      observedClasses,
+      observedModelVersions,
+      observedArtifactVersions,
+      candidateScore,
+      baselineScore,
+      threshold: baselineScore ?? 0,
+      deploymentTarget: options.deploymentTarget,
+      passed: false,
+      blocking: true,
+      reason: 'observed reranker class is not learned-only',
+    };
+  }
+
+  if (baselineScore === null) {
+    return {
+      gateId: 'gate.reranker.promotion',
+      requiredClass: 'learned',
+      observedClasses,
+      observedModelVersions,
+      observedArtifactVersions,
+      candidateScore,
+      baselineScore,
+      threshold: 0,
+      deploymentTarget: options.deploymentTarget,
+      passed: false,
+      blocking: true,
+      reason: 'missing baseline score for production reranker promotion',
+    };
+  }
+
+  const passed = candidateScore >= baselineScore;
+  return {
+    gateId: 'gate.reranker.promotion',
+    requiredClass: 'learned',
+    observedClasses,
+    observedModelVersions,
+    observedArtifactVersions,
+    candidateScore,
+    baselineScore,
+    threshold: baselineScore,
+    deploymentTarget: options.deploymentTarget,
+    passed,
+    blocking: true,
+    reason: passed ? 'candidate meets baseline' : 'candidate below baseline',
+  };
 }
 
 function writeCaseArtifacts(
@@ -828,13 +1774,21 @@ async function runSmokeSuite(
 ): Promise<Record<string, unknown>> {
   const provider = toSafeProvider(options.provider);
   const runtime = toSafeRuntime(options.runtime);
+  const deploymentTarget = toSafeDeploymentTarget(options.deploymentTarget);
+  ACTIVE_EVAL_RERANKER_CLASS = toSafeRerankerCandidateClass(options.rerankerCandidateClass);
   const fixtures = buildSmokeFixtures(directories.runDir);
 
   const caseOrder = [
+    'smoke.atomic-factual-support',
     'smoke.lore-faithfulness',
+    'smoke.retrieval-governance',
     'smoke.identity-consistency',
+    'smoke.ownership-attribution',
     'smoke.memory-recall',
     'smoke.intent-safety',
+    'smoke.mixed-initiative-opener',
+    'smoke.character-exhaustion-close',
+    'smoke.clarify-behavior',
     'smoke.beat-coverage',
     'smoke.beat-completion',
     'smoke.latency-performance',
@@ -859,28 +1813,87 @@ async function runSmokeSuite(
   }
 
   const metrics = summarizeMetrics(caseResults);
-  const releaseGates = buildReleaseGates(metrics);
+  const metricGates = buildMetricGates(metrics);
+  const layerGates = buildLayerGates(metrics);
+  const modeGates = buildModeGates(caseResults);
+  const initiativeGates = buildInitiativeGates(caseResults);
+  const observabilityGate = buildObservabilityGate(caseResults);
+  const rerankerPromotion = buildRerankerPromotionGate({
+    caseResults,
+    metricSummaries: metrics,
+    deploymentTarget,
+    rerankerBaselinePath: options.rerankerBaselinePath,
+    overrideCandidateClass: ACTIVE_EVAL_RERANKER_CLASS,
+  });
+  const rerankerGate: EvalReleaseGate = {
+    gateId: rerankerPromotion.gateId,
+    gateType: 'reranker_promotion',
+    title: 'Reranker Promotion',
+    score: rerankerPromotion.candidateScore,
+    threshold: rerankerPromotion.threshold,
+    passed: rerankerPromotion.passed,
+    blocking: rerankerPromotion.blocking,
+    reason: rerankerPromotion.reason,
+  };
+  const releaseGates = [
+    ...metricGates,
+    ...layerGates,
+    ...modeGates,
+    ...initiativeGates,
+    observabilityGate,
+    rerankerGate,
+  ];
   const passedCases = caseResults.filter((entry) => entry.passed).length;
   const failedCases = caseResults.length - passedCases;
-  const status = releaseGates.every((gate) => gate.passed) ? 'pass' : 'fail';
+  const failedBlockingGates = releaseGates.filter((gate) => gate.blocking && gate.passed === false);
+  const status = failedBlockingGates.length === 0 ? 'pass' : 'fail';
 
   const beatCoverageCase = caseResults.find((entry) => entry.metricId === 'beatCoverageAccuracy');
   const beatCompletionCase = caseResults.find((entry) => entry.metricId === 'beatCompletionPrecisionRecall');
+  const humanLabeledCases = caseResults.filter((entry) => entry.humanLabeled);
+  const mixedInitiativeCases = caseResults.filter((entry) => entry.metricId === 'mixedInitiativeQuality');
+  const beatCases = caseResults.filter((entry) => (
+    entry.metricId === 'beatCoverageAccuracy' || entry.metricId === 'beatCompletionPrecisionRecall'
+  ));
 
   return {
     schemaVersion: 1,
     suite: 'smoke',
+    suiteVersion: SUITE_VERSION_SMOKE,
     generatedAt: nowIso(),
     status,
     provider,
     runtime,
+    deploymentTarget,
+    pipeline: {
+      version: PIPELINE_VERSION_V2,
+      enabled: true,
+    },
     summary: {
       totalCases: caseResults.length,
       passedCases,
       failedCases,
     },
     metrics,
+    gateSummary: {
+      totalGates: releaseGates.length,
+      failedBlockingGateCount: failedBlockingGates.length,
+      failedBlockingGateIds: failedBlockingGates.map((entry) => entry.gateId),
+    },
     releaseGates,
+    rerankerPromotion,
+    layerSummary: {
+      atomic: metrics.filter((entry) => entry.layer === 'atomic_factual_support').map((entry) => entry.metricId),
+      rag: metrics.filter((entry) => entry.layer === 'rag_pipeline_quality').map((entry) => entry.metricId),
+      human: metrics.filter((entry) => entry.layer === 'human_regression').map((entry) => entry.metricId),
+    },
+    humanRegression: {
+      suiteVersion: SUITE_VERSION_SMOKE,
+      totalLabeledCases: humanLabeledCases.length,
+      labeledCaseIds: humanLabeledCases.map((entry) => entry.caseId),
+      mixedInitiativeCaseIds: mixedInitiativeCases.map((entry) => entry.caseId),
+      beatCorrectnessCaseIds: beatCases.map((entry) => entry.caseId),
+    },
     beatEvaluation: {
       coverage: {
         caseId: beatCoverageCase?.caseId ?? null,
@@ -899,9 +1912,16 @@ async function runSmokeSuite(
       caseId: entry.caseId,
       metricId: entry.metricId,
       title: entry.title,
+      layer: entry.layer,
       passed: entry.passed,
       score: entry.score,
       threshold: entry.threshold,
+      mode: entry.mode,
+      initiativeAction: entry.initiativeAction,
+      expectedMode: entry.expectedMode ?? null,
+      expectedInitiativeAction: entry.expectedInitiativeAction ?? null,
+      humanLabeled: entry.humanLabeled === true,
+      diagnosticsCoverage: entry.diagnosticsCoverage,
       reason: entry.reason,
       details: entry.details,
     })),
@@ -958,6 +1978,7 @@ export async function replaySugarAgentEvalTranscript(
   const fixtures = buildSmokeFixtures(outputDir);
   const provider = toSafeProvider(options.provider);
   const runtime = toSafeRuntime(options.runtime);
+  ACTIVE_EVAL_RERANKER_CLASS = toSafeRerankerCandidateClass(options.rerankerCandidateClass);
   const result = await runner(provider, runtime, fixtures);
 
   const replayReport = {
@@ -967,8 +1988,14 @@ export async function replaySugarAgentEvalTranscript(
     transcriptPath,
     caseId,
     suite: 'smoke',
+    suiteVersion: SUITE_VERSION_SMOKE,
     provider,
     runtime,
+    rerankerCandidateClass: ACTIVE_EVAL_RERANKER_CLASS,
+    pipeline: {
+      version: PIPELINE_VERSION_V2,
+      enabled: true,
+    },
     expectedPassed: raw.passed === true,
     replayPassed: result.passed,
     matchesExpectation: result.passed === (raw.passed === true),

@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef } from 'react';
-import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, Textarea, ActionIcon, ScrollArea, Switch } from '@mantine/core';
+import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
 import type { EditorTab } from './store/useEditorStore';
@@ -49,6 +49,13 @@ const AVAILABLE_PLUGINS = [
   },
 ] as const;
 
+const SUGARAGENT_RUNTIME_MODE_OPTIONS = [
+  { value: 'llama', label: 'llama (default)' },
+  { value: 'auto', label: 'auto' },
+  { value: 'mock', label: 'mock (testing only)' },
+] as const;
+type SugarAgentRuntimeMode = (typeof SUGARAGENT_RUNTIME_MODE_OPTIONS)[number]['value'];
+
 const theme = createTheme({
   primaryColor: 'blue',
   colors: {
@@ -86,11 +93,19 @@ function normalizePlugins(rawPlugins: unknown): PluginConfigData[] {
     if (typeof entry !== 'object' || entry === null) continue;
     const record = entry as Record<string, unknown>;
     if (typeof record.id !== 'string' || record.id.trim().length === 0) continue;
-    normalized.push({
+    const pluginId = record.id.trim();
+    const normalizedEntry: PluginConfigData = {
       ...record,
-      id: record.id.trim(),
+      id: pluginId,
       enabled: record.enabled === false ? false : true,
-    } as PluginConfigData);
+    } as PluginConfigData;
+    if (pluginId === 'sugaragent') {
+      normalizedEntry.runtimeMode = normalizeSugarAgentRuntimeMode(
+        normalizedEntry.runtimeMode ?? normalizedEntry.runtime,
+      );
+      delete normalizedEntry.runtime;
+    }
+    normalized.push(normalizedEntry);
   }
 
   return normalized;
@@ -106,6 +121,13 @@ function parseStringList(value: string): string[] {
     .split(/\r?\n|,/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function normalizeSugarAgentRuntimeMode(value: unknown): SugarAgentRuntimeMode {
+  if (value === 'auto' || value === 'mock' || value === 'llama') {
+    return value;
+  }
+  return 'llama';
 }
 
 function normalizeStringArrayValue(value: unknown): string[] {
@@ -612,11 +634,18 @@ export function Editor() {
       setDirty(true);
       return;
     }
-    nextPlugins.push({
+    const nextConfig: PluginConfigData = {
       ...(existing ?? {}),
       id: pluginId,
       enabled,
-    });
+    };
+    if (pluginId === 'sugaragent' && enabled) {
+      nextConfig.runtimeMode = normalizeSugarAgentRuntimeMode(
+        nextConfig.runtimeMode ?? nextConfig.runtime,
+      );
+      delete nextConfig.runtime;
+    }
+    nextPlugins.push(nextConfig);
     setPlugins(nextPlugins);
     setDirty(true);
   };
@@ -629,6 +658,9 @@ export function Editor() {
   const sugarAgentGlobalSafetyBounds = normalizeStringArrayValue(
     sugarAgentPluginConfig?.globalSafetyBounds ?? sugarAgentPluginConfig?.safetyBounds,
   );
+  const sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
+    sugarAgentPluginConfig?.runtimeMode ?? sugarAgentPluginConfig?.runtime,
+  );
 
   const handleSetSugarAgentGlobalSafetyBounds = (value: string) => {
     const nextBounds = parseStringList(value);
@@ -638,6 +670,7 @@ export function Editor() {
       ...(existing ?? {}),
       id: 'sugaragent',
       enabled: existing?.enabled === false ? false : true,
+      runtimeMode: normalizeSugarAgentRuntimeMode(existing?.runtimeMode ?? existing?.runtime),
     };
     if (nextBounds.length > 0) {
       nextConfig.globalSafetyBounds = nextBounds;
@@ -645,6 +678,23 @@ export function Editor() {
       delete nextConfig.globalSafetyBounds;
     }
     delete nextConfig.safetyBounds;
+    delete nextConfig.runtime;
+    nextPlugins.push(nextConfig);
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
+
+  const handleSetSugarAgentRuntimeMode = (value: string | null) => {
+    const existing = sugarAgentPluginConfig;
+    const mode = normalizeSugarAgentRuntimeMode(value ?? existing?.runtimeMode ?? existing?.runtime);
+    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
+    const nextConfig: PluginConfigData = {
+      ...(existing ?? {}),
+      id: 'sugaragent',
+      enabled: existing?.enabled === false ? false : true,
+      runtimeMode: mode,
+    };
+    delete nextConfig.runtime;
     nextPlugins.push(nextConfig);
     setPlugins(nextPlugins);
     setDirty(true);
@@ -1148,6 +1198,15 @@ export function Editor() {
                     placeholder={'No profanity\nNo legal advice\nNo medical advice'}
                     minRows={3}
                     autosize
+                    disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
+                  />
+                  <Select
+                    label="Local Runtime Mode"
+                    description="Default is llama. Use mock only for deterministic testing."
+                    data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+                    value={sugarAgentRuntimeMode}
+                    onChange={handleSetSugarAgentRuntimeMode}
+                    allowDeselect={false}
                     disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
                   />
                   <Group justify="space-between" align="center">

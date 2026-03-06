@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -5,12 +6,133 @@ import {
   runSugarAgentEval,
 } from './runner.mjs';
 
+const DEFAULT_DEPLOYMENT_TARGET = 'development';
+const DEFAULT_RERANKER_CLASS = 'learned';
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeDeploymentTarget(value) {
+  return value === 'production' ? 'production' : 'development';
+}
+
+function normalizeRerankerClass(value) {
+  return value === 'heuristic' ? 'heuristic' : 'learned';
+}
+
+function normalizeOptionalString(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveDefaultProjectPath(cwd) {
+  const activeGamePath = path.resolve(cwd, 'games', '.active-game');
+  if (fs.existsSync(activeGamePath)) {
+    const slug = normalizeOptionalString(fs.readFileSync(activeGamePath, 'utf8'));
+    if (slug) {
+      const candidate = path.resolve(cwd, 'games', slug, 'project.sgrgame');
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  const localProject = path.resolve(cwd, 'project.sgrgame');
+  if (fs.existsSync(localProject)) {
+    return localProject;
+  }
+
+  return null;
+}
+
+function extractSugarAgentEvalConfig(projectData, projectPath) {
+  const defaults = {
+    deploymentTarget: DEFAULT_DEPLOYMENT_TARGET,
+    rerankerClass: DEFAULT_RERANKER_CLASS,
+    rerankerBaseline: null,
+  };
+
+  if (!isRecord(projectData)) {
+    return defaults;
+  }
+
+  const applyConfig = (raw) => {
+    if (!isRecord(raw)) return;
+    defaults.deploymentTarget = normalizeDeploymentTarget(
+      raw.evalDeploymentTarget ?? raw.deploymentTarget,
+    );
+    defaults.rerankerClass = normalizeRerankerClass(
+      raw.evalRerankerClass ?? raw.rerankerClass,
+    );
+
+    const configuredBaseline = normalizeOptionalString(
+      raw.evalRerankerBaselinePath ?? raw.rerankerBaselinePath,
+    );
+    if (configuredBaseline) {
+      defaults.rerankerBaseline = path.isAbsolute(configuredBaseline)
+        ? configuredBaseline
+        : path.resolve(path.dirname(projectPath), configuredBaseline);
+    }
+  };
+
+  if (isRecord(projectData.sugaragent)) {
+    applyConfig(projectData.sugaragent);
+  }
+
+  if (Array.isArray(projectData.plugins)) {
+    for (const plugin of projectData.plugins) {
+      if (!isRecord(plugin) || plugin.id !== 'sugaragent' || plugin.enabled === false) continue;
+      applyConfig(plugin);
+    }
+  }
+
+  return defaults;
+}
+
+function resolveEvalDefaultsFromProject(cwd) {
+  const projectPath = resolveDefaultProjectPath(cwd);
+  if (!projectPath) {
+    return {
+      deploymentTarget: DEFAULT_DEPLOYMENT_TARGET,
+      rerankerClass: DEFAULT_RERANKER_CLASS,
+      rerankerBaseline: null,
+      sourceProjectPath: null,
+      warning: null,
+    };
+  }
+
+  try {
+    const raw = fs.readFileSync(projectPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const defaults = extractSugarAgentEvalConfig(parsed, projectPath);
+    return {
+      ...defaults,
+      sourceProjectPath: projectPath,
+      warning: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown project parse error';
+    return {
+      deploymentTarget: DEFAULT_DEPLOYMENT_TARGET,
+      rerankerClass: DEFAULT_RERANKER_CLASS,
+      rerankerBaseline: null,
+      sourceProjectPath: projectPath,
+      warning: `Could not parse project defaults at ${projectPath}: ${message}`,
+    };
+  }
+}
+
 function parseArgs(argv) {
   const parsed = {
     suite: 'smoke',
     output: null,
     provider: 'local',
     runtime: 'mock',
+    deploymentTarget: null,
+    rerankerBaseline: null,
+    rerankerClass: null,
     replay: null,
     quiet: false,
   };
@@ -64,6 +186,36 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === '--deployment-target') {
+      const value = argv[i + 1];
+      if (!value) throw new Error('Missing value for --deployment-target');
+      if (value !== 'development' && value !== 'production') {
+        throw new Error('Invalid value for --deployment-target. Use "development" or "production".');
+      }
+      parsed.deploymentTarget = value;
+      i += 1;
+      continue;
+    }
+
+    if (token === '--reranker-baseline') {
+      const value = argv[i + 1];
+      if (!value) throw new Error('Missing value for --reranker-baseline');
+      parsed.rerankerBaseline = value;
+      i += 1;
+      continue;
+    }
+
+    if (token === '--reranker-class') {
+      const value = argv[i + 1];
+      if (!value) throw new Error('Missing value for --reranker-class');
+      if (value !== 'heuristic' && value !== 'learned') {
+        throw new Error('Invalid value for --reranker-class. Use "heuristic" or "learned".');
+      }
+      parsed.rerankerClass = value;
+      i += 1;
+      continue;
+    }
+
     if (token === '--quiet') {
       parsed.quiet = true;
       continue;
@@ -83,6 +235,17 @@ function isDirectExecution(metaUrl) {
 
 function printSuiteReport(report) {
   console.log(`[sugaragent:eval] suite=${report.suite} status=${report.status}`);
+  if (report?.suiteVersion) {
+    console.log(`[sugaragent:eval] suiteVersion=${report.suiteVersion}`);
+  }
+  if (report?.deploymentTarget) {
+    console.log(`[sugaragent:eval] deploymentTarget=${report.deploymentTarget}`);
+  }
+  if (report?.pipeline) {
+    const version = typeof report.pipeline.version === 'string' ? report.pipeline.version : 'v2';
+    const enabled = report.pipeline.enabled === true;
+    console.log(`[sugaragent:eval] pipeline version=${version} enabled=${enabled}`);
+  }
   for (const metric of report.metrics ?? []) {
     console.log(
       `[sugaragent:eval] metric=${metric.metricId} passed=${metric.passed} score=${metric.score} threshold=${metric.threshold}`,
@@ -99,6 +262,26 @@ function printSuiteReport(report) {
     );
   }
   console.log(`[sugaragent:eval] report=${report.artifacts?.reportPath}`);
+  if (report?.gateSummary) {
+    console.log(
+      `[sugaragent:eval] gates total=${report.gateSummary.totalGates} failedBlocking=${report.gateSummary.failedBlockingGateCount}`,
+    );
+  }
+  for (const gate of report.releaseGates ?? []) {
+    const gateType = typeof gate.gateType === 'string' ? gate.gateType : 'metric';
+    const blocking = gate.blocking === true;
+    console.log(
+      `[sugaragent:eval] gate=${gate.gateId} type=${gateType} blocking=${blocking} passed=${gate.passed} score=${gate.score} threshold=${gate.threshold}`,
+    );
+  }
+  if (report?.rerankerPromotion) {
+    const observed = Array.isArray(report.rerankerPromotion.observedClasses)
+      ? report.rerankerPromotion.observedClasses.join(',')
+      : 'unknown';
+    console.log(
+      `[sugaragent:eval] reranker promotion passed=${report.rerankerPromotion.passed} blocking=${report.rerankerPromotion.blocking} observed=${observed} candidate=${report.rerankerPromotion.candidateScore} baseline=${report.rerankerPromotion.baselineScore}`,
+    );
+  }
 
   const failedCases = (report.cases ?? []).filter((entry) => entry && entry.passed === false);
   for (const failed of failedCases) {
@@ -111,6 +294,11 @@ function printReplayReport(report) {
   console.log(
     `[sugaragent:eval] replay case=${report.caseId} passed=${report.replayPassed} expected=${report.expectedPassed} match=${report.matchesExpectation}`,
   );
+  if (report?.pipeline) {
+    const version = typeof report.pipeline.version === 'string' ? report.pipeline.version : 'v2';
+    const enabled = report.pipeline.enabled === true;
+    console.log(`[sugaragent:eval] replay pipeline version=${version} enabled=${enabled}`);
+  }
   if (typeof report.reason === 'string' && report.reason.length > 0) {
     console.log(`[sugaragent:eval] replay reason=${report.reason}`);
   }
@@ -121,12 +309,24 @@ function printReplayReport(report) {
 
 export async function runSugarAgentEvalCli(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  const projectDefaults = resolveEvalDefaultsFromProject(process.cwd());
+  if (!args.quiet && projectDefaults.sourceProjectPath) {
+    console.log(`[sugaragent:eval] project defaults=${projectDefaults.sourceProjectPath}`);
+  }
+  if (!args.quiet && projectDefaults.warning) {
+    console.warn(`[sugaragent:eval] ${projectDefaults.warning}`);
+  }
+  const deploymentTarget = args.deploymentTarget ?? projectDefaults.deploymentTarget;
+  const rerankerClass = args.rerankerClass ?? projectDefaults.rerankerClass;
+  const rerankerBaseline = args.rerankerBaseline ?? projectDefaults.rerankerBaseline;
+
   if (args.replay) {
     const replayReport = await replaySugarAgentEvalTranscript({
       transcriptPath: args.replay,
       outputDir: args.output ?? undefined,
       provider: args.provider,
       runtime: args.runtime,
+      rerankerCandidateClass: rerankerClass,
     });
     if (!args.quiet) {
       printReplayReport(replayReport);
@@ -139,6 +339,9 @@ export async function runSugarAgentEvalCli(argv = process.argv.slice(2)) {
     outputDir: args.output ?? undefined,
     provider: args.provider,
     runtime: args.runtime,
+    deploymentTarget,
+    rerankerBaselinePath: rerankerBaseline ?? undefined,
+    rerankerCandidateClass: rerankerClass,
     writeArtifacts: true,
   });
   if (!args.quiet) {

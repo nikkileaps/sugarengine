@@ -23,6 +23,13 @@ export interface RuntimeBeatCompletionEvaluation {
   passed: boolean;
   coveragePassed: boolean;
   rulePassed: boolean;
+  beatIdMatched: boolean;
+  forbiddenPassed: boolean;
+  confidencePassed: boolean;
+  missingRequiredFacts: string[];
+  forbiddenFactMentions: string[];
+  confidence: number;
+  completionSignal: PluginAgentBeatEvidence['completionSignal'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,6 +48,10 @@ function normalizeStringArray(value: unknown): string[] {
     .map((entry) => toNonEmptyString(entry))
     .filter((entry): entry is string => typeof entry === 'string');
   return Array.from(new Set(entries));
+}
+
+function normalizeComparableFact(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function normalizeCompletionRule(value: unknown): PluginAgentBeatContract['completionRule'] | null {
@@ -136,13 +147,16 @@ export function selectActiveAgentBeatContract(
     );
     if (questContracts.length === 0) continue;
 
-    const objectiveBound = questContracts.find((contract) => !!contract.objectiveId);
-    if (objectiveBound) return objectiveBound;
+    const ranked = [...questContracts].sort((left, right) => {
+      const leftSpecificity = left.objectiveId ? 3 : left.stageId ? 2 : 1;
+      const rightSpecificity = right.objectiveId ? 3 : right.stageId ? 2 : 1;
+      if (leftSpecificity !== rightSpecificity) {
+        return rightSpecificity - leftSpecificity;
+      }
+      return left.id.localeCompare(right.id);
+    });
 
-    const stageBound = questContracts.find((contract) => !!contract.stageId);
-    if (stageBound) return stageBound;
-
-    return questContracts[0] ?? null;
+    return ranked[0] ?? null;
   }
 
   return null;
@@ -167,30 +181,62 @@ export function evaluateAgentBeatCompletion(
   evidence: PluginAgentBeatEvidence | undefined,
   readFlag: (flagName: string) => unknown,
 ): RuntimeBeatCompletionEvaluation {
-  const uncovered = Array.isArray(evidence?.uncoveredFacts) ? evidence?.uncoveredFacts : [];
-  const coveragePassed = uncovered.length === 0;
+  const requiredFacts = normalizeStringArray(contract.requiredFacts).map(normalizeComparableFact);
+  const coveredFacts = normalizeStringArray(evidence?.coveredFacts).map(normalizeComparableFact);
+  const uncoveredFacts = normalizeStringArray(evidence?.uncoveredFacts).map(normalizeComparableFact);
+  const forbiddenFacts = normalizeStringArray(contract.forbiddenFacts).map(normalizeComparableFact);
+
+  const coveredSet = new Set(coveredFacts);
+  const uncoveredSet = new Set(uncoveredFacts);
+  const missingRequiredFacts = requiredFacts.filter((fact) => !coveredSet.has(fact));
+  const uncoveredAccurate = missingRequiredFacts.every((fact) => uncoveredSet.has(fact));
+  const coveragePassed = missingRequiredFacts.length === 0 && uncoveredAccurate;
+
+  const forbiddenFactMentions = forbiddenFacts.filter((fact) => coveredSet.has(fact));
+  const forbiddenPassed = forbiddenFactMentions.length === 0;
+
+  const beatIdMatched = typeof evidence?.beatId === 'string' && evidence.beatId === contract.id;
+
+  const completionSignal = evidence?.completionSignal ?? 'none';
+  const confidence = typeof evidence?.confidence === 'number' && Number.isFinite(evidence.confidence)
+    ? Math.max(0, Math.min(1, evidence.confidence))
+    : 0;
+  const confidencePassed = confidence >= 0.5;
 
   let rulePassed = false;
   switch (contract.completionRule) {
     case 'player_ack':
-      rulePassed = evidence?.completionSignal === 'player_ack';
+      rulePassed = completionSignal === 'player_ack';
       break;
     case 'player_action':
-      rulePassed = evidence?.completionSignal === 'player_action';
+      rulePassed = completionSignal === 'player_action';
       break;
     case 'engine_flag': {
       if (contract.completionTarget) {
         rulePassed = readFlag(contract.completionTarget) === true;
       } else {
-        rulePassed = evidence?.completionSignal === 'engine_flag';
+        rulePassed = completionSignal === 'engine_flag';
       }
       break;
     }
   }
 
+  const passed = beatIdMatched
+    && coveragePassed
+    && forbiddenPassed
+    && rulePassed
+    && confidencePassed;
+
   return {
-    passed: coveragePassed && rulePassed,
+    passed,
     coveragePassed,
     rulePassed,
+    beatIdMatched,
+    forbiddenPassed,
+    confidencePassed,
+    missingRequiredFacts,
+    forbiddenFactMentions,
+    confidence,
+    completionSignal,
   };
 }

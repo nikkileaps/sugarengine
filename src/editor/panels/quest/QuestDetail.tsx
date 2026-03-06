@@ -18,9 +18,14 @@ import {
   Modal,
   Select,
   Switch,
-  NumberInput,
 } from '@mantine/core';
-import { QuestEntry, QuestStage, QuestObjective, validateQuest } from './QuestPanel';
+import {
+  QuestEntry,
+  QuestStage,
+  QuestObjective,
+  QuestObjectiveAgentContract,
+  validateQuest,
+} from './QuestPanel';
 import { ObjectiveNodeCanvas } from './ObjectiveNodeCanvas';
 import { ObjectiveGraph } from '../../../engine/quests';
 import { generateUUID } from '../../utils';
@@ -53,6 +58,136 @@ const OBJECTIVE_COLORS: Record<string, string> = {
   trigger: '#fab387',
   custom: '#f5c2e7',
 };
+
+type AgentBeatContract = NonNullable<QuestEntry['agentBeatContracts']>[number];
+
+const AGENT_COMPLETION_RULES = new Set(['player_ack', 'player_action', 'engine_flag']);
+
+function trimOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0);
+}
+
+function defaultContractId(questId: string, stageId: string, objectiveId: string): string {
+  return `beat.${questId}.${stageId}.${objectiveId}`;
+}
+
+function resolveContractDraft(
+  questId: string,
+  stageId: string,
+  objective: QuestObjective,
+): QuestObjectiveAgentContract | null {
+  if (objective.type !== 'talk') return null;
+  const draft = objective.agentBeatContract;
+  if (!draft || draft.enabled !== true) return null;
+
+  const resolvedId = trimOrUndefined(draft.id) ?? defaultContractId(questId, stageId, objective.id);
+  const completionRule = AGENT_COMPLETION_RULES.has(String(draft.completionRule))
+    ? (draft.completionRule as AgentBeatContract['completionRule'])
+    : 'player_ack';
+  const maxTurns = typeof draft.maxTurns === 'number' && Number.isFinite(draft.maxTurns)
+    ? Math.max(1, Math.floor(draft.maxTurns))
+    : 3;
+
+  return {
+    ...draft,
+    enabled: true,
+    id: resolvedId,
+    completionRule,
+    maxTurns,
+    objective: trimOrUndefined(draft.objective) ?? objective.description,
+    requiredFacts: normalizeStringArray(draft.requiredFacts),
+    forbiddenFacts: normalizeStringArray(draft.forbiddenFacts),
+    completionTarget: trimOrUndefined(draft.completionTarget),
+    fallbackScriptId: trimOrUndefined(draft.fallbackScriptId),
+  };
+}
+
+function normalizeAgentBeatContracts(quest: QuestEntry): AgentBeatContract[] {
+  const existing = Array.isArray(quest.agentBeatContracts) ? quest.agentBeatContracts : [];
+  const validObjectiveKeys = new Set<string>();
+  for (const stage of quest.stages) {
+    for (const objective of stage.objectives) {
+      validObjectiveKeys.add(`${stage.id}:${objective.id}`);
+    }
+  }
+
+  const dedup = new Map<string, AgentBeatContract>();
+  for (const contract of existing) {
+    const id = trimOrUndefined(contract.id);
+    if (!id) continue;
+    if (
+      contract.stageId
+      && contract.objectiveId
+      && !validObjectiveKeys.has(`${contract.stageId}:${contract.objectiveId}`)
+    ) {
+      continue;
+    }
+    dedup.set(id, {
+      ...contract,
+      id,
+      npcId: trimOrUndefined(contract.npcId) ?? '',
+      objective: trimOrUndefined(contract.objective) ?? '',
+      requiredFacts: normalizeStringArray(contract.requiredFacts),
+      forbiddenFacts: normalizeStringArray(contract.forbiddenFacts),
+      completionRule: AGENT_COMPLETION_RULES.has(String(contract.completionRule))
+        ? contract.completionRule
+        : 'player_ack',
+      completionTarget: trimOrUndefined(contract.completionTarget),
+      maxTurns: typeof contract.maxTurns === 'number' && Number.isFinite(contract.maxTurns)
+        ? Math.max(1, Math.floor(contract.maxTurns))
+        : undefined,
+      fallbackScriptId: trimOrUndefined(contract.fallbackScriptId),
+      stageId: trimOrUndefined(contract.stageId),
+      objectiveId: trimOrUndefined(contract.objectiveId),
+    });
+  }
+
+  for (const stage of quest.stages) {
+    for (const objective of stage.objectives) {
+      const hasNodeManagedContract = objective.agentBeatContract !== undefined;
+      const resolved = resolveContractDraft(quest.id, stage.id, objective);
+      if (hasNodeManagedContract) {
+        const boundStageId = stage.id;
+        const boundObjectiveId = objective.id;
+        for (const [existingId, existingContract] of dedup.entries()) {
+          if (existingContract.stageId === boundStageId && existingContract.objectiveId === boundObjectiveId) {
+            dedup.delete(existingId);
+          }
+        }
+      }
+      if (!resolved) {
+        continue;
+      }
+      const npcId = trimOrUndefined(resolved.npcId)
+        ?? (objective.type === 'talk' ? trimOrUndefined(objective.target) : undefined)
+        ?? '';
+      dedup.set(resolved.id!, {
+        id: resolved.id!,
+        npcId,
+        objective: trimOrUndefined(resolved.objective) ?? objective.description,
+        requiredFacts: normalizeStringArray(resolved.requiredFacts),
+        forbiddenFacts: normalizeStringArray(resolved.forbiddenFacts),
+        completionRule: resolved.completionRule ?? 'player_ack',
+        completionTarget: trimOrUndefined(resolved.completionTarget),
+        maxTurns: resolved.maxTurns,
+        fallbackScriptId: trimOrUndefined(resolved.fallbackScriptId),
+        stageId: stage.id,
+        objectiveId: objective.id,
+      });
+    }
+  }
+
+  return Array.from(dedup.values());
+}
 
 /**
  * Mini graph visualization of objectives within a stage
@@ -188,6 +323,7 @@ function MiniObjectiveGraph({
         {/* Nodes */}
         {layout.nodes.map(({ x, y, obj }) => {
           const nt = obj.nodeType || 'objective';
+          const hasAgentContract = obj.agentBeatContract?.enabled === true;
           const fillColor = nt === 'narrative' ? '#cba6f7'
             : nt === 'condition' ? '#f9e2af'
             : nt === 'branch' ? '#fab387'
@@ -202,7 +338,7 @@ function MiniObjectiveGraph({
           return (
             <Tooltip
               key={obj.id}
-              label={`${icon} ${obj.description}`}
+              label={`${icon} ${obj.description}${obj.agentBeatContract?.enabled === true ? ' • SugarAgent Contract' : ''}`}
               position="top"
               withArrow
             >
@@ -240,6 +376,16 @@ function MiniObjectiveGraph({
                     strokeDasharray="2,2"
                   />
                 )}
+                {hasAgentContract && (
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={r + 2}
+                    fill="none"
+                    stroke="#94e2d5"
+                    strokeWidth={1.5}
+                  />
+                )}
               </g>
             </Tooltip>
           );
@@ -262,77 +408,22 @@ export function QuestDetail({
   onChange,
   onDelete,
 }: QuestDetailProps) {
-  type AgentBeatContract = NonNullable<QuestEntry['agentBeatContracts']>[number];
-
   // Track which stage is expanded in graph view
   const [graphStageId, setGraphStageId] = useState<string | null>(null);
   // Track which stage is being edited in the modal
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const editingStage = editingStageId ? quest.stages.find(s => s.id === editingStageId) : null;
 
-  const handleChange = <K extends keyof QuestEntry>(field: K, value: QuestEntry[K]) => {
-    onChange({ ...quest, [field]: value });
-  };
-
-  const beatContracts = quest.agentBeatContracts ?? [];
-
-  const parseList = (value: string): string[] => (
-    value
-      .split(/\r?\n|,/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0)
-  );
-
-  const setBeatContracts = (contracts: AgentBeatContract[]) => {
+  const commitQuest = (nextQuest: QuestEntry): void => {
+    const normalizedContracts = normalizeAgentBeatContracts(nextQuest);
     onChange({
-      ...quest,
-      agentBeatContracts: contracts.length > 0 ? contracts : undefined,
+      ...nextQuest,
+      agentBeatContracts: normalizedContracts.length > 0 ? normalizedContracts : undefined,
     });
   };
 
-  const addBeatContract = () => {
-    const nextIndex = beatContracts.length + 1;
-    const defaultNpcId = npcs[0]?.id || '';
-    const newContract: AgentBeatContract = {
-      id: `beat.${quest.id}.${nextIndex}`,
-      npcId: defaultNpcId,
-      objective: '',
-      requiredFacts: [],
-      forbiddenFacts: [],
-      completionRule: 'player_ack',
-      maxTurns: 3,
-    };
-    setBeatContracts([...beatContracts, newContract]);
-  };
-
-  const updateBeatContract = (index: number, updates: Partial<AgentBeatContract>) => {
-    const updated = [...beatContracts];
-    const existing = updated[index];
-    if (!existing) return;
-    const merged: AgentBeatContract = {
-      ...existing,
-      ...updates,
-    };
-    merged.requiredFacts = Array.isArray(merged.requiredFacts)
-      ? merged.requiredFacts
-      : [];
-    merged.forbiddenFacts = Array.isArray(merged.forbiddenFacts)
-      ? merged.forbiddenFacts
-      : [];
-    if (merged.completionTarget && merged.completionTarget.trim().length === 0) {
-      merged.completionTarget = undefined;
-    }
-    if (typeof merged.maxTurns === 'number' && (!Number.isFinite(merged.maxTurns) || merged.maxTurns < 1)) {
-      merged.maxTurns = 1;
-    }
-    updated[index] = merged;
-    setBeatContracts(updated);
-  };
-
-  const removeBeatContract = (index: number) => {
-    const updated = [...beatContracts];
-    updated.splice(index, 1);
-    setBeatContracts(updated);
+  const handleChange = <K extends keyof QuestEntry>(field: K, value: QuestEntry[K]) => {
+    commitQuest({ ...quest, [field]: value });
   };
 
   // Build stage order starting from startStage
@@ -383,14 +474,14 @@ export function QuestDetail({
     }
 
     updatedStages.push(newStage);
-    onChange({ ...quest, stages: updatedStages });
+    commitQuest({ ...quest, stages: updatedStages });
   };
 
   const handleStageChange = (updatedStage: QuestStage) => {
     const updatedStages = quest.stages.map((s) =>
       s.id === updatedStage.id ? updatedStage : s
     );
-    onChange({ ...quest, stages: updatedStages });
+    commitQuest({ ...quest, stages: updatedStages });
   };
 
   const handleDeleteStage = (stageId: string) => {
@@ -410,7 +501,7 @@ export function QuestDetail({
       newStartStage = updatedStages[0]?.id ?? '';
     }
 
-    onChange({ ...quest, stages: updatedStages, startStage: newStartStage });
+    commitQuest({ ...quest, stages: updatedStages, startStage: newStartStage });
     setEditingStageId(null);
   };
 
@@ -421,6 +512,7 @@ export function QuestDetail({
   if (graphStage) {
     return (
       <ObjectiveNodeCanvas
+        questId={quest.id}
         stage={graphStage}
         npcs={npcs}
         items={items}
@@ -621,185 +713,6 @@ export function QuestDetail({
               </Stack>
             </Paper>
           )}
-
-          {/* SugarAgent Beat Contracts */}
-          <Paper
-            p="md"
-            radius="md"
-            style={{ background: '#181825', border: '1px solid #313244' }}
-          >
-            <Group justify="space-between" mb="sm">
-              <Group gap="xs">
-                <Text size="sm">🤖</Text>
-                <Text size="xs" fw={600} c="dimmed" tt="uppercase">
-                  SugarAgent Beat Contracts
-                </Text>
-              </Group>
-              <Button size="xs" variant="subtle" onClick={addBeatContract}>
-                + Add Contract
-              </Button>
-            </Group>
-
-            {beatContracts.length === 0 ? (
-              <Text size="sm" c="dimmed">
-                No beat contracts configured for this quest.
-              </Text>
-            ) : (
-              <Stack gap="md">
-                {beatContracts.map((contract, index) => {
-                  const stageOptions = quest.stages.map((stage) => ({
-                    value: stage.id,
-                    label: stage.description || stage.id,
-                  }));
-                  const selectedStage = contract.stageId
-                    ? quest.stages.find((stage) => stage.id === contract.stageId)
-                    : null;
-                  const objectiveOptions = (selectedStage?.objectives || []).map((objective) => ({
-                    value: objective.id,
-                    label: objective.description || objective.id,
-                  }));
-
-                  return (
-                    <Paper
-                      key={`${contract.id}:${index}`}
-                      p="sm"
-                      radius="sm"
-                      style={{ background: '#11111b', border: '1px solid #313244' }}
-                    >
-                      <Stack gap="xs">
-                        <Group justify="space-between">
-                          <Text size="sm" fw={500}>
-                            Contract {index + 1}
-                          </Text>
-                          <Button
-                            size="xs"
-                            color="red"
-                            variant="subtle"
-                            onClick={() => removeBeatContract(index)}
-                          >
-                            Remove
-                          </Button>
-                        </Group>
-
-                        <TextInput
-                          label="Contract ID"
-                          value={contract.id}
-                          onChange={(e) => updateBeatContract(index, { id: e.currentTarget.value })}
-                        />
-
-                        <Select
-                          label="NPC"
-                          data={npcs.map((npc) => ({ value: npc.id, label: npc.name }))}
-                          value={contract.npcId || null}
-                          onChange={(value) => updateBeatContract(index, { npcId: value || '' })}
-                          searchable
-                        />
-
-                        <Textarea
-                          label="Objective"
-                          value={contract.objective}
-                          onChange={(e) => updateBeatContract(index, { objective: e.currentTarget.value })}
-                          minRows={2}
-                          autosize
-                        />
-
-                        <Textarea
-                          label="Required Facts"
-                          description="One per line (or comma-separated)."
-                          value={(contract.requiredFacts || []).join('\n')}
-                          onChange={(e) => updateBeatContract(index, { requiredFacts: parseList(e.currentTarget.value) })}
-                          minRows={2}
-                          autosize
-                        />
-
-                        <Textarea
-                          label="Forbidden Facts"
-                          description="Optional. One per line (or comma-separated)."
-                          value={(contract.forbiddenFacts || []).join('\n')}
-                          onChange={(e) => updateBeatContract(index, { forbiddenFacts: parseList(e.currentTarget.value) })}
-                          minRows={2}
-                          autosize
-                        />
-
-                        <Select
-                          label="Completion Rule"
-                          data={[
-                            { value: 'player_ack', label: 'Player Acknowledges' },
-                            { value: 'player_action', label: 'Player Action' },
-                            { value: 'engine_flag', label: 'Engine Flag' },
-                          ]}
-                          value={contract.completionRule}
-                          onChange={(value) =>
-                            updateBeatContract(index, {
-                              completionRule: (value as AgentBeatContract['completionRule']) || 'player_ack',
-                            })
-                          }
-                        />
-
-                        <TextInput
-                          label="Completion Target"
-                          description="Optional target token/flag key depending on completion rule."
-                          value={contract.completionTarget || ''}
-                          onChange={(e) => updateBeatContract(index, { completionTarget: e.currentTarget.value || undefined })}
-                        />
-
-                        <NumberInput
-                          label="Max Turns"
-                          value={contract.maxTurns ?? 3}
-                          min={1}
-                          step={1}
-                          onChange={(value) =>
-                            updateBeatContract(index, {
-                              maxTurns: typeof value === 'number' && Number.isFinite(value)
-                                ? Math.max(1, Math.floor(value))
-                                : undefined,
-                            })
-                          }
-                        />
-
-                        <Select
-                          label="Fallback Dialogue"
-                          description="Scripted fallback dialogue when turn budget is exceeded."
-                          data={dialogues.map((dialogue) => ({
-                            value: dialogue.id,
-                            label: dialogue.name || dialogue.id,
-                          }))}
-                          value={contract.fallbackScriptId || null}
-                          onChange={(value) => updateBeatContract(index, { fallbackScriptId: value || undefined })}
-                          searchable
-                          clearable
-                        />
-
-                        <Select
-                          label="Stage Binding"
-                          description="Optional: only active in this stage."
-                          data={stageOptions}
-                          value={contract.stageId || null}
-                          onChange={(value) =>
-                            updateBeatContract(index, {
-                              stageId: value || undefined,
-                              objectiveId: value ? contract.objectiveId : undefined,
-                            })
-                          }
-                          clearable
-                        />
-
-                        <Select
-                          label="Objective Binding"
-                          description="Optional: only active while this objective is active."
-                          data={objectiveOptions}
-                          value={contract.objectiveId || null}
-                          onChange={(value) => updateBeatContract(index, { objectiveId: value || undefined })}
-                          disabled={!contract.stageId}
-                          clearable
-                        />
-                      </Stack>
-                    </Paper>
-                  );
-                })}
-              </Stack>
-            )}
-          </Paper>
 
           {/* Validation warnings */}
           {warnings.length > 0 && (

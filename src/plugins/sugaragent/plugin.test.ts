@@ -31,21 +31,15 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     });
   });
 
-  it('produces deterministic agent turns and can recall remembered facts', async () => {
+  it('returns explicit provider-unavailable output when no runtime bridge is available', async () => {
     const plugin = createSugarAgentPlugin();
-    const first = await plugin.runAgentTurn?.({
+    const turn = await plugin.runAgentTurn?.({
       npcId: 'npc-baker',
       npcName: 'Baker',
       playerMessage: 'hello, my name is Nikki and i like coffee',
     });
-    expect(first?.utterance.length).toBeGreaterThan(0);
-
-    const recall = await plugin.runAgentTurn?.({
-      npcId: 'npc-baker',
-      npcName: 'Baker',
-      playerMessage: 'what do you remember about me?',
-    });
-    expect(recall?.utterance.toLowerCase()).toContain('player name is nikki');
+    expect(turn?.intent).toBe('abstain');
+    expect(turn?.utterance.toLowerCase()).toContain('local language runtime is unavailable');
   });
 
   it('uses LocalLLMProvider when a runtime bridge is configured', async () => {
@@ -70,16 +64,137 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     });
 
     expect(turn?.utterance).toContain('I heard you say');
+    expect(turn?.diagnostics?.mode).toBe('character');
+    expect(turn?.diagnostics?.modeResolution?.interactionMode).toBe('unknown');
+    expect(turn?.diagnostics?.modeTransition?.changed).toBe(false);
+    expect(turn?.diagnostics?.validation?.decision).toBe('accept');
+    expect(turn?.diagnostics?.initiative?.expectedPlayerResponseType).toBe('free_text');
     const snapshot = plugin.serializeState?.() as {
       runtime?: {
         provider?: string;
         healthy?: boolean;
         lastOutcome?: string;
+        lastTurnDiagnostics?: {
+          mode?: string;
+        };
       };
     };
     expect(snapshot.runtime?.provider).toBe('local');
     expect(snapshot.runtime?.healthy).toBe(true);
     expect(snapshot.runtime?.lastOutcome).toBe('provider_ok');
+    expect(snapshot.runtime?.lastTurnDiagnostics?.mode).toBe('character');
+  });
+
+  it('preserves mixed-initiative decision metadata from provider diagnostics', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'Could you clarify which part you want first?',
+              emotion: 'curious',
+              intent: 'question',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            diagnostics: {
+              mode: 'character',
+              initiative: {
+                initiator: 'npc',
+                action: 'clarify',
+                primaryGoal: 'repair_goal',
+                secondaryGoals: ['character_goal'],
+                expectedPlayerResponseType: 'free_text',
+                reason: 'ambiguous-or-low-confidence-intent',
+                policyBounded: true,
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'can you help?',
+    });
+
+    expect(turn?.diagnostics?.initiative).toMatchObject({
+      initiator: 'npc',
+      action: 'clarify',
+      primaryGoal: 'repair_goal',
+      secondaryGoals: ['character_goal'],
+      expectedPlayerResponseType: 'free_text',
+      policyBounded: true,
+    });
+  });
+
+  it('uses abstain initiative when provider fails and returns provider-unavailable output', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          throw new Error('runtime down');
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'hello',
+    });
+
+    expect(turn?.diagnostics?.initiative).toMatchObject({
+      initiator: 'npc',
+      action: 'abstain',
+      primaryGoal: 'repair_goal',
+      expectedPlayerResponseType: 'free_text',
+      policyBounded: true,
+    });
+    expect(turn?.utterance.toLowerCase()).toContain('local language runtime is unavailable');
   });
 
   it('returns beatEvidence when a beat contract is active', async () => {
@@ -104,7 +219,52 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     });
 
     expect(turn?.beatEvidence?.beatId).toBe('beat.guard.alert');
-    expect(turn?.beatEvidence?.uncoveredFacts.length).toBe(0);
+    expect(turn?.beatEvidence?.uncoveredFacts.length).toBeGreaterThan(0);
+    expect(turn?.beatEvidence?.completionSignal).toBe('none');
+    expect(turn?.utterance).not.toContain('The gate is under lockdown');
+    expect(turn?.diagnostics?.mode).toBe('narrative');
+    expect(turn?.diagnostics?.modeResolution?.hasBeatContract).toBe(true);
+  });
+
+  it('tracks explicit mode transitions from character to narrative when beat context appears', async () => {
+    const plugin = createSugarAgentPlugin();
+    const baseline = await plugin.runAgentTurn?.({
+      npcId: 'npc-guard',
+      npcName: 'Guard',
+      playerMessage: 'hello',
+      context: {
+        interactionMode: 'agent',
+        interactionPolicy: 'agent-first',
+      },
+    });
+    expect(baseline?.diagnostics?.mode).toBe('character');
+    expect(baseline?.diagnostics?.modeTransition?.changed).toBe(false);
+
+    const narrative = await plugin.runAgentTurn?.({
+      npcId: 'npc-guard',
+      npcName: 'Guard',
+      playerMessage: 'tell me what i need to know',
+      context: {
+        interactionMode: 'agent',
+        interactionPolicy: 'agent-first',
+      },
+      beatContract: {
+        id: 'beat.guard.alert',
+        questId: 'quest.guard.alert',
+        npcId: 'npc-guard',
+        objective: 'Explain gate alert and passphrase.',
+        requiredFacts: [
+          'The gate is under lockdown.',
+          'The passphrase is Sunforge.',
+        ],
+        completionRule: 'player_ack',
+      },
+    });
+
+    expect(narrative?.diagnostics?.mode).toBe('narrative');
+    expect(narrative?.diagnostics?.modeTransition?.from).toBe('character');
+    expect(narrative?.diagnostics?.modeTransition?.to).toBe('narrative');
+    expect(narrative?.diagnostics?.modeTransition?.changed).toBe(true);
   });
 
   it('persists beat turn continuity across serialize/load and clears session on objective completion', async () => {

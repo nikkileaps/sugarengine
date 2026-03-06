@@ -143,6 +143,9 @@ describe('agentBeatRuntime', () => {
       () => undefined,
     );
     expect(passed.passed).toBe(true);
+    expect(passed.beatIdMatched).toBe(true);
+    expect(passed.coveragePassed).toBe(true);
+    expect(passed.confidencePassed).toBe(true);
 
     const failed = evaluateAgentBeatCompletion(
       contract,
@@ -184,6 +187,60 @@ describe('agentBeatRuntime', () => {
 
     expect(evaluation.passed).toBe(true);
     expect(evaluation.rulePassed).toBe(true);
+  });
+
+  it('fails deterministic evaluation when beat identity mismatches', () => {
+    const contract = {
+      id: 'beat.guard.alert',
+      questId: 'quest.guard.alert',
+      npcId: 'npc.guard',
+      objective: 'Explain gate alert.',
+      requiredFacts: ['Gate is on lockdown.'],
+      completionRule: 'player_ack' as const,
+    };
+
+    const evaluation = evaluateAgentBeatCompletion(
+      contract,
+      {
+        beatId: 'beat.other',
+        coveredFacts: ['Gate is on lockdown.'],
+        uncoveredFacts: [],
+        completionSignal: 'player_ack',
+        confidence: 0.9,
+      },
+      () => undefined,
+    );
+
+    expect(evaluation.passed).toBe(false);
+    expect(evaluation.beatIdMatched).toBe(false);
+  });
+
+  it('fails deterministic evaluation when forbidden fact is covered', () => {
+    const contract = {
+      id: 'beat.guard.alert',
+      questId: 'quest.guard.alert',
+      npcId: 'npc.guard',
+      objective: 'Explain gate alert.',
+      requiredFacts: ['Gate is on lockdown.'],
+      forbiddenFacts: ['Reveal captain identity.'],
+      completionRule: 'player_ack' as const,
+    };
+
+    const evaluation = evaluateAgentBeatCompletion(
+      contract,
+      {
+        beatId: 'beat.guard.alert',
+        coveredFacts: ['Gate is on lockdown.', 'Reveal captain identity.'],
+        uncoveredFacts: [],
+        completionSignal: 'player_ack',
+        confidence: 0.95,
+      },
+      () => undefined,
+    );
+
+    expect(evaluation.passed).toBe(false);
+    expect(evaluation.forbiddenPassed).toBe(false);
+    expect(evaluation.forbiddenFactMentions).toContain('reveal captain identity.');
   });
 
   it('enforces max-turn fallback guardrail', () => {

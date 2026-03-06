@@ -6,13 +6,14 @@ import type {
   InteractionRequest,
   PluginAgentBeatContract,
   PluginAgentBeatEvidence,
+  PluginAgentTurnDiagnostics,
   PluginAgentTurnRequest,
   PluginAgentTurnResult,
   PluginEvent,
 } from '../../engine/plugins';
 import { LocalLLMProvider } from './providers/llm/LocalLLMProvider';
 import type { LocalRuntimeBridge } from './runtime';
-import { HttpLocalRuntimeBridge } from './runtime';
+import { HttpLocalRuntimeBridge, TauriLocalRuntimeBridge } from './runtime';
 
 export interface SugarAgentPluginOptions {
   /**
@@ -33,6 +34,11 @@ export interface SugarAgentPluginOptions {
    * Disable provider-backed generation and force deterministic turns.
    */
   disableProvider?: boolean;
+  /**
+   * Preferred local runtime mode for bridge health/init and turn generation context.
+   * Defaults to "llama".
+   */
+  runtimeMode?: 'llama' | 'auto' | 'mock';
 }
 
 export interface SugarAgentPlayerModelV1 {
@@ -87,6 +93,8 @@ export interface SugarAgentDialogueSessionStateV1 {
   objectiveId?: string;
   coveredFacts?: string[];
   uncoveredFacts?: string[];
+  lastResolvedMode?: PluginAgentTurnDiagnostics['mode'];
+  lastResolvedModeReason?: string;
   turnCount: number;
   updatedAt: number;
 }
@@ -107,6 +115,7 @@ export interface SugarAgentRuntimeStatusV1 {
   lastOutcome?: 'ready' | 'provider_ok' | 'provider_fallback_validation' | 'provider_error' | 'provider_unavailable';
   lastAttempts?: number;
   lastValidationErrors?: string[];
+  lastTurnDiagnostics?: PluginAgentTurnDiagnostics;
   lastUpdated: number;
 }
 
@@ -138,6 +147,13 @@ function toSafeString(value: unknown): string | undefined {
 function toSafeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return value;
+}
+
+function normalizeRuntimeMode(value: unknown): 'llama' | 'auto' | 'mock' {
+  if (value === 'auto' || value === 'mock' || value === 'llama') {
+    return value;
+  }
+  return 'llama';
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -255,131 +271,233 @@ function pushSummary(
   npc.conversationSummaries = capByRecent(npc.conversationSummaries, MAX_SUMMARIES_PER_NPC);
 }
 
-function upsertSemanticBelief(
-  npc: SugarAgentNPCMemoryStateV1,
-  belief: string,
-  confidence: number,
-  now: number,
-  source: string,
-): void {
-  const normalizedBelief = belief.trim();
-  if (!normalizedBelief) return;
-
-  const existing = npc.semantic.find((entry) => entry.belief === normalizedBelief);
-  if (existing) {
-    existing.updatedAt = now;
-    existing.confidence = Math.max(existing.confidence, clamp(confidence, 0, 1));
-    existing.source = source;
-  } else {
-    npc.semantic.push({
-      id: `belief:${now}:${Math.random().toString(36).slice(2, 8)}`,
-      updatedAt: now,
-      belief: normalizedBelief,
-      confidence: clamp(confidence, 0, 1),
-      source,
-    });
-  }
-  npc.semantic = capByRecent(npc.semantic, MAX_SEMANTIC_PER_NPC);
-}
-
-function rememberPlayerFacts(npc: SugarAgentNPCMemoryStateV1, playerMessage: string, now: number): void {
-  const text = playerMessage.trim();
-  if (!text) return;
-
-  const nameMatch = text.match(/my name is ([a-z\u00c0-\u024f' -]{2,40})/i);
-  if (nameMatch?.[1]) {
-    upsertSemanticBelief(
-      npc,
-      `Player name is ${nameMatch[1].trim()}.`,
-      0.85,
-      now,
-      'player-message',
-    );
-  }
-
-  const likesMatch = text.match(/i like ([^.!?]{2,80})/i);
-  if (likesMatch?.[1]) {
-    upsertSemanticBelief(
-      npc,
-      `Player likes ${likesMatch[1].trim()}.`,
-      0.72,
-      now,
-      'player-message',
-    );
-  }
-
-  const fromMatch = text.match(/i(?:'| a)m from ([^.!?]{2,80})/i);
-  if (fromMatch?.[1]) {
-    upsertSemanticBelief(
-      npc,
-      `Player is from ${fromMatch[1].trim()}.`,
-      0.75,
-      now,
-      'player-message',
-    );
-  }
-}
-
-function recentBeliefs(npc: SugarAgentNPCMemoryStateV1, limit = 2): string[] {
-  return npc.semantic
-    .slice()
-    .sort((a, b) => a.updatedAt - b.updatedAt)
-    .slice(-limit)
-    .map((entry) => entry.belief);
-}
-
-function buildDeterministicAgentTurn({
-  npcName,
-  playerMessage,
-  npc,
-}: {
-  npcName?: string;
-  playerMessage: string;
-  npc: SugarAgentNPCMemoryStateV1;
-}): PluginAgentTurnResult {
-  const normalized = playerMessage.toLowerCase();
-  const displayName = typeof npcName === 'string' && npcName.trim().length > 0 ? npcName.trim() : 'Friend';
-
-  const isGreeting = /\b(hi|hello|hey|hola|buenas)\b/i.test(playerMessage);
-  const isMemoryQuestion = /\b(remember|recall|what did i mention|what do you know about me)\b/i.test(normalized);
-
-  if (isMemoryQuestion) {
-    const beliefs = recentBeliefs(npc, 3);
-    if (beliefs.length > 0) {
-      return {
-        utterance: `${beliefs.join(' ')}`,
-        emotion: 'warm',
-        intent: 'recall',
-      };
-    }
-    return {
-      utterance: `I do not remember much yet, but I am listening now.`,
-      emotion: 'neutral',
-      intent: 'recall',
-    };
-  }
-
-  if (isGreeting) {
-    const beliefs = recentBeliefs(npc, 1);
-    if (beliefs.length > 0) {
-      return {
-        utterance: `Hello. I remember: ${beliefs[0]}`,
-        emotion: 'warm',
-        intent: 'greet',
-      };
-    }
-    return {
-      utterance: `Hello, I am ${displayName}. What is on your mind?`,
-      emotion: 'warm',
-      intent: 'greet',
-    };
-  }
-
+function buildProviderUnavailableTurn(npcName?: string): PluginAgentTurnResult {
+  const displayName = typeof npcName === 'string' && npcName.trim().length > 0
+    ? npcName.trim()
+    : 'this NPC';
   return {
-    utterance: `I hear you. Tell me more about that.`,
+    utterance: `I cannot respond right now because the local language runtime is unavailable for ${displayName}. Please try again.`,
     emotion: 'neutral',
-    intent: 'conversation',
+    intent: 'abstain',
+    citations: [],
   };
+}
+
+type RuntimeInteractionModeInput = 'scripted' | 'agent' | 'hybrid' | 'unknown';
+type RuntimeInteractionPolicyInput = 'scripted-first' | 'agent-first' | 'fallback' | 'unknown';
+
+interface TurnModeResolution {
+  mode: Exclude<PluginAgentTurnDiagnostics['mode'], 'unknown'>;
+  reason: string;
+  interactionMode: RuntimeInteractionModeInput;
+  interactionPolicy: RuntimeInteractionPolicyInput;
+  hasBeatContract: boolean;
+}
+
+function normalizeInteractionMode(value: unknown): RuntimeInteractionModeInput {
+  if (value === 'scripted' || value === 'agent' || value === 'hybrid') return value;
+  return 'unknown';
+}
+
+function normalizeInteractionPolicy(value: unknown): RuntimeInteractionPolicyInput {
+  if (value === 'scripted-first' || value === 'agent-first' || value === 'fallback') return value;
+  return 'unknown';
+}
+
+function isTauriRuntimeEnvironment(): boolean {
+  return typeof window !== 'undefined' && '__TAURI__' in window;
+}
+
+function resolveTurnMode(options: {
+  interactionMode: unknown;
+  interactionPolicy: unknown;
+  hasBeatContract: boolean;
+}): TurnModeResolution {
+  const interactionMode = normalizeInteractionMode(options.interactionMode);
+  const interactionPolicy = normalizeInteractionPolicy(options.interactionPolicy);
+  const policySuffix = `policy=${interactionPolicy}`;
+
+  if (options.hasBeatContract) {
+    if (interactionMode === 'hybrid') {
+      return {
+        mode: 'hybrid',
+        reason: `active-beat+hybrid-mode;${policySuffix}`,
+        interactionMode,
+        interactionPolicy,
+        hasBeatContract: true,
+      };
+    }
+    if (interactionMode === 'agent') {
+      return {
+        mode: 'narrative',
+        reason: `active-beat+agent-mode;${policySuffix}`,
+        interactionMode,
+        interactionPolicy,
+        hasBeatContract: true,
+      };
+    }
+    if (interactionMode === 'scripted') {
+      return {
+        mode: 'narrative',
+        reason: `active-beat-overrides-scripted-mode;${policySuffix}`,
+        interactionMode,
+        interactionPolicy,
+        hasBeatContract: true,
+      };
+    }
+    return {
+      mode: 'narrative',
+      reason: `active-beat-default-narrative;${policySuffix}`,
+      interactionMode,
+      interactionPolicy,
+      hasBeatContract: true,
+    };
+  }
+
+  if (interactionMode === 'hybrid') {
+    return {
+      mode: 'hybrid',
+      reason: `hybrid-mode-without-active-beat;${policySuffix}`,
+      interactionMode,
+      interactionPolicy,
+      hasBeatContract: false,
+    };
+  }
+  if (interactionMode === 'agent') {
+    return {
+      mode: 'character',
+      reason: `agent-mode-without-active-beat;${policySuffix}`,
+      interactionMode,
+      interactionPolicy,
+      hasBeatContract: false,
+    };
+  }
+  if (interactionMode === 'scripted') {
+    return {
+      mode: 'character',
+      reason: `scripted-mode-routed-to-agent-turn;${policySuffix}`,
+      interactionMode,
+      interactionPolicy,
+      hasBeatContract: false,
+    };
+  }
+  return {
+    mode: 'character',
+    reason: `missing-interaction-mode-default-character;${policySuffix}`,
+    interactionMode,
+    interactionPolicy,
+    hasBeatContract: false,
+  };
+}
+
+function defaultInitiativeForMode(
+  mode: PluginAgentTurnDiagnostics['mode'],
+): NonNullable<PluginAgentTurnDiagnostics['initiative']> {
+  if (mode === 'narrative' || mode === 'hybrid') {
+    return {
+      initiator: 'player',
+      action: 'player_respond',
+      primaryGoal: 'beat_goal',
+      expectedPlayerResponseType: 'ack',
+    };
+  }
+  return {
+    initiator: 'player',
+    action: 'player_respond',
+    primaryGoal: 'character_goal',
+    expectedPlayerResponseType: 'free_text',
+  };
+}
+
+function normalizeTurnDiagnostics(
+  diagnostics: PluginAgentTurnDiagnostics | undefined,
+  options: {
+    interactionMode?: 'scripted' | 'agent' | 'hybrid';
+    interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
+    hasBeatContract: boolean;
+    previousMode?: PluginAgentTurnDiagnostics['mode'];
+    usedFallback: boolean;
+    validationErrors: string[];
+    timestamp: number;
+  },
+): PluginAgentTurnDiagnostics {
+  const resolved = resolveTurnMode({
+    interactionMode: options.interactionMode,
+    interactionPolicy: options.interactionPolicy,
+    hasBeatContract: options.hasBeatContract,
+  });
+  const base = diagnostics ?? {};
+  const mode = resolved.mode;
+  const fallbackDecision = options.usedFallback
+    ? 'fallback'
+    : options.validationErrors.length > 0
+      ? 'repair'
+      : 'accept';
+  const previousMode = options.previousMode;
+  const modeChanged = typeof previousMode === 'string' && previousMode !== mode;
+  const transitionReason = typeof previousMode === 'string'
+    ? (modeChanged
+      ? `mode-transition:${previousMode}->${mode};${resolved.reason}`
+      : `mode-stable:${mode}`)
+    : `mode-initialized:${mode}`;
+  const mergedValidationErrors = [
+    ...(Array.isArray(base.validation?.errors) ? base.validation.errors : []),
+    ...options.validationErrors,
+  ].filter((entry, index, arr) => arr.indexOf(entry) === index);
+
+  const normalized: PluginAgentTurnDiagnostics = {
+    ...base,
+    mode,
+    modeReason: resolved.reason,
+    modeResolution: {
+      interactionMode: resolved.interactionMode,
+      interactionPolicy: resolved.interactionPolicy,
+      hasBeatContract: resolved.hasBeatContract,
+    },
+    modeTransition: {
+      from: previousMode,
+      to: mode,
+      changed: modeChanged,
+      reason: transitionReason,
+    },
+    initiative: base.initiative ?? (options.usedFallback
+      ? {
+        initiator: 'npc',
+        action: 'abstain',
+        primaryGoal: 'repair_goal',
+        expectedPlayerResponseType: 'free_text',
+        reason: 'provider-fallback',
+        policyBounded: true,
+      }
+      : defaultInitiativeForMode(mode)),
+    evidenceBudget: base.evidenceBudget ?? {
+      usage: {
+        facts: 0,
+        spans: 0,
+        contextTokens: 0,
+        memoryItems: 0,
+        beatFacts: options.hasBeatContract ? 1 : 0,
+      },
+      withinBudget: true,
+    },
+    retrieval: base.retrieval ?? {
+      attempted: false,
+      candidateCount: 0,
+      selectedCount: 0,
+      qualityPath: 'not_required',
+      qualityReason: 'provider-unavailable',
+      correctiveAttempted: false,
+    },
+    validation: {
+      decision: base.validation?.decision ?? fallbackDecision,
+      errors: mergedValidationErrors,
+      unsupportedClaims: base.validation?.unsupportedClaims ?? 0,
+      requiresRepair: base.validation?.requiresRepair ?? (options.usedFallback || options.validationErrors.length > 0),
+    },
+    pipelineVersion: base.pipelineVersion ?? 'phase1-contract-spine',
+    timestampMs: options.timestamp,
+  };
+  return normalized;
 }
 
 function normalizeText(text: string): string {
@@ -500,31 +618,12 @@ function enrichTurnWithBeatEvidence({
   playerMessage: string;
   priorCoveredFacts?: string[];
 }): { turn: PluginAgentTurnResult; beatEvidence: PluginAgentBeatEvidence } {
-  let beatEvidence = buildBeatEvidence({
+  const beatEvidence = buildBeatEvidence({
     contract,
     utterance: turn.utterance,
     playerMessage,
     priorCoveredFacts,
   });
-
-  if (beatEvidence.uncoveredFacts.length > 0) {
-    const missingFacts = beatEvidence.uncoveredFacts.slice(0, 2).join(' ');
-    const patchedUtterance = `${turn.utterance} ${missingFacts}`.trim();
-    beatEvidence = buildBeatEvidence({
-      contract,
-      utterance: patchedUtterance,
-      playerMessage,
-      priorCoveredFacts,
-    });
-    return {
-      turn: {
-        ...turn,
-        utterance: patchedUtterance,
-        beatEvidence,
-      },
-      beatEvidence,
-    };
-  }
 
   return {
     turn: {
@@ -618,6 +717,12 @@ function parseSummary(raw: unknown): SugarAgentConversationSummaryV1 | null {
   };
 }
 
+function parseConversationMode(raw: unknown): PluginAgentTurnDiagnostics['mode'] | undefined {
+  return raw === 'character' || raw === 'narrative' || raw === 'hybrid' || raw === 'unknown'
+    ? raw
+    : undefined;
+}
+
 function parseDialogueSession(raw: unknown): SugarAgentDialogueSessionStateV1 | null {
   if (!isRecord(raw)) return null;
   const npcId = toSafeString(raw.npcId);
@@ -633,6 +738,8 @@ function parseDialogueSession(raw: unknown): SugarAgentDialogueSessionStateV1 | 
     uncoveredFacts: Array.isArray(raw.uncoveredFacts)
       ? raw.uncoveredFacts.filter((entry): entry is string => typeof entry === 'string')
       : undefined,
+    lastResolvedMode: parseConversationMode(raw.lastResolvedMode),
+    lastResolvedModeReason: toSafeString(raw.lastResolvedModeReason),
     turnCount: toSafeCounter(raw.turnCount),
     updatedAt: toSafeTimestamp(raw.updatedAt, 0),
   };
@@ -663,6 +770,9 @@ function parseRuntimeStatus(raw: unknown, now: number): SugarAgentRuntimeStatusV
       : undefined,
     lastValidationErrors: Array.isArray(raw.lastValidationErrors)
       ? raw.lastValidationErrors.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    lastTurnDiagnostics: isRecord(raw.lastTurnDiagnostics)
+      ? raw.lastTurnDiagnostics as PluginAgentTurnDiagnostics
       : undefined,
     lastUpdated: toSafeTimestamp(raw.lastUpdated, now),
   };
@@ -747,6 +857,7 @@ function migrateV0ToV1(raw: SugarAgentPluginStateV0, now: number): SugarAgentPlu
 export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): EnginePlugin {
   const pluginId = options.id ?? 'sugaragent';
   const captureEvents = options.captureEvents ?? true;
+  const defaultRuntimeMode = normalizeRuntimeMode(options.runtimeMode);
   let state: SugarAgentPluginStateV1 = createDefaultState(Date.now());
   let lastNpcId: string | null = null;
   let localProvider: LocalLLMProvider | null = null;
@@ -771,7 +882,18 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     if (options.disableProvider) return null;
     if (options.runtimeBridge) return options.runtimeBridge;
     if (typeof window !== 'undefined') {
-      return new HttpLocalRuntimeBridge();
+      if (isTauriRuntimeEnvironment()) {
+        return new TauriLocalRuntimeBridge({
+          runtimeMode: defaultRuntimeMode,
+          // Keep preview/dev parity when native command surface is not available yet.
+          fallbackBridge: new HttpLocalRuntimeBridge({
+            runtimeMode: defaultRuntimeMode,
+          }),
+        });
+      }
+      return new HttpLocalRuntimeBridge({
+        runtimeMode: defaultRuntimeMode,
+      });
     }
     return null;
   }
@@ -811,8 +933,12 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         sessions[sessionKey] = {
           npcId,
           activeBeatId: existing?.activeBeatId,
+          questId: existing?.questId,
+          objectiveId: existing?.objectiveId,
           coveredFacts: existing?.coveredFacts ?? [],
           uncoveredFacts: existing?.uncoveredFacts ?? [],
+          lastResolvedMode: existing?.lastResolvedMode,
+          lastResolvedModeReason: existing?.lastResolvedModeReason,
           turnCount: (existing?.turnCount ?? 0) + 1,
           updatedAt: now,
         };
@@ -894,11 +1020,19 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const beatContract = request.beatContract;
     const sessions = ensureDialogueSessions(state);
     const beatSessionKey = beatContract ? `${request.npcId}:${beatContract.id}` : request.npcId;
-    const existingSession = sessions[beatSessionKey];
-
-    rememberPlayerFacts(npc, message, now);
+    const beatExistingSession = sessions[beatSessionKey];
+    const modeSession = beatExistingSession ?? sessions[request.npcId];
 
     let turn: PluginAgentTurnResult;
+    const interactionMode = request.context?.interactionMode;
+    const interactionPolicy = request.context?.interactionPolicy;
+    const runtimeContext = request.context
+      ? {
+        ...request.context,
+        runtimeMode: request.context.runtimeMode ?? defaultRuntimeMode,
+      }
+      : { runtimeMode: defaultRuntimeMode };
+    const previousMode = modeSession?.lastResolvedMode;
     if (localProvider) {
       try {
         const generated = await localProvider.generateStructured({
@@ -907,7 +1041,16 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           playerMessage: message,
           npcProfile: request.npcProfile,
           globalSafetyBounds: request.globalSafetyBounds,
-          context: request.context,
+          context: runtimeContext,
+        });
+        const diagnostics = normalizeTurnDiagnostics(generated.diagnostics, {
+          interactionMode,
+          interactionPolicy,
+          hasBeatContract: Boolean(beatContract),
+          previousMode,
+          usedFallback: generated.usedFallback,
+          validationErrors: generated.validationErrors,
+          timestamp: now,
         });
         updateRuntimeStatus({
           provider: 'local',
@@ -916,6 +1059,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           lastOutcome: generated.usedFallback ? 'provider_fallback_validation' : 'provider_ok',
           lastAttempts: generated.attempts,
           lastValidationErrors: generated.validationErrors.slice(-3),
+          lastTurnDiagnostics: diagnostics,
         });
         if (generated.usedFallback) {
           console.warn('[sugaragent] Local provider returned fallback output after validation failures.', {
@@ -924,47 +1068,73 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
             errors: generated.validationErrors,
           });
         }
+        const providerTurn = generated.usedFallback
+          ? buildProviderUnavailableTurn(request.npcName)
+          : {
+            utterance: generated.output.utterance,
+            emotion: generated.output.emotion,
+            intent: generated.output.intent,
+            citations: generated.output.citations,
+            beatEvidence: generated.output.beatEvidence,
+          };
         turn = {
-          utterance: generated.output.utterance,
-          emotion: generated.output.emotion,
-          intent: generated.output.intent,
-          citations: generated.output.citations,
-          beatEvidence: generated.output.beatEvidence,
+          ...providerTurn,
+          diagnostics,
         };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
+        const diagnostics = normalizeTurnDiagnostics(undefined, {
+          interactionMode,
+          interactionPolicy,
+          hasBeatContract: Boolean(beatContract),
+          previousMode,
+          usedFallback: true,
+          validationErrors: [`provider-error: ${detail}`],
+          timestamp: now,
+        });
         updateRuntimeStatus({
           provider: 'local',
           healthy: false,
           detail,
           lastOutcome: 'provider_error',
+          lastTurnDiagnostics: diagnostics,
         });
         console.warn('[sugaragent] Local provider failed in runAgentTurn, using deterministic fallback.', error);
-        turn = buildDeterministicAgentTurn({
-          npcName: request.npcName,
-          playerMessage: message,
-          npc,
-        });
+        turn = buildProviderUnavailableTurn(request.npcName);
+        turn = {
+          ...turn,
+          diagnostics,
+        };
       }
     } else {
+      const diagnostics = normalizeTurnDiagnostics(undefined, {
+        interactionMode,
+        interactionPolicy,
+        hasBeatContract: Boolean(beatContract),
+        previousMode,
+        usedFallback: true,
+        validationErrors: ['provider-unavailable'],
+        timestamp: now,
+      });
       updateRuntimeStatus({
         provider: 'deterministic',
         healthy: false,
         detail: 'provider-unavailable',
         lastOutcome: 'provider_unavailable',
+        lastTurnDiagnostics: diagnostics,
       });
-      turn = buildDeterministicAgentTurn({
-        npcName: request.npcName,
-        playerMessage: message,
-        npc,
-      });
+      turn = buildProviderUnavailableTurn(request.npcName);
+      turn = {
+        ...turn,
+        diagnostics,
+      };
     }
     if (beatContract) {
       const enriched = enrichTurnWithBeatEvidence({
         turn,
         contract: beatContract,
         playerMessage: message,
-        priorCoveredFacts: existingSession?.coveredFacts ?? [],
+        priorCoveredFacts: beatExistingSession?.coveredFacts ?? [],
       });
       turn = enriched.turn;
       sessions[beatSessionKey] = {
@@ -974,7 +1144,17 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         objectiveId: beatContract.objectiveId,
         coveredFacts: enriched.beatEvidence.coveredFacts,
         uncoveredFacts: enriched.beatEvidence.uncoveredFacts,
-        turnCount: request.beatTurnCount ?? ((existingSession?.turnCount ?? 0) + 1),
+        lastResolvedMode: turn.diagnostics?.mode,
+        lastResolvedModeReason: turn.diagnostics?.modeReason,
+        turnCount: request.beatTurnCount ?? ((beatExistingSession?.turnCount ?? 0) + 1),
+        updatedAt: now,
+      };
+    } else {
+      sessions[beatSessionKey] = {
+        npcId: request.npcId,
+        lastResolvedMode: turn.diagnostics?.mode,
+        lastResolvedModeReason: turn.diagnostics?.modeReason,
+        turnCount: (modeSession?.turnCount ?? 0) + 1,
         updatedAt: now,
       };
     }
@@ -1012,12 +1192,13 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const provider = new LocalLLMProvider({
       runtime: runtimeBridge,
       maxAttempts: 3,
+      defaultRuntimeMode,
     });
 
     try {
       const health = await provider.health();
       if (!health.ok) {
-        console.warn('[sugaragent] Local provider unavailable; deterministic fallback will be used.', health.detail);
+        console.warn('[sugaragent] Local provider unavailable; runAgentTurn will return provider-unavailable abstain output.', health.detail);
         localProvider = null;
         updateRuntimeStatus({
           provider: 'deterministic',
@@ -1035,7 +1216,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         lastOutcome: 'ready',
       });
     } catch (error) {
-      console.warn('[sugaragent] Failed to initialize local provider; deterministic fallback will be used.', error);
+      console.warn('[sugaragent] Failed to initialize local provider; runAgentTurn will return provider-unavailable abstain output.', error);
       localProvider = null;
       const detail = error instanceof Error ? error.message : String(error);
       updateRuntimeStatus({

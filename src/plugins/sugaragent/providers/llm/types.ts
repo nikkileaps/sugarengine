@@ -1,4 +1,5 @@
 import type { SugarAgentTurnOutput } from '../../contracts/turn';
+import type { PluginAgentTurnDiagnostics } from '../../../../engine/plugins/types';
 
 export interface LLMGenerateRequest {
   npcId: string;
@@ -18,6 +19,18 @@ export interface LLMGenerateRequest {
     gameId?: string;
     regionPath?: string;
     episodeId?: string;
+    runtimeMode?: 'llama' | 'auto' | 'mock';
+    interactionMode?: 'scripted' | 'agent' | 'hybrid';
+    interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
+    isFirstMeeting?: boolean;
+    turnIndexWithNpc?: number;
+    topicCoverage?: {
+      activeTopic?: string;
+      activeTopicNovelty?: number;
+      exhaustedTopics?: string[];
+      trackedTopicCount?: number;
+      exhausted?: boolean;
+    };
   };
 }
 
@@ -27,6 +40,7 @@ export interface LLMGenerateResult {
   usedFallback: boolean;
   validationErrors: string[];
   rawResponses: string[];
+  diagnostics?: PluginAgentTurnDiagnostics;
 }
 
 export interface LLMHealthStatus {

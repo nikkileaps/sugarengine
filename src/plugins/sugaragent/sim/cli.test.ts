@@ -31,7 +31,131 @@ describe('sugaragent sim CLI (phase 1)', () => {
     expect(output).toContain('Loaded SugarAgent sim for NPC "baker" (provider=local)');
     expect(output).toContain('using mock runtime');
     expect(output).toContain('local runtime health: ok');
-    expect(output).toContain('baker> I heard you say: "hola".');
+    expect(output).toContain("baker> Hi, I'm baker. What can I help with today?");
+  });
+
+  it('performs one bounded corrective retrieval attempt before abstaining on weak evidence', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--ask',
+        'do you know anything about zqxptown?',
+        '--debug-structured',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('"qualityPath":"corrective_fail"');
+    expect(output).toContain('"correctiveAttempted":true');
+    expect(output).toContain("baker> I am not sure. I do not have reliable records about that right now.");
+  });
+
+  it('uses single-pass retrieval when evidence quality is sufficient', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--ask',
+        'what do you know about rackwick city creation?',
+        '--debug-structured',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('"qualityPath":"single_pass"');
+    expect(output).toContain('"correctiveAttempted":false');
+    expect(output).toContain('baker>');
+  });
+
+  it('does not fail retrieval quality for filler-heavy resort questions', () => {
+    const tempDir = fs.mkdtempSync(path.join(process.cwd(), '.tmp-sugaragent-retrieval-filler-'));
+    const loreDir = path.join(tempDir, 'lore');
+    fs.mkdirSync(loreDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(loreDir, 'manifest.json'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        source: { repo: 'local', commit: 'filler-1' },
+        generatedAt: new Date().toISOString(),
+        toolVersion: 'test',
+        counts: { files: 1, chunks: 1, issues: 0 },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(loreDir, 'chunks.json'),
+      `${JSON.stringify([
+        {
+          chunkId: 'lore.locations.towns.town.earendale#overview',
+          pageId: 'lore.locations.towns.town.earendale',
+          title: 'Earendale',
+          sectionHeading: 'Overview',
+          sourceFile: 'locations/towns/town.earendale.md',
+          sourceCommit: 'filler-1',
+          sourceRepo: 'local',
+          summary: 'The Wordlark Hollow Resort and Spa is located just outside Earendale.',
+          content: 'The Wordlark Hollow Resort and Spa is located just outside Earendale.',
+          tokens: ['wordlark', 'hollow', 'resort', 'spa', 'earendale'],
+          metadata: {
+            id: 'lore.locations.towns.town.earendale',
+            tags: ['earendale', 'resort'],
+            entity_ids: [],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+          },
+        },
+      ], null, 2)}\n`,
+      'utf8',
+    );
+
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--lore-dir',
+        loreDir,
+        '--ask',
+        'do you know anything about the resort near here?',
+        '--debug-structured',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('"qualityPath":"single_pass"');
+    expect(output).toContain('Wordlark Hollow Resort and Spa');
+    expect(output).not.toContain('I am not sure. I do not have reliable records about that right now.');
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('runs ADR-006 crowd-town cadence simulation ticks', () => {
@@ -123,7 +247,7 @@ describe('sugaragent sim CLI (phase 1)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('engages fallback when local provider keeps returning invalid payloads', () => {
+  it('uses deterministic chat path even when invalid-json simulation is enabled', () => {
     const output = execFileSync(
       'node',
       [
@@ -146,12 +270,11 @@ describe('sugaragent sim CLI (phase 1)', () => {
       },
     );
 
-    expect(output).toContain('validation=attempt 1: invalid JSON');
-    expect(output).toContain('local provider fallback engaged');
-    expect(output).toContain('baker> I lost my train of thought. Could you say that again?');
+    expect(output).toContain("baker> Got it. Tell me a little more and I'll help where I can.");
+    expect(output).not.toContain('local provider fallback engaged');
   });
 
-  it('runs llama runtime mode and succeeds after repair retry', () => {
+  it('runs llama runtime mode with deterministic pipeline responses', () => {
     const output = execFileSync(
       'node',
       [
@@ -180,8 +303,239 @@ describe('sugaragent sim CLI (phase 1)', () => {
 
     expect(output).toContain('local runtime health: ok');
     expect(output).toContain('[mode=llama]');
-    expect(output).toContain('validation=attempt 1: invalid JSON');
-    expect(output).toContain('baker> Fake llama heard: hola amiga');
+    expect(output).toContain("baker> Got it. Tell me a little more and I'll help where I can.");
+    expect(output).not.toContain('validation=attempt 1: invalid JSON');
+  });
+
+  it('returns grounded uncertainty for identity-self prompts with no self evidence', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance-initial',
+        '--llama-arg',
+        'Captain Rowan trained with the city watch before joining command.',
+        '--llama-arg',
+        '--force-utterance-repair',
+        '--llama-arg',
+        'I am not sure yet. I do not have reliable records about my own background.',
+        '--no-lore',
+        '--ask',
+        'tell me about your background',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('baker> I am not sure yet. I do not want to guess about my own background without records.');
+    expect(output).not.toContain('Captain Rowan trained');
+    expect(output).not.toContain('local provider fallback engaged');
+  });
+
+  it('ignores forced llama utterance when answering identity-self prompts', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        'Captain Rowan trained with the city watch before joining command.',
+        '--no-lore',
+        '--ask',
+        'tell me about your background',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('baker> I am not sure yet. I do not want to guess about my own background without records.');
+    expect(output).not.toContain('Captain Rowan trained with the city watch');
+    expect(output).not.toContain('local provider fallback engaged');
+  });
+
+  it('routes session recall prompts away from lore override and self-uncertainty forcing', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        "I don't remember yet, but I'm glad to chat with you.",
+        '--ask',
+        'do you remember me?',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('routing intent=session_recall');
+    expect(output).toContain('policy=memory_first');
+    expect(output).toContain("baker> I don't remember any details yet. Tell me something about yourself and I'll keep it in mind.");
+    expect(output).not.toContain('I am not sure yet. I do not want to guess about my own background without records.');
+  });
+
+  it('rejects ungrounded player-attribution lore during session recall and falls back safely', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        "Mim? Oh, I remember now - your photo collection has always been fascinating.",
+        '--ask',
+        'do you remember me?',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('routing intent=session_recall');
+    expect(output).toContain('local provider fallback engaged');
+    expect(output).toContain("baker> I don't remember any details yet. Tell me something about yourself and I'll keep it in mind.");
+    expect(output).not.toContain('your photo collection has always been fascinating');
+  });
+
+  it('uses evidence-first pipeline v2 for recall turns and ignores forced hallucinated ownership text', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        "Mim? I remember now - your photo collection is fascinating.",
+        '--ask',
+        'do you remember me?',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain('pipeline version=v2 enabled=true');
+    expect(output).toContain('routing intent=session_recall');
+    expect(output).toContain("baker> I don't remember any details yet. Tell me something about yourself and I'll keep it in mind.");
+    expect(output).not.toContain('your photo collection is fascinating');
+  });
+
+  it('does not enforce claim-repair retries for plain conversation turns', () => {
+    const output = execFileSync(
+      'node',
+      [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'llama',
+        '--llama-bin',
+        'node',
+        '--llama-bin-arg',
+        'scripts/test-fixtures/fake-llama-cli.mjs',
+        '--model-path',
+        'scripts/test-fixtures/fake-model.gguf',
+        '--llama-arg',
+        '--force-valid',
+        '--llama-arg',
+        '--force-utterance',
+        '--llama-arg',
+        "The old sky bridge was built by moonwrights.",
+        '--no-lore',
+        '--ask',
+        'hello there',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+      },
+    );
+
+    expect(output).toContain("baker> Hi, I'm baker. What can I help with today?");
+    expect(output).not.toContain('local provider fallback engaged');
   });
 
   it('accepts valid llama JSON when trailing brace noise is present', () => {
@@ -215,10 +569,10 @@ describe('sugaragent sim CLI (phase 1)', () => {
 
     expect(output).toContain('[mode=llama]');
     expect(output).not.toContain('local provider fallback engaged');
-    expect(output).toContain('baker> Fake llama heard: hello there');
+    expect(output).toContain("baker> Hi, I'm baker. What can I help with today?");
   });
 
-  it('falls back when llama runtime keeps returning invalid output', () => {
+  it('does not depend on llama generation validity for deterministic chat', () => {
     const output = execFileSync(
       'node',
       [
@@ -248,8 +602,8 @@ describe('sugaragent sim CLI (phase 1)', () => {
     );
 
     expect(output).toContain('[mode=llama]');
-    expect(output).toContain('validation=attempt 1: invalid JSON');
-    expect(output).toContain('local provider fallback engaged');
+    expect(output).toContain("baker> Got it. Tell me a little more and I'll help where I can.");
+    expect(output).not.toContain('local provider fallback engaged');
   });
 
   it('rejects verbatim memory-fact replay and falls back when llama keeps repeating it', () => {
@@ -309,7 +663,6 @@ describe('sugaragent sim CLI (phase 1)', () => {
       },
     );
 
-    expect(output).toContain('validation=attempt 1: utterance repeats remembered fact verbatim');
     expect(output).toContain('local provider fallback engaged');
     expect(output).toContain('baker> You mentioned that');
     expect(output).not.toContain('I lost my train of thought');
@@ -317,7 +670,7 @@ describe('sugaragent sim CLI (phase 1)', () => {
     fs.rmSync(sessionPath, { force: true });
   });
 
-  it('rejects prior-familiarity lines on first meeting and falls back to safe intro', () => {
+  it('stays first-meeting safe even when llama is forced to prior-familiar wording', () => {
     const sessionId = `first-meet-guardrail-${Date.now()}`;
     const sessionPath = path.join(process.cwd(), '.sugaragent-sim-sessions', `${sessionId}.json`);
 
@@ -355,9 +708,9 @@ describe('sugaragent sim CLI (phase 1)', () => {
       },
     );
 
-    expect(output).toContain('validation=attempt 1: first meeting response implies prior familiarity');
-    expect(output).toContain('local provider fallback engaged');
-    expect(output).toContain('baker> Nice to meet you.');
+    expect(output).toContain("baker> Hi, I'm baker. What can I help with today?");
+    expect(output).not.toContain('see you again');
+    expect(output).not.toContain('local provider fallback engaged');
 
     fs.rmSync(sessionPath, { force: true });
   });
@@ -400,14 +753,14 @@ describe('sugaragent sim CLI (phase 1)', () => {
       },
     );
 
-    expect(output).toContain('validation=attempt 1: first meeting greeting includes ungrounded player assumptions');
-    expect(output).toContain('local provider fallback engaged');
-    expect(output).toContain('baker> Nice to meet you.');
+    expect(output).toContain("baker> Hi, I'm baker. What can I help with today?");
+    expect(output).not.toContain('energy loaves');
+    expect(output).not.toContain('local provider fallback engaged');
 
     fs.rmSync(sessionPath, { force: true });
   });
 
-  it('blocks unsupported knowledge claims when retrieval confidence is low', () => {
+  it('uses grounded retrieval output instead of forced hallucinated knowledge text', () => {
     const loreDir = fs.mkdtempSync(path.join(process.cwd(), '.tmp-sugaragent-lore-low-confidence-'));
     fs.writeFileSync(
       path.join(loreDir, 'manifest.json'),
@@ -498,10 +851,10 @@ describe('sugaragent sim CLI (phase 1)', () => {
       },
     );
 
-    expect(output).toContain('baker> I am not sure. I do not have reliable records about that right now.');
+    expect(output).toContain('baker> Alpha town has a small market. Beta town has an old gate.');
     expect(output).not.toContain("Earendale's where the old city walls used to be");
     expect(output).not.toContain('From the archives:');
-    expect(output).not.toContain('citations=');
+    expect(output).toContain('citations=');
 
     fs.rmSync(loreDir, { recursive: true, force: true });
   });
@@ -772,6 +1125,113 @@ describe('sugaragent sim CLI (phase 1)', () => {
 
     const raw = fs.readFileSync(sessionPath, 'utf8');
     expect(raw).toContain('my name is nikki');
+
+    fs.rmSync(sessionPath, { force: true });
+  });
+
+  it('tracks topic coverage and gracefully closes exhausted character-mode topics', () => {
+    const sessionId = `topic-coverage-${Date.now()}`;
+    const sessionPath = path.join(process.cwd(), '.sugaragent-sim-sessions', `${sessionId}.json`);
+
+    const runTurn = (debugStructured = false): string => {
+      const args = [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--no-lore',
+        '--session',
+        sessionId,
+        '--ask',
+        'i like coffee',
+      ];
+      if (debugStructured) {
+        args.push('--debug-structured');
+      }
+      return execFileSync(
+        'node',
+        args,
+        {
+          cwd: process.cwd(),
+          encoding: 'utf8',
+        },
+      );
+    };
+
+    runTurn();
+    runTurn();
+    runTurn();
+    runTurn();
+    const output = runTurn(true);
+
+    expect(output).toContain('baker> I think we have covered coffee for now. Goodbye for now, and we can pick this up again later.');
+    expect(output).toContain('"topicCoverage"');
+    expect(output).toContain('"topicExhausted":true');
+    expect(fs.existsSync(sessionPath)).toBe(true);
+
+    const raw = fs.readFileSync(sessionPath, 'utf8');
+    expect(raw).toContain('"topicCoverage"');
+    const parsed = JSON.parse(raw) as {
+      npcs?: Record<string, { topicCoverage?: Array<{ topic?: string }> }>;
+    };
+    const topicCoverage = parsed.npcs?.baker?.topicCoverage ?? [];
+    expect(topicCoverage.some((entry) => entry.topic === 'coffee')).toBe(true);
+
+    fs.rmSync(sessionPath, { force: true });
+  });
+
+  it('prefers noun-like topic targets over conversational verbs in topic coverage', () => {
+    const sessionId = `topic-focus-${Date.now()}`;
+    const sessionPath = path.join(process.cwd(), '.sugaragent-sim-sessions', `${sessionId}.json`);
+
+    const runTurn = (ask: string, debugStructured = false): string => {
+      const args = [
+        'scripts/sugaragent-sim.mjs',
+        '--npc',
+        'baker',
+        '--provider',
+        'local',
+        '--runtime',
+        'mock',
+        '--no-lore',
+        '--session',
+        sessionId,
+        '--ask',
+        ask,
+      ];
+      if (debugStructured) {
+        args.push('--debug-structured');
+      }
+      return execFileSync(
+        'node',
+        args,
+        {
+          cwd: process.cwd(),
+          encoding: 'utf8',
+        },
+      );
+    };
+
+    runTurn('Tell me about coffee.');
+    runTurn('What do you know about coffee?');
+    runTurn('I want to know about coffee.', true);
+
+    expect(fs.existsSync(sessionPath)).toBe(true);
+    const raw = fs.readFileSync(sessionPath, 'utf8');
+    const parsed = JSON.parse(raw) as {
+      npcs?: Record<string, { topicCoverage?: Array<{ topic?: string }> }>;
+    };
+    const topicCoverage = parsed.npcs?.baker?.topicCoverage ?? [];
+    const topics = topicCoverage
+      .map((entry) => entry.topic)
+      .filter((entry): entry is string => typeof entry === 'string');
+
+    expect(topics).toContain('coffee');
+    expect(topics).not.toContain('want');
+    expect(topics).not.toContain('love');
 
     fs.rmSync(sessionPath, { force: true });
   });

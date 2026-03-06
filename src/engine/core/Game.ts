@@ -26,6 +26,7 @@ import type { InspectionData } from '../inspection/types';
 import type {
   EnginePlugin,
   PluginAgentProfile,
+  PluginAgentTurnDiagnostics,
   PluginAgentTurnResult,
   PluginEvent,
   PluginIntent,
@@ -89,12 +90,24 @@ export interface GameEventHandlers {
 }
 
 type NPCInteractionMode = 'scripted' | 'agent' | 'hybrid';
+type AgentInteractionPolicy = 'scripted-first' | 'agent-first' | 'fallback';
+type SugarAgentRuntimeMode = 'llama' | 'auto' | 'mock';
 
 function normalizeNPCInteractionMode(raw: unknown): NPCInteractionMode {
   if (raw === 'agent' || raw === 'hybrid') {
     return raw;
   }
   return 'scripted';
+}
+
+function normalizeSugarAgentRuntimeMode(raw: unknown): SugarAgentRuntimeMode {
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === 'auto' || normalized === 'mock' || normalized === 'llama') {
+      return normalized;
+    }
+  }
+  return 'llama';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -163,10 +176,12 @@ export class Game {
   private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
   private npcAgentProfiles: Map<string, PluginAgentProfile> = new Map();
   private sugarAgentGlobalSafetyBounds: string[] = [];
+  private sugarAgentRuntimeMode: SugarAgentRuntimeMode = 'llama';
   private fadeOverlay: FadeOverlay;
   private pluginManager: PluginManager | null = null;
   private agentBeatContractsByNpc = new Map<string, RuntimeAgentBeatContract[]>();
   private contentBasePath: string;
+  private lastSugarAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
 
   // World state (ADR-018)
   readonly flags: FlagsManager;
@@ -352,8 +367,12 @@ export class Game {
 
     this.agentBeatContractsByNpc = parseRuntimeAgentBeatContracts(projectData);
     this.sugarAgentGlobalSafetyBounds = [];
+    this.sugarAgentRuntimeMode = 'llama';
 
     if (isRecord(projectData) && isRecord(projectData.sugaragent)) {
+      this.sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
+        projectData.sugaragent.runtimeMode ?? projectData.sugaragent.runtime,
+      );
       const topLevelBounds = normalizeStringArray(
         projectData.sugaragent.globalSafetyBounds ?? projectData.sugaragent.safetyBounds,
       );
@@ -365,6 +384,9 @@ export class Game {
     if (Array.isArray(project.plugins)) {
       for (const plugin of project.plugins) {
         if (!isRecord(plugin) || plugin.id !== 'sugaragent') continue;
+        this.sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
+          plugin.runtimeMode ?? plugin.runtime,
+        );
         const bounds = normalizeStringArray(plugin.globalSafetyBounds ?? plugin.safetyBounds);
         if (bounds.length > 0) {
           this.sugarAgentGlobalSafetyBounds = bounds;
@@ -544,6 +566,58 @@ export class Game {
       detail ? `detail=${detail}` : undefined,
     ].filter((entry): entry is string => typeof entry === 'string');
 
+    const runtimeDiagnostics = isRecord(sugaragent.runtime.lastTurnDiagnostics)
+      ? sugaragent.runtime.lastTurnDiagnostics as PluginAgentTurnDiagnostics
+      : null;
+    const diagnostics = this.lastSugarAgentTurnDiagnostics ?? runtimeDiagnostics;
+    if (diagnostics) {
+      const evidenceFactsUsed = diagnostics.evidenceBudget?.usage?.facts;
+      const evidenceFactsBudget = diagnostics.evidenceBudget?.budget?.facts;
+      const evidenceUsage = (
+        typeof evidenceFactsUsed === 'number' && Number.isFinite(evidenceFactsUsed)
+          && typeof evidenceFactsBudget === 'number' && Number.isFinite(evidenceFactsBudget)
+      )
+        ? `${evidenceFactsUsed}/${evidenceFactsBudget}`
+        : (
+          typeof evidenceFactsUsed === 'number' && Number.isFinite(evidenceFactsUsed)
+            ? `${evidenceFactsUsed}`
+            : 'n/a'
+        );
+      const topicCoverage = isRecord(diagnostics.conversation?.topicCoverage)
+        ? diagnostics.conversation.topicCoverage
+        : null;
+      const activeTopic = topicCoverage && typeof topicCoverage.activeTopic === 'string'
+        ? topicCoverage.activeTopic
+        : null;
+      const activeTopicNovelty = topicCoverage && typeof topicCoverage.activeTopicNovelty === 'number'
+        && Number.isFinite(topicCoverage.activeTopicNovelty)
+        ? Number(topicCoverage.activeTopicNovelty.toFixed(2))
+        : null;
+      const topicExhausted = topicCoverage?.exhausted === true;
+      const trackedTopicCount = topicCoverage && typeof topicCoverage.trackedTopicCount === 'number'
+        && Number.isFinite(topicCoverage.trackedTopicCount)
+        ? Math.max(0, Math.floor(topicCoverage.trackedTopicCount))
+        : null;
+      parts.push(
+        `mode=${diagnostics.mode ?? 'unknown'}`,
+        `modeTransition=${diagnostics.modeTransition?.changed === true
+          ? `${diagnostics.modeTransition.from ?? 'none'}->${diagnostics.modeTransition.to ?? diagnostics.mode ?? 'unknown'}`
+          : 'stable'}`,
+        `initiative=${diagnostics.initiative?.action ?? 'unknown'}`,
+        `goal=${diagnostics.initiative?.primaryGoal ?? 'unknown'}`,
+        `evidence=${evidenceUsage}`,
+        `retrieval=${diagnostics.retrieval?.qualityPath ?? (diagnostics.retrieval?.attempted ? 'attempted' : 'n/a')}${diagnostics.retrieval?.correctiveAttempted ? ':corrective' : ''}`,
+        `validation=${diagnostics.validation?.decision ?? 'unknown'}`,
+        `beat=${diagnostics.beatEvaluator?.status ?? 'not_applicable'}`,
+      );
+      if (activeTopic) {
+        parts.push(`topic=${activeTopic}${activeTopicNovelty !== null ? `@${activeTopicNovelty.toFixed(2)}` : ''}${topicExhausted ? ':exhausted' : ''}`);
+      }
+      if (trackedTopicCount !== null) {
+        parts.push(`topicsTracked=${trackedTopicCount}`);
+      }
+    }
+
     return parts.join(' | ');
   }
 
@@ -603,16 +677,42 @@ export class Game {
     const nextBeatTurnCount = beatSessionKey && activeBeatContract
       ? this.getPersistedSugarAgentBeatTurnCount(active.npcId, activeBeatContract.id) + 1
       : undefined;
+    const persistedConversationTurnCount = this.getPersistedSugarAgentConversationTurnCount(active.npcId);
+    const nextConversationTurnIndex = persistedConversationTurnCount + 1;
 
     if (
       activeBeatContract
       && nextBeatTurnCount !== undefined
       && shouldFallbackToScriptedForBeat(activeBeatContract, nextBeatTurnCount)
     ) {
+      const now = Date.now();
+      this.lastSugarAgentTurnDiagnostics = {
+        beatEvaluator: {
+          status: 'failed',
+          beatId: activeBeatContract.id,
+          questId: activeBeatContract.questId,
+          objectiveId: activeBeatContract.objectiveId,
+          coveragePassed: false,
+          rulePassed: false,
+          beatIdMatched: false,
+          forbiddenPassed: true,
+          confidencePassed: false,
+          confidence: 0,
+          completionSignal: 'none',
+          reason: 'turn-budget-exhausted-fallback-routed',
+        },
+        timestampMs: now,
+      };
       if (activeBeatContract.fallbackScriptId) {
         this.dialogue.start(activeBeatContract.fallbackScriptId);
       }
       this.closeAgentConversation();
+      this.emitPluginEvent({
+        type: 'interactionHandled',
+        npcId: active.npcId,
+        source: 'plugin',
+        detail: 'agent-turn-beat-fallback',
+      });
       return {
         utterance: 'Let us continue this through the scripted briefing.',
         emotion: 'neutral',
@@ -632,16 +732,58 @@ export class Game {
         gameId: this.config.gameId,
         regionPath: this.engine.getCurrentRegion(),
         episodeId: this.config.currentEpisode,
+        runtimeMode: this.sugarAgentRuntimeMode,
+        interactionMode: this.getNpcInteractionMode(active.npcId),
+        interactionPolicy: this.getNpcInteractionPolicy(active.npcId),
+        isFirstMeeting: persistedConversationTurnCount === 0,
+        turnIndexWithNpc: nextConversationTurnIndex,
       },
     });
 
     if (result) {
+      const diagnostics: PluginAgentTurnDiagnostics = {
+        ...(result.diagnostics ?? {}),
+      };
+      if (!diagnostics.beatEvaluator) {
+        diagnostics.beatEvaluator = {
+          status: 'not_applicable',
+        };
+      }
+
       if (activeBeatContract && result.beatEvidence) {
         const evaluation = evaluateAgentBeatCompletion(
           activeBeatContract,
           result.beatEvidence,
           (flagName) => this.flags.get(flagName),
         );
+
+        diagnostics.beatEvaluator = {
+          status: evaluation.passed ? 'passed' : 'failed',
+          beatId: activeBeatContract.id,
+          questId: activeBeatContract.questId,
+          objectiveId: activeBeatContract.objectiveId,
+          coveragePassed: evaluation.coveragePassed,
+          rulePassed: evaluation.rulePassed,
+          beatIdMatched: evaluation.beatIdMatched,
+          forbiddenPassed: evaluation.forbiddenPassed,
+          confidencePassed: evaluation.confidencePassed,
+          missingRequiredFacts: evaluation.missingRequiredFacts,
+          forbiddenFactMentions: evaluation.forbiddenFactMentions,
+          confidence: evaluation.confidence,
+          completionSignal: evaluation.completionSignal,
+          reason: evaluation.passed
+            ? 'completion-accepted'
+            : (!evaluation.beatIdMatched
+              ? 'beat-id-mismatch'
+              : (!evaluation.coveragePassed
+                ? 'required-facts-not-covered'
+                : (!evaluation.forbiddenPassed
+                  ? 'forbidden-fact-mentioned'
+                  : (!evaluation.rulePassed
+                    ? 'completion-rule-not-satisfied'
+                    : 'low-confidence-evidence')))),
+        };
+        diagnostics.timestampMs = Date.now();
 
         if (evaluation.passed && activeBeatContract.objectiveId) {
           const objectiveState = this.quests.getObjectiveState(
@@ -655,15 +797,35 @@ export class Game {
             );
           }
         }
+      } else if (activeBeatContract && !result.beatEvidence) {
+        diagnostics.beatEvaluator = {
+          status: 'failed',
+          beatId: activeBeatContract.id,
+          questId: activeBeatContract.questId,
+          objectiveId: activeBeatContract.objectiveId,
+          coveragePassed: false,
+          rulePassed: false,
+          beatIdMatched: false,
+          forbiddenPassed: true,
+          confidencePassed: false,
+          confidence: 0,
+          completionSignal: 'none',
+          reason: 'missing-beat-evidence',
+        };
+        diagnostics.timestampMs = Date.now();
       }
 
+      this.lastSugarAgentTurnDiagnostics = diagnostics;
       this.emitPluginEvent({
         type: 'interactionHandled',
         npcId: active.npcId,
         source: 'plugin',
         detail: 'agent-turn',
       });
-      return result;
+      return {
+        ...result,
+        diagnostics,
+      };
     }
 
     return {
@@ -671,6 +833,23 @@ export class Game {
       emotion: 'neutral',
       intent: 'fallback',
     };
+  }
+
+  private getPersistedSugarAgentConversationTurnCount(npcId: string): number {
+    if (!this.pluginManager) return 0;
+
+    const pluginState = this.pluginManager.serializeState();
+    const sugaragent = pluginState.sugaragent;
+    if (!isRecord(sugaragent) || !isRecord(sugaragent.dialogueSessions)) {
+      return 0;
+    }
+
+    const session = sugaragent.dialogueSessions[npcId];
+    if (!isRecord(session) || typeof session.turnCount !== 'number' || !Number.isFinite(session.turnCount)) {
+      return 0;
+    }
+
+    return Math.max(0, Math.floor(session.turnCount));
   }
 
   private getPersistedSugarAgentBeatTurnCount(npcId: string, beatId: string): number {
@@ -684,12 +863,22 @@ export class Game {
 
     const sessions = sugaragent.dialogueSessions;
     const sessionKey = `${npcId}:${beatId}`;
-    const session = sessions[sessionKey] ?? sessions[npcId];
-    if (!isRecord(session) || typeof session.turnCount !== 'number' || !Number.isFinite(session.turnCount)) {
+    const exactSession = sessions[sessionKey];
+    if (isRecord(exactSession) && typeof exactSession.turnCount === 'number' && Number.isFinite(exactSession.turnCount)) {
+      return Math.max(0, Math.floor(exactSession.turnCount));
+    }
+
+    const npcSession = sessions[npcId];
+    if (
+      !isRecord(npcSession)
+      || npcSession.activeBeatId !== beatId
+      || typeof npcSession.turnCount !== 'number'
+      || !Number.isFinite(npcSession.turnCount)
+    ) {
       return 0;
     }
 
-    return Math.max(0, Math.floor(session.turnCount));
+    return Math.max(0, Math.floor(npcSession.turnCount));
   }
 
   private startAgentConversation(session: { npcId: string; npcName?: string }): void {
@@ -703,6 +892,13 @@ export class Game {
 
   private getNpcInteractionMode(npcId: string): NPCInteractionMode {
     return this.npcInteractionModes.get(npcId) ?? 'scripted';
+  }
+
+  private getNpcInteractionPolicy(npcId: string): AgentInteractionPolicy {
+    const mode = this.getNpcInteractionMode(npcId);
+    if (mode === 'hybrid') return 'scripted-first';
+    if (mode === 'agent') return 'agent-first';
+    return 'fallback';
   }
 
   /**

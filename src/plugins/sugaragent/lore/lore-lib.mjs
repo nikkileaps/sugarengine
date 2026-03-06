@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
 const STOP_WORDS = new Set([
@@ -58,9 +59,19 @@ const VALID_QUERY_TYPES = new Set([
   'world_query',
   'mixed_query',
 ]);
+const FACT_SPLIT_PATTERN = /(?<=[.!?])\s+|\n+/g;
+const PROVENANCE_CONTEXT_CHARS = 56;
 
 function normalizeWhitespace(text) {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function sha256(value) {
+  return createHash('sha256').update(String(value ?? '')).digest('hex');
+}
+
+function shortHash(value, length = 16) {
+  return sha256(value).slice(0, Math.max(8, Math.min(64, length)));
 }
 
 function slugify(value) {
@@ -114,12 +125,12 @@ function parseFrontmatter(frontmatterBlock) {
 
 function splitFrontmatter(rawMarkdown) {
   if (!rawMarkdown.startsWith('---\n')) {
-    return { metadata: {}, body: rawMarkdown };
+    return { metadata: {}, body: rawMarkdown, bodyOffset: 0 };
   }
 
   const closingIndex = rawMarkdown.indexOf('\n---\n', 4);
   if (closingIndex < 0) {
-    return { metadata: {}, body: rawMarkdown };
+    return { metadata: {}, body: rawMarkdown, bodyOffset: 0 };
   }
 
   const frontmatterBlock = rawMarkdown.slice(4, closingIndex);
@@ -127,6 +138,7 @@ function splitFrontmatter(rawMarkdown) {
   return {
     metadata: parseFrontmatter(frontmatterBlock),
     body,
+    bodyOffset: closingIndex + 5,
   };
 }
 
@@ -155,20 +167,63 @@ function collectMarkdownFiles(root) {
   return files;
 }
 
-function sectionizeMarkdown(markdownBody) {
+function computeLineStarts(text) {
+  const starts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') starts.push(index + 1);
+  }
+  return starts;
+}
+
+function lineForOffset(lineStarts, offset) {
+  if (!Array.isArray(lineStarts) || lineStarts.length === 0) return 1;
+  const normalizedOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const start = lineStarts[mid];
+    const next = mid + 1 < lineStarts.length ? lineStarts[mid + 1] : Number.POSITIVE_INFINITY;
+    if (normalizedOffset < start) {
+      high = mid - 1;
+    } else if (normalizedOffset >= next) {
+      low = mid + 1;
+    } else {
+      return mid + 1;
+    }
+  }
+  return lineStarts.length;
+}
+
+function sectionizeMarkdown(markdownBody, options = {}) {
+  const baseOffset = Number.isFinite(options.baseOffset) ? Math.max(0, Math.floor(options.baseOffset)) : 0;
+  const lineStarts = Array.isArray(options.lineStarts) ? options.lineStarts : computeLineStarts(markdownBody);
   const lines = markdownBody.split('\n');
   const sections = [];
   let current = {
     heading: 'Introduction',
     contentLines: [],
+    startOffset: 0,
+    startLine: 1,
   };
+  let runningOffset = 0;
+  let lineNumber = 1;
 
   const flush = () => {
-    const text = normalizeWhitespace(current.contentLines.join('\n'));
+    const rawText = current.contentLines.join('\n');
+    const text = normalizeWhitespace(rawText);
     if (!text) return;
+    const endOffset = current.startOffset + rawText.length;
+    const globalStartOffset = baseOffset + current.startOffset;
+    const globalEndOffset = baseOffset + endOffset;
     sections.push({
       heading: current.heading,
       text,
+      rawText,
+      startOffset: globalStartOffset,
+      endOffset: globalEndOffset,
+      startLine: lineForOffset(lineStarts, globalStartOffset),
+      endLine: lineForOffset(lineStarts, Math.max(globalStartOffset, globalEndOffset - 1)),
     });
   };
 
@@ -179,14 +234,99 @@ function sectionizeMarkdown(markdownBody) {
       current = {
         heading: headingMatch[2].trim(),
         contentLines: [],
+        startOffset: runningOffset + line.length + 1,
+        startLine: lineNumber + 1,
       };
+      runningOffset += line.length + 1;
+      lineNumber += 1;
       continue;
     }
     current.contentLines.push(line);
+    runningOffset += line.length + 1;
+    lineNumber += 1;
   }
 
   flush();
   return sections;
+}
+
+function normalizeFactStatement(text) {
+  return normalizeWhitespace(String(text ?? ''))
+    .replace(/^[-*]\s+/g, '')
+    .replace(/^from the archives:\s*/i, '')
+    .replace(/[“”]/g, '"')
+    .trim();
+}
+
+function canonicalizeFactStatement(text) {
+  return normalizeFactStatement(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00c0-\u024f\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function collectStatementSpans(rawText) {
+  const source = String(rawText ?? '');
+  const spans = [];
+  const parts = source.split(FACT_SPLIT_PATTERN);
+  let cursor = 0;
+  for (const part of parts) {
+    const rawPart = String(part ?? '');
+    const startInSource = source.indexOf(rawPart, cursor);
+    const effectiveStart = startInSource >= 0 ? startInSource : cursor;
+    const effectiveEnd = effectiveStart + rawPart.length;
+    cursor = effectiveEnd + 1;
+    const statement = normalizeFactStatement(rawPart);
+    if (!statement) continue;
+    if (statement.length < 16) continue;
+    const canonical = canonicalizeFactStatement(statement);
+    if (!canonical) continue;
+    const tokenCount = canonical.split(' ').filter(Boolean).length;
+    if (tokenCount < 4) continue;
+    spans.push({
+      statement,
+      canonical,
+      startOffsetInText: effectiveStart,
+      endOffsetInText: effectiveEnd,
+    });
+  }
+  return spans;
+}
+
+function buildProvenanceAnchor(rawSourceText, startOffset, endOffset) {
+  const source = String(rawSourceText ?? '');
+  const safeStart = Number.isFinite(startOffset) ? Math.max(0, Math.min(source.length, Math.floor(startOffset))) : 0;
+  const safeEnd = Number.isFinite(endOffset) ? Math.max(safeStart, Math.min(source.length, Math.floor(endOffset))) : safeStart;
+  const prefixStart = Math.max(0, safeStart - PROVENANCE_CONTEXT_CHARS);
+  const suffixEnd = Math.min(source.length, safeEnd + PROVENANCE_CONTEXT_CHARS);
+  const prefix = source.slice(prefixStart, safeStart);
+  const exact = source.slice(safeStart, safeEnd);
+  const suffix = source.slice(safeEnd, suffixEnd);
+  const normalizedPrefix = normalizeWhitespace(prefix).toLowerCase();
+  const normalizedExact = normalizeWhitespace(exact).toLowerCase();
+  const normalizedSuffix = normalizeWhitespace(suffix).toLowerCase();
+  const signature = `${normalizedPrefix}|${normalizedExact}|${normalizedSuffix}`;
+  return {
+    prefix,
+    exact,
+    suffix,
+    normalizedExact,
+    signatureHash: shortHash(signature, 24),
+  };
+}
+
+function scoreCanonicalSimilarity(leftCanonical, rightCanonical) {
+  const leftTokens = new Set(String(leftCanonical ?? '').split(' ').filter(Boolean));
+  const rightTokens = new Set(String(rightCanonical ?? '').split(' ').filter(Boolean));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  if (union === 0) return 0;
+  return overlap / union;
 }
 
 function tokenize(text) {
@@ -370,7 +510,8 @@ export function ingestLoreDirectory({
   commit,
   repo = 'local',
   ref,
-  toolVersion = 'phase2',
+  toolVersion = 'phase5',
+  previousArtifacts = null,
 }) {
   const absoluteSourceDir = path.resolve(sourceDir);
   if (!fs.existsSync(absoluteSourceDir)) {
@@ -379,12 +520,15 @@ export function ingestLoreDirectory({
 
   const markdownFiles = collectMarkdownFiles(absoluteSourceDir);
   const chunks = [];
+  const facts = [];
+  const factById = new Map();
   const issues = [];
 
   for (const absoluteFilePath of markdownFiles) {
     const relativeFilePath = path.relative(absoluteSourceDir, absoluteFilePath);
     const raw = fs.readFileSync(absoluteFilePath, 'utf8');
-    const { metadata, body } = splitFrontmatter(raw);
+    const { metadata, body, bodyOffset } = splitFrontmatter(raw);
+    const lineStarts = computeLineStarts(raw);
 
     if (typeof metadata.id !== 'string' || metadata.id.trim().length === 0) {
       issues.push(`Missing required metadata "id" in ${relativeFilePath}`);
@@ -403,7 +547,10 @@ export function ingestLoreDirectory({
       continue;
     }
 
-    const sections = sectionizeMarkdown(body);
+    const sections = sectionizeMarkdown(body, {
+      baseOffset: bodyOffset,
+      lineStarts,
+    });
     if (sections.length === 0) {
       issues.push(`No usable markdown content in ${relativeFilePath}`);
       continue;
@@ -414,7 +561,7 @@ export function ingestLoreDirectory({
       if (!section) continue;
       const sectionSlug = slugify(section.heading || `section-${i + 1}`) || `section-${i + 1}`;
       const chunkId = `${metadata.id}#${sectionSlug}`;
-      chunks.push({
+      const chunk = {
         chunkId,
         pageId: metadata.id,
         title: metadata.title,
@@ -427,6 +574,14 @@ export function ingestLoreDirectory({
         content: section.text,
         summary: firstSentence(section.text),
         tokens: tokenize(section.text),
+        provenance: {
+          offsets: {
+            start: section.startOffset,
+            end: section.endOffset,
+            lineStart: section.startLine,
+            lineEnd: section.endLine,
+          },
+        },
         metadata: {
           id: metadata.id,
           title: metadata.title,
@@ -437,17 +592,110 @@ export function ingestLoreDirectory({
           time_period: typeof metadata.time_period === 'string' ? metadata.time_period : undefined,
           tags: Array.isArray(metadata.tags) ? metadata.tags : [],
           beat_ids: Array.isArray(metadata.beat_ids) ? metadata.beat_ids : [],
+          fact_ids: [],
         },
-      });
+      };
+
+      const factSpans = collectStatementSpans(section.rawText);
+      for (const span of factSpans) {
+        const statementStart = section.startOffset + span.startOffsetInText;
+        const statementEnd = section.startOffset + span.endOffsetInText;
+        const factId = `fact.${shortHash(`${metadata.id}|${span.canonical}`, 24)}`;
+        const anchor = buildProvenanceAnchor(raw, statementStart, statementEnd);
+        if (factById.has(factId)) {
+          const existing = factById.get(factId);
+          if (existing && Array.isArray(existing.chunkIds) && !existing.chunkIds.includes(chunkId)) {
+            existing.chunkIds.push(chunkId);
+          }
+          if (!chunk.metadata.fact_ids.includes(factId)) {
+            chunk.metadata.fact_ids.push(factId);
+          }
+          continue;
+        }
+        const factRecord = {
+          factId,
+          pageId: metadata.id,
+          chunkId,
+          chunkIds: [chunkId],
+          statement: span.statement,
+          canonicalStatement: span.canonical,
+          sourceFile: relativeFilePath,
+          sourceRepo: repo,
+          sourceCommit: commit,
+          sourceRef: normalizeOptionalString(ref),
+          provenance: {
+            offsets: {
+              start: statementStart,
+              end: statementEnd,
+              lineStart: lineForOffset(lineStarts, statementStart),
+              lineEnd: lineForOffset(lineStarts, Math.max(statementStart, statementEnd - 1)),
+            },
+            anchor: {
+              prefix: anchor.prefix,
+              exact: anchor.exact,
+              suffix: anchor.suffix,
+              normalizedExact: anchor.normalizedExact,
+              signatureHash: anchor.signatureHash,
+            },
+          },
+          verification: {
+            status: 'available',
+            reason: null,
+            anchorConfidence: 1,
+          },
+          supersedesFactIds: [],
+        };
+        facts.push(factRecord);
+        factById.set(factId, factRecord);
+        chunk.metadata.fact_ids.push(factId);
+      }
+      chunk.metadata.fact_ids.sort((a, b) => a.localeCompare(b));
+      chunks.push(chunk);
     }
   }
 
   if (chunks.length === 0) {
     throw new Error(issues[0] ?? 'No lore chunks generated.');
   }
+  if (facts.length === 0) {
+    issues.push('No atomic facts extracted from lore content.');
+  }
+
+  const sortedChunks = [...chunks].sort((a, b) => a.chunkId.localeCompare(b.chunkId));
+  const sortedFacts = [...facts].sort((a, b) => a.factId.localeCompare(b.factId));
+  const loreArtifactVersion = `lore.${shortHash([
+    `commit:${commit}`,
+    ...sortedChunks.map((chunk) => chunk.chunkId),
+    ...sortedFacts.map((fact) => `${fact.factId}:${fact.canonicalStatement}`),
+  ].join('|'), 24)}`;
+
+  const { mappings, unresolvedOldFacts } = buildFactMigrationRecords({
+    previousFacts: Array.isArray(previousArtifacts?.facts) ? previousArtifacts.facts : [],
+    nextFacts: sortedFacts,
+  });
+  for (const mapping of mappings) {
+    if (mapping.newFactId === null) continue;
+    const nextFact = factById.get(mapping.newFactId);
+    if (!nextFact) continue;
+    if (mapping.oldFactId === mapping.newFactId) continue;
+    if (!Array.isArray(nextFact.supersedesFactIds)) {
+      nextFact.supersedesFactIds = [];
+    }
+    if (!nextFact.supersedesFactIds.includes(mapping.oldFactId)) {
+      nextFact.supersedesFactIds.push(mapping.oldFactId);
+    }
+  }
+  for (const fact of sortedFacts) {
+    if (Array.isArray(fact.supersedesFactIds)) {
+      fact.supersedesFactIds = Array.from(new Set(fact.supersedesFactIds))
+        .sort((a, b) => a.localeCompare(b));
+    }
+  }
 
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    loreSchemaVersion: 2,
+    loreArtifactVersion,
     source: {
       repo,
       commit,
@@ -457,15 +705,168 @@ export function ingestLoreDirectory({
     toolVersion,
     counts: {
       files: markdownFiles.length,
-      chunks: chunks.length,
+      chunks: sortedChunks.length,
+      facts: sortedFacts.length,
       issues: issues.length,
     },
+    durability: {
+      factSchemaVersion: 1,
+      provenanceSchemaVersion: 1,
+      migrationSchemaVersion: 1,
+      unresolvedOldFacts: unresolvedOldFacts.length,
+    },
+  };
+
+  const migrations = {
+    schemaVersion: 1,
+    generatedAt: manifest.generatedAt,
+    fromArtifactVersion: normalizeOptionalString(previousArtifacts?.manifest?.loreArtifactVersion)
+      ?? (normalizeOptionalString(previousArtifacts?.manifest?.source?.commit)
+        ? `legacy.${previousArtifacts.manifest.source.commit}`
+        : null),
+    toArtifactVersion: loreArtifactVersion,
+    mappings,
+    unresolvedOldFacts,
   };
 
   return {
     manifest,
-    chunks,
+    chunks: sortedChunks,
+    facts: sortedFacts,
+    migrations,
     issues,
+  };
+}
+
+function normalizeExistingFactRecord(raw) {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const factId = normalizeOptionalString(raw.factId);
+  if (!factId) return null;
+  const statement = normalizeFactStatement(raw.statement ?? raw.text ?? '');
+  const canonicalStatement = canonicalizeFactStatement(raw.canonicalStatement ?? statement);
+  if (!statement || !canonicalStatement) return null;
+  const pageId = normalizeOptionalString(raw.pageId);
+  const chunkId = normalizeOptionalString(raw.chunkId);
+  const sourceFile = normalizeOptionalString(raw.sourceFile);
+  const oldAnchorHash = normalizeOptionalString(raw?.provenance?.anchor?.signatureHash);
+  const offsetStart = Number.isFinite(raw?.provenance?.offsets?.start)
+    ? Math.max(0, Math.floor(raw.provenance.offsets.start))
+    : null;
+  return {
+    factId,
+    statement,
+    canonicalStatement,
+    pageId,
+    chunkId,
+    sourceFile,
+    oldAnchorHash,
+    offsetStart,
+  };
+}
+
+function buildFactMigrationRecords({ previousFacts, nextFacts }) {
+  const oldFacts = (Array.isArray(previousFacts) ? previousFacts : [])
+    .map((entry) => normalizeExistingFactRecord(entry))
+    .filter((entry) => entry !== null)
+    .sort((a, b) => a.factId.localeCompare(b.factId));
+  if (oldFacts.length === 0) {
+    return {
+      mappings: [],
+      unresolvedOldFacts: [],
+    };
+  }
+
+  const nextById = new Map();
+  for (const fact of Array.isArray(nextFacts) ? nextFacts : []) {
+    if (typeof fact?.factId === 'string' && fact.factId.length > 0) {
+      nextById.set(fact.factId, fact);
+    }
+  }
+  const reservedNextFactIds = new Set();
+  const mappings = [];
+  const unresolvedOldFacts = [];
+
+  for (const oldFact of oldFacts) {
+    const directMatch = nextById.get(oldFact.factId);
+    if (directMatch) {
+      const oldStart = oldFact.offsetStart;
+      const newStart = Number.isFinite(directMatch?.provenance?.offsets?.start) ? directMatch.provenance.offsets.start : null;
+      const oldAnchorHash = oldFact.oldAnchorHash;
+      const newAnchorHash = normalizeOptionalString(directMatch?.provenance?.anchor?.signatureHash);
+      const reattached = oldStart !== null && newStart !== null && oldStart !== newStart;
+      const anchorStable = Boolean(oldAnchorHash && newAnchorHash && oldAnchorHash === newAnchorHash);
+      mappings.push({
+        oldFactId: oldFact.factId,
+        newFactId: directMatch.factId,
+        kind: reattached ? 'reattached' : 'unchanged',
+        confidence: reattached ? (anchorStable ? 1 : 0.92) : 1,
+        reason: reattached
+          ? (anchorStable ? 'offset_drift_anchor_match' : 'offset_drift_factid_match')
+          : 'factid_stable',
+      });
+      continue;
+    }
+
+    const candidates = (Array.isArray(nextFacts) ? nextFacts : [])
+      .filter((nextFact) => {
+        if (!nextFact || typeof nextFact.factId !== 'string') return false;
+        if (reservedNextFactIds.has(nextFact.factId)) return false;
+        if (oldFact.pageId && typeof nextFact.pageId === 'string' && nextFact.pageId !== oldFact.pageId) {
+          return false;
+        }
+        if (oldFact.sourceFile && typeof nextFact.sourceFile === 'string' && nextFact.sourceFile !== oldFact.sourceFile) {
+          return false;
+        }
+        return true;
+      })
+      .map((nextFact) => {
+        const similarity = scoreCanonicalSimilarity(oldFact.canonicalStatement, nextFact.canonicalStatement);
+        const oldAnchorHash = oldFact.oldAnchorHash;
+        const newAnchorHash = normalizeOptionalString(nextFact?.provenance?.anchor?.signatureHash);
+        const anchorMatch = oldAnchorHash && newAnchorHash && oldAnchorHash === newAnchorHash;
+        const sameChunk = oldFact.chunkId && typeof nextFact.chunkId === 'string' && oldFact.chunkId === nextFact.chunkId;
+        const score = (similarity * 0.82)
+          + (anchorMatch ? 0.14 : 0)
+          + (sameChunk ? 0.08 : 0);
+        return {
+          nextFact,
+          score: Number(score.toFixed(4)),
+        };
+      })
+      .sort((a, b) => (
+        b.score - a.score
+        || a.nextFact.factId.localeCompare(b.nextFact.factId)
+      ));
+
+    const best = candidates[0];
+    if (best && best.score >= 0.58) {
+      reservedNextFactIds.add(best.nextFact.factId);
+      mappings.push({
+        oldFactId: oldFact.factId,
+        newFactId: best.nextFact.factId,
+        kind: 'superseded',
+        confidence: best.score,
+        reason: 'semantic_update_mapped',
+      });
+      continue;
+    }
+
+    mappings.push({
+      oldFactId: oldFact.factId,
+      newFactId: null,
+      kind: 'removed',
+      confidence: 0,
+      reason: 'verification_unavailable_no_reattachment',
+    });
+    unresolvedOldFacts.push({
+      oldFactId: oldFact.factId,
+      reason: 'verification_unavailable_no_reattachment',
+    });
+  }
+
+  return {
+    mappings,
+    unresolvedOldFacts,
   };
 }
 
@@ -475,13 +876,34 @@ export function writeLoreArtifacts(outputDir, artifacts) {
 
   const manifestPath = path.join(absoluteOutputDir, 'manifest.json');
   const chunksPath = path.join(absoluteOutputDir, 'chunks.json');
+  const factsPath = path.join(absoluteOutputDir, 'facts.json');
+  const migrationsPath = path.join(absoluteOutputDir, 'migrations.json');
 
   fs.writeFileSync(manifestPath, `${JSON.stringify(artifacts.manifest, null, 2)}\n`, 'utf8');
   fs.writeFileSync(chunksPath, `${JSON.stringify(artifacts.chunks, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(
+    factsPath,
+    `${JSON.stringify(Array.isArray(artifacts.facts) ? artifacts.facts : [], null, 2)}\n`,
+    'utf8',
+  );
+  fs.writeFileSync(
+    migrationsPath,
+    `${JSON.stringify(artifacts.migrations ?? {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      fromArtifactVersion: null,
+      toArtifactVersion: normalizeOptionalString(artifacts?.manifest?.loreArtifactVersion) ?? null,
+      mappings: [],
+      unresolvedOldFacts: [],
+    }, null, 2)}\n`,
+    'utf8',
+  );
 
   return {
     manifestPath,
     chunksPath,
+    factsPath,
+    migrationsPath,
   };
 }
 
@@ -489,6 +911,8 @@ export function loadLoreArtifacts(outputDir) {
   const absoluteOutputDir = path.resolve(outputDir);
   const manifestPath = path.join(absoluteOutputDir, 'manifest.json');
   const chunksPath = path.join(absoluteOutputDir, 'chunks.json');
+  const factsPath = path.join(absoluteOutputDir, 'facts.json');
+  const migrationsPath = path.join(absoluteOutputDir, 'migrations.json');
 
   if (!fs.existsSync(manifestPath) || !fs.existsSync(chunksPath)) {
     return null;
@@ -497,10 +921,42 @@ export function loadLoreArtifacts(outputDir) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   const chunks = JSON.parse(fs.readFileSync(chunksPath, 'utf8'));
   if (!Array.isArray(chunks)) return null;
+  const facts = fs.existsSync(factsPath)
+    ? JSON.parse(fs.readFileSync(factsPath, 'utf8'))
+    : [];
+  const migrations = fs.existsSync(migrationsPath)
+    ? JSON.parse(fs.readFileSync(migrationsPath, 'utf8'))
+    : {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      fromArtifactVersion: null,
+      toArtifactVersion: normalizeOptionalString(manifest?.loreArtifactVersion) ?? null,
+      mappings: [],
+      unresolvedOldFacts: [],
+    };
+  const safeFacts = Array.isArray(facts) ? facts : [];
+  const factById = {};
+  const factsByChunkId = {};
+  for (const fact of safeFacts) {
+    const factId = normalizeOptionalString(fact?.factId);
+    if (!factId) continue;
+    factById[factId] = fact;
+    const chunkIds = Array.isArray(fact?.chunkIds)
+      ? fact.chunkIds.filter((entry) => typeof entry === 'string')
+      : [normalizeOptionalString(fact?.chunkId)].filter(Boolean);
+    for (const chunkId of chunkIds) {
+      if (!factsByChunkId[chunkId]) factsByChunkId[chunkId] = [];
+      factsByChunkId[chunkId].push(fact);
+    }
+  }
 
   return {
     manifest,
     chunks,
+    facts: safeFacts,
+    migrations,
+    factById,
+    factsByChunkId,
   };
 }
 

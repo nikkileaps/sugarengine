@@ -10,11 +10,14 @@ import type {
   LLMProvider,
 } from './types';
 import type { LocalRuntimeBridge } from '../../runtime/types';
+import type { SugarAgentRuntimeMode } from '../../runtime/types';
+import type { PluginAgentTurnDiagnostics } from '../../../../engine/plugins/types';
 
 export interface LocalLLMProviderOptions {
   runtime: LocalRuntimeBridge;
   modelId?: string;
   maxAttempts?: number;
+  defaultRuntimeMode?: SugarAgentRuntimeMode;
 }
 
 function fallbackOutput(playerMessage: string): SugarAgentTurnOutput {
@@ -42,16 +45,20 @@ export class LocalLLMProvider implements LLMProvider {
   private readonly runtime: LocalRuntimeBridge;
   private readonly modelId: string;
   private readonly maxAttempts: number;
+  private readonly defaultRuntimeMode?: SugarAgentRuntimeMode;
   private loaded = false;
 
   constructor(options: LocalLLMProviderOptions) {
     this.runtime = options.runtime;
     this.modelId = options.modelId ?? 'chat-fast';
     this.maxAttempts = Math.max(1, options.maxAttempts ?? 2);
+    this.defaultRuntimeMode = options.defaultRuntimeMode;
   }
 
   async health(): Promise<LLMHealthStatus> {
-    const status = await this.runtime.health();
+    const status = await this.runtime.health({
+      runtimeMode: this.defaultRuntimeMode,
+    });
     return {
       ok: status.ok,
       detail: status.detail,
@@ -61,6 +68,7 @@ export class LocalLLMProvider implements LLMProvider {
   async generateStructured(request: LLMGenerateRequest): Promise<LLMGenerateResult> {
     const validationErrors: string[] = [];
     const rawResponses: string[] = [];
+    let latestDiagnostics: PluginAgentTurnDiagnostics | undefined;
 
     if (!this.loaded) {
       try {
@@ -75,13 +83,20 @@ export class LocalLLMProvider implements LLMProvider {
           usedFallback: true,
           validationErrors,
           rawResponses,
+          diagnostics: latestDiagnostics,
         };
       }
     }
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
-      let runtimeResponse: { jsonText: string };
+      let runtimeResponse: { jsonText: string; diagnostics?: Record<string, unknown> };
       try {
+        const runtimeContext: NonNullable<LLMGenerateRequest['context']> = request.context
+          ? { ...request.context }
+          : {};
+        if (!runtimeContext.runtimeMode && this.defaultRuntimeMode) {
+          runtimeContext.runtimeMode = this.defaultRuntimeMode;
+        }
         runtimeResponse = await this.runtime.generateStructured({
           npcId: request.npcId,
           npcName: request.npcName,
@@ -90,7 +105,7 @@ export class LocalLLMProvider implements LLMProvider {
           repair: attempt > 1,
           npcProfile: request.npcProfile,
           globalSafetyBounds: request.globalSafetyBounds,
-          context: request.context,
+          context: runtimeContext,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -99,6 +114,9 @@ export class LocalLLMProvider implements LLMProvider {
       }
 
       rawResponses.push(runtimeResponse.jsonText);
+      if (runtimeResponse.diagnostics) {
+        latestDiagnostics = runtimeResponse.diagnostics as PluginAgentTurnDiagnostics;
+      }
 
       let parsed: unknown;
       try {
@@ -126,6 +144,7 @@ export class LocalLLMProvider implements LLMProvider {
         usedFallback: false,
         validationErrors,
         rawResponses,
+        diagnostics: latestDiagnostics,
       };
     }
 
@@ -135,6 +154,7 @@ export class LocalLLMProvider implements LLMProvider {
       usedFallback: true,
       validationErrors,
       rawResponses,
+      diagnostics: latestDiagnostics,
     };
   }
 }

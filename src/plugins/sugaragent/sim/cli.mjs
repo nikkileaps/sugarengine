@@ -20,7 +20,7 @@ function parseArgs(argv) {
     npc: 'baker',
     ask: null,
     provider: 'echo',
-    runtime: 'auto',
+    runtime: 'llama',
     simulateInvalidJson: 'never',
     debugStructured: false,
     useAuthoring: true,
@@ -247,6 +247,11 @@ function printSessionStartup(startup) {
   if (startup.scenario) {
     console.log(`[sugaragent:sim] scenario=${startup.scenario.id} (${startup.scenario.description})`);
   }
+  if (startup.pipeline) {
+    const version = typeof startup.pipeline.version === 'string' ? startup.pipeline.version : 'v2';
+    const enabled = startup.pipeline.enabled === true;
+    console.log(`[sugaragent:sim] pipeline version=${version} enabled=${enabled}`);
+  }
 
   if (startup.authoring) {
     if (startup.authoring.loaded) {
@@ -297,6 +302,46 @@ function printTurnResult(args, result) {
     console.log(`[sugaragent:sim] validation=${result.validationErrors.join(' | ')}`);
   }
 
+  if (result?.routing && typeof result.routing === 'object') {
+    const intent = typeof result.routing.intent === 'string' ? result.routing.intent : 'unknown';
+    const confidence = Number.isFinite(result.routing.confidence)
+      ? result.routing.confidence.toFixed(2)
+      : 'n/a';
+    const margin = Number.isFinite(result.routing.margin)
+      ? result.routing.margin.toFixed(2)
+      : 'n/a';
+    const policyPath = typeof result.routing.policyPath === 'string'
+      ? result.routing.policyPath
+      : 'n/a';
+    console.log(`[sugaragent:sim] routing intent=${intent} confidence=${confidence} margin=${margin} policy=${policyPath}`);
+  }
+  if (result?.pipeline && typeof result.pipeline === 'object') {
+    const version = typeof result.pipeline.version === 'string' ? result.pipeline.version : 'unknown';
+    const enabled = result.pipeline.enabled === true;
+    const routeIntent = typeof result.pipeline.routeIntent === 'string'
+      ? result.pipeline.routeIntent
+      : 'unknown';
+    console.log(`[sugaragent:sim] pipeline version=${version} enabled=${enabled} route=${routeIntent}`);
+  }
+
+  const groundingSummary = result?.grounding?.summary;
+  if (groundingSummary && typeof groundingSummary === 'object') {
+    const decision = typeof groundingSummary.decision === 'string' ? groundingSummary.decision : 'n/a';
+    const supported = Number.isFinite(groundingSummary.supportedCount) ? groundingSummary.supportedCount : 0;
+    const weak = Number.isFinite(groundingSummary.weakCount) ? groundingSummary.weakCount : 0;
+    const unsupported = Number.isFinite(groundingSummary.unsupportedCount) ? groundingSummary.unsupportedCount : 0;
+    const nonFactual = Number.isFinite(groundingSummary.nonFactualCount) ? groundingSummary.nonFactualCount : 0;
+    console.log(
+      `[sugaragent:sim] grounding decision=${decision} supported=${supported} weak=${weak} unsupported=${unsupported} non_factual=${nonFactual}`,
+    );
+  }
+  const unsupportedClaimRejections = result?.groundingStats?.unsupportedClaimRejections;
+  if (Number.isFinite(unsupportedClaimRejections)) {
+    console.log(
+      `[sugaragent:sim] grounding-unsupported-rejections-total=${unsupportedClaimRejections}`,
+    );
+  }
+
   if (result.usedFallback) {
     console.log('[sugaragent:sim] local provider fallback engaged.');
   }
@@ -307,6 +352,15 @@ function printTurnResult(args, result) {
 
   if (args.debugStructured) {
     console.log(`[sugaragent:sim] structured=${JSON.stringify(result.output)}`);
+    if (result?.grounding) {
+      console.log(`[sugaragent:sim] grounding=${JSON.stringify(result.grounding)}`);
+    }
+    if (result?.routing) {
+      console.log(`[sugaragent:sim] routing=${JSON.stringify(result.routing)}`);
+    }
+    if (result?.pipeline) {
+      console.log(`[sugaragent:sim] pipeline=${JSON.stringify(result.pipeline)}`);
+    }
   }
 
   console.log(formatReply(args.npc, result.output));

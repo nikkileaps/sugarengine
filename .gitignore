@@ -32,3 +32,6 @@ src/plugins/sugaragent/runtime/bundle/*
 
 # SugarAgent sim local session files
 .sugaragent-sim-sessions/
+
+# SugarAgent eval run artifacts
+.sugaragent-evals/

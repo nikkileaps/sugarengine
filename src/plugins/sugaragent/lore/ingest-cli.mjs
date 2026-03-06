@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   ingestLoreDirectory,
+  loadLoreArtifacts,
   writeLoreArtifacts,
 } from './lore-lib.mjs';
 
@@ -154,11 +155,13 @@ function isDirectExecution(metaUrl) {
 
 export function runSugarAgentLoreIngestCli(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  const previousArtifacts = loadLoreArtifacts(args.output);
   const artifacts = ingestLoreDirectory({
     sourceDir: args.source,
     commit: args.commit,
     repo: args.repo,
     ref: args.ref ?? undefined,
+    previousArtifacts,
   });
   const written = writeLoreArtifacts(args.output, artifacts);
 
@@ -184,7 +187,10 @@ export function runSugarAgentLoreIngestCli(argv = process.argv.slice(2)) {
   if (args.writeLock) {
     console.log(`[sugaragent:lore:ingest] lock-updated=${args.lockPath}`);
   }
-  console.log(`[sugaragent:lore:ingest] chunks=${artifacts.manifest.counts.chunks} files=${artifacts.manifest.counts.files}`);
+  console.log(`[sugaragent:lore:ingest] chunks=${artifacts.manifest.counts.chunks} facts=${artifacts.manifest.counts.facts ?? 0} files=${artifacts.manifest.counts.files}`);
+  if (artifacts.manifest?.loreArtifactVersion) {
+    console.log(`[sugaragent:lore:ingest] artifact=${artifacts.manifest.loreArtifactVersion}`);
+  }
   if (artifacts.issues.length > 0) {
     console.log(`[sugaragent:lore:ingest] issues=${artifacts.issues.length}`);
     for (const issue of artifacts.issues) {
@@ -193,6 +199,8 @@ export function runSugarAgentLoreIngestCli(argv = process.argv.slice(2)) {
   }
   console.log(`[sugaragent:lore:ingest] wrote ${written.manifestPath}`);
   console.log(`[sugaragent:lore:ingest] wrote ${written.chunksPath}`);
+  console.log(`[sugaragent:lore:ingest] wrote ${written.factsPath}`);
+  console.log(`[sugaragent:lore:ingest] wrote ${written.migrationsPath}`);
 }
 
 export function runSugarAgentLoreIngestCliFromProcess(argv = process.argv.slice(2)) {
