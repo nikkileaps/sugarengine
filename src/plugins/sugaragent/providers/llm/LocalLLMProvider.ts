@@ -66,6 +66,19 @@ export class LocalLLMProvider implements LLMProvider {
   }
 
   async generateStructured(request: LLMGenerateRequest): Promise<LLMGenerateResult> {
+    const logger = (globalThis as { console?: { debug?: (...args: unknown[]) => void } }).console;
+    const trimmedMessage = typeof request.playerMessage === 'string'
+      ? request.playerMessage.trim()
+      : '';
+    logger?.debug?.('[sugaragent][llm-provider][start]', {
+      provider: this.name,
+      runtimeMode: request.context?.runtimeMode ?? this.defaultRuntimeMode ?? 'llama',
+      npcId: request.npcId,
+      messageLength: trimmedMessage.length,
+      hasProfile: Boolean(request.npcProfile),
+      hasSafetyBounds: Array.isArray(request.globalSafetyBounds) && request.globalSafetyBounds.length > 0,
+    });
+
     const validationErrors: string[] = [];
     const rawResponses: string[] = [];
     let latestDiagnostics: PluginAgentTurnDiagnostics | undefined;

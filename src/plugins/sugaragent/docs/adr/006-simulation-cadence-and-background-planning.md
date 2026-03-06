@@ -51,7 +51,6 @@ Current implementation in this repo delivers:
 
 1. Plugin-owned cadence simulation core:
    - `src/plugins/sugaragent/simulation/cadence.ts` (source of truth)
-   - `src/plugins/sugaragent/simulation/cadence.runtime.mjs` (generated runtime adapter)
 2. Tiered cadence behavior:
    - Near/mid/far tier assignment by simulated distance.
    - Per-tier update cadence and continuity tracking.

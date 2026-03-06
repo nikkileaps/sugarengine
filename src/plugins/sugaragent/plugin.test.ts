@@ -85,6 +85,59 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(snapshot.runtime?.lastTurnDiagnostics?.mode).toBe('character');
   });
 
+  it('enforces grounding in preview and converts unsupported knowledge claims to uncertainty', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'The resort was destroyed last year.',
+              emotion: 'neutral',
+              intent: 'explain',
+              proposedIntents: [],
+              citations: [],
+            }),
+            diagnostics: {},
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'what do you know about the resort near here?',
+      npcProfile: {
+        selfEntityId: 'npc.baker',
+        selfLoreScopes: ['lore.npc.baker'],
+      },
+    });
+
+    expect(turn?.intent).toBe('uncertain');
+    expect(turn?.utterance.toLowerCase()).toContain('not sure');
+    expect(turn?.utterance.toLowerCase()).not.toContain('local language runtime is unavailable');
+    expect(turn?.diagnostics?.validation?.decision).toBe('fallback');
+    expect(turn?.diagnostics?.validation?.errors?.join(' | ')).toContain('grounding repair required');
+  });
+
   it('preserves mixed-initiative decision metadata from provider diagnostics', async () => {
     const plugin = createSugarAgentPlugin({
       runtimeBridge: {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createConversationFallbackReply,
   createDeterministicFallbackReply,
-} from './fallback-policy.mjs';
+} from './fallback-policy';
 
 describe('SugarAgent dialogue fallback policy', () => {
   it('returns generic conversation fallback for non-recall prompts', () => {

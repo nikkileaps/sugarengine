@@ -130,4 +130,6 @@ The save system automatically detects the platform and uses the appropriate stor
 - [NPC System](./013-npc.md) - NPC behavior trees and beat graph actions
 - [World State](./014-world-state.md) - Unified conditions, flags, and state notifications
 - [Plugin System](./15-plugins.md) - Optional runtime plugin architecture
-- [SugarAgent Plugin](./16-sugaragent-plugin.md) - Optional SugarAgent plugin (phase 0)
+- [SugarAgent Plugin](./plugins/sugaragent/16-sugaragent-plugin.md) - Optional SugarAgent plugin (phase 0)
+- [SugarAgent Turn Lifecycle](./plugins/sugaragent/17-sugaragent-session-runtime.md) - In-engine turn path, grounding, and diagnostics
+- [TypeScript File Header Standard](../dev/typescript-file-header-standard.md) - Required top-of-file comment template for hand-authored `.ts` files

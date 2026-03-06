@@ -12,8 +12,21 @@ import type {
   PluginEvent,
 } from '../../engine/plugins';
 import { LocalLLMProvider } from './providers/llm/LocalLLMProvider';
+import type { LLMGenerateResult } from './providers/llm/types';
 import type { LocalRuntimeBridge } from './runtime';
 import { HttpLocalRuntimeBridge, TauriLocalRuntimeBridge } from './runtime';
+import {
+  buildClaimRepairReason,
+  validateGroundedClaims,
+} from './session/core/grounding/claim-validator';
+import {
+  routeIntentRequiresGroundingRepair,
+  routeIntentToQueryType,
+  routeTurnIntent,
+} from './session/core/routing';
+import {
+  createGroundedUncertaintyReply,
+} from './session/core/turn-realization';
 
 export interface SugarAgentPluginOptions {
   /**
@@ -144,9 +157,315 @@ function toSafeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function toSafeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => toSafeString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
 function toSafeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return value;
+}
+
+function normalizeMemoryFact(text: unknown): string {
+  return String(text ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[.?!]+$/g, '');
+}
+
+function extractSimpleSalientFacts(message: unknown): string[] {
+  const source = String(message ?? '').trim();
+  if (!source) return [];
+  const facts: string[] = [];
+  const patterns = [
+    /my name is ([a-z\u00c0-\u024f' -]{2,40})/i,
+    /i am from ([a-z\u00c0-\u024f' -]{2,40})/i,
+    /i'm from ([a-z\u00c0-\u024f' -]{2,40})/i,
+    /i speak ([a-z\u00c0-\u024f' -]{2,40})/i,
+    /i like ([^.!?]{3,80})/i,
+    /i need ([^.!?]{3,80})/i,
+    /i have ([^.!?]{3,80})/i,
+    /there is ([^.!?]{3,100})/i,
+    /there's ([^.!?]{3,100})/i,
+    /i am worried about ([^.!?]{3,100})/i,
+    /i'm worried about ([^.!?]{3,100})/i,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    const normalized = normalizeMemoryFact(match[0]);
+    if (normalized.length >= 6) {
+      facts.push(normalized);
+    }
+  }
+  return Array.from(new Set(facts));
+}
+
+interface GroundingHistoryEntry {
+  role: 'player' | 'npc';
+  text: string;
+}
+
+function buildGroundingHistoryFromSummaries(
+  summaries: SugarAgentConversationSummaryV1[],
+): GroundingHistoryEntry[] {
+  const history: GroundingHistoryEntry[] = [];
+  for (const entry of summaries.slice(-12)) {
+    const raw = toSafeString(entry.summary);
+    if (!raw) continue;
+    const playerMatch = raw.match(/^player:\s*(.+)$/i);
+    if (playerMatch?.[1]) {
+      history.push({ role: 'player', text: playerMatch[1].trim() });
+      continue;
+    }
+    const npcMatch = raw.match(/^npc:\s*(.+)$/i);
+    if (npcMatch?.[1]) {
+      history.push({ role: 'npc', text: npcMatch[1].trim() });
+    }
+  }
+  return history;
+}
+
+function buildNpcMemoryFacts(npc: SugarAgentNPCMemoryStateV1): string[] {
+  const semanticFacts = npc.semantic
+    .slice(-12)
+    .map((entry) => normalizeMemoryFact(entry.belief))
+    .filter((entry) => entry.length >= 6);
+  const summaryFacts = npc.conversationSummaries
+    .slice(-12)
+    .flatMap((entry) => {
+      const value = toSafeString(entry.summary);
+      if (!value) return [];
+      const stripped = value.replace(/^(player|npc):\s*/i, '');
+      return extractSimpleSalientFacts(stripped);
+    })
+    .map((entry) => normalizeMemoryFact(entry))
+    .filter((entry) => entry.length >= 6);
+  return Array.from(new Set([...semanticFacts, ...summaryFacts])).slice(-24);
+}
+
+interface PreviewGroundingEvidenceEntry {
+  sourceId: string;
+  sourceType: string;
+  text: string;
+  selfAttributed?: boolean;
+  entityIds?: string[];
+}
+
+function buildPreviewGroundingEvidenceEntries(input: {
+  request: PluginAgentTurnRequest;
+  memoryFacts: string[];
+  history: GroundingHistoryEntry[];
+  citations: unknown;
+}): PreviewGroundingEvidenceEntry[] {
+  const entries: PreviewGroundingEvidenceEntry[] = [];
+  const seen = new Set<string>();
+
+  const pushEntry = (entry: PreviewGroundingEvidenceEntry) => {
+    const sourceId = toSafeString(entry.sourceId);
+    const sourceType = toSafeString(entry.sourceType);
+    const text = normalizeMemoryFact(entry.text);
+    if (!sourceId || !sourceType || !text) return;
+    const key = `${sourceType}:${text.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({
+      sourceId,
+      sourceType,
+      text,
+      selfAttributed: entry.selfAttributed === true,
+      entityIds: toSafeStringArray(entry.entityIds),
+    });
+  };
+
+  const selfEntityId = toSafeString(input.request.npcProfile?.selfEntityId);
+  const personaText = toSafeString(input.request.npcProfile?.persona);
+  const npcDisplayName = toSafeString(input.request.npcName)
+    ?? toSafeString(input.request.npcId)
+    ?? 'npc';
+  if (selfEntityId || personaText || npcDisplayName) {
+    const profileText = [
+      npcDisplayName ? `NPC name: ${npcDisplayName}.` : '',
+      input.request.npcId ? `NPC id: ${input.request.npcId}.` : '',
+      selfEntityId ? `Identity entity: ${selfEntityId}.` : '',
+      personaText ? `Persona: ${personaText}.` : '',
+    ].filter(Boolean).join(' ');
+    pushEntry({
+      sourceId: `self:${selfEntityId ?? input.request.npcId}`,
+      sourceType: 'self_profile',
+      text: profileText,
+      selfAttributed: true,
+      entityIds: selfEntityId ? [selfEntityId] : [],
+    });
+  }
+
+  for (const [index, fact] of (input.request.beatContract?.requiredFacts ?? []).entries()) {
+    pushEntry({
+      sourceId: `${input.request.beatContract?.id ?? 'beat'}:${index + 1}`,
+      sourceType: 'beat_fact',
+      text: fact,
+      selfAttributed: input.request.beatContract?.npcId === input.request.npcId,
+      entityIds: input.request.beatContract?.npcId ? [input.request.beatContract.npcId] : [],
+    });
+  }
+
+  for (const [index, fact] of input.memoryFacts.entries()) {
+    pushEntry({
+      sourceId: `session:${index + 1}`,
+      sourceType: 'session_fact',
+      text: fact,
+    });
+  }
+
+  for (const [index, fact] of extractSimpleSalientFacts(input.request.playerMessage).entries()) {
+    pushEntry({
+      sourceId: `player:${index + 1}`,
+      sourceType: 'player_fact',
+      text: fact,
+    });
+  }
+
+  const priorPlayerFacts = input.history
+    .filter((entry) => entry.role === 'player')
+    .flatMap((entry) => extractSimpleSalientFacts(entry.text))
+    .slice(-8);
+  for (const [index, fact] of priorPlayerFacts.entries()) {
+    pushEntry({
+      sourceId: `player_history:${index + 1}`,
+      sourceType: 'player_fact',
+      text: fact,
+    });
+  }
+
+  let citationIndex = 0;
+  for (const citation of Array.isArray(input.citations) ? input.citations : []) {
+    if (!isRecord(citation)) continue;
+    const sourceId = toSafeString(citation.sourceId);
+    const snippet = toSafeString(citation.snippet);
+    if (!sourceId || !snippet) continue;
+    citationIndex += 1;
+    pushEntry({
+      sourceId: sourceId.includes('#') ? sourceId : `citation:${citationIndex}:${sourceId}`,
+      sourceType: 'lore_chunk',
+      text: snippet,
+    });
+  }
+
+  return entries;
+}
+
+function enforcePreviewGrounding(
+  generated: LLMGenerateResult,
+  request: PluginAgentTurnRequest,
+  npc: SugarAgentNPCMemoryStateV1,
+): {
+  generated: LLMGenerateResult;
+  usedGroundingFallback: boolean;
+  groundingDebug: {
+    stage: 'applied' | 'skipped-provider-fallback';
+    routeIntent: string;
+    queryType: string;
+    evidenceCount: number;
+    decision: 'accept' | 'repair' | 'fallback';
+    unsupportedClaims: number;
+    requiresRepair: boolean;
+  };
+} {
+  if (generated.usedFallback) {
+    return {
+      generated,
+      usedGroundingFallback: false,
+      groundingDebug: {
+        stage: 'skipped-provider-fallback',
+        routeIntent: 'unknown',
+        queryType: 'conversation',
+        evidenceCount: 0,
+        decision: 'fallback',
+        unsupportedClaims: 0,
+        requiresRepair: false,
+      },
+    };
+  }
+
+  const npcName = request.npcName ?? request.npcId;
+  const routing = routeTurnIntent(request.playerMessage, npcName);
+  const queryType = routeIntentToQueryType(routing.intent);
+  const shouldRepair = routeIntentRequiresGroundingRepair(routing.intent)
+    || routing.intent === 'session_recall';
+  const selfEntityId = toSafeString(request.npcProfile?.selfEntityId);
+  const selfLoreScopes = toSafeStringArray(request.npcProfile?.selfLoreScopes);
+  const requiresSelfIdentityEvidence = queryType === 'self_query'
+    && (routing.intent === 'identity_self' || routing.intent === 'mixed_knowledge')
+    && (Boolean(selfEntityId) || selfLoreScopes.length > 0);
+  const memoryFacts = buildNpcMemoryFacts(npc);
+  const history = buildGroundingHistoryFromSummaries(npc.conversationSummaries);
+  const evidenceEntries = buildPreviewGroundingEvidenceEntries({
+    request,
+    memoryFacts,
+    history,
+    citations: generated.output.citations,
+  });
+  const baseGrounding = (validateGroundedClaims as any)({
+    utterance: generated.output.utterance,
+    queryType,
+    evidenceEntries,
+    selfEntityId,
+    requireSelfEvidence: requiresSelfIdentityEvidence,
+  });
+
+  let output = generated.output;
+  let usedGroundingFallback = false;
+  let decision: 'accept' | 'repair' | 'fallback' = baseGrounding.requiresRepair ? 'repair' : 'accept';
+  const validationErrors = [...generated.validationErrors];
+  if (baseGrounding.requiresRepair && shouldRepair) {
+    const reason = buildClaimRepairReason(baseGrounding);
+    output = createGroundedUncertaintyReply(queryType) as LLMGenerateResult['output'];
+    usedGroundingFallback = true;
+    decision = 'fallback';
+    validationErrors.push(`pipeline-v2 grounding repair required: ${reason}`);
+  }
+
+  const diagnosticsBase = isRecord(generated.diagnostics)
+    ? generated.diagnostics
+    : {};
+  const summary = isRecord(baseGrounding?.summary)
+    ? baseGrounding.summary
+    : {};
+  const unsupportedCount = typeof summary.unsupportedCount === 'number' && Number.isFinite(summary.unsupportedCount)
+    ? summary.unsupportedCount
+    : 0;
+  const diagnostics: PluginAgentTurnDiagnostics = {
+    ...(generated.diagnostics ?? {}),
+    validation: {
+      ...(isRecord(diagnosticsBase.validation) ? diagnosticsBase.validation : {}),
+      decision,
+      errors: validationErrors,
+      unsupportedClaims: unsupportedCount,
+      requiresRepair: baseGrounding.requiresRepair === true,
+    },
+  };
+
+  return {
+    generated: {
+      ...generated,
+      output,
+      validationErrors,
+      diagnostics,
+    },
+    usedGroundingFallback,
+    groundingDebug: {
+      stage: 'applied',
+      routeIntent: routing.intent,
+      queryType,
+      evidenceCount: evidenceEntries.length,
+      decision,
+      unsupportedClaims: unsupportedCount,
+      requiresRepair: baseGrounding.requiresRepair === true,
+    },
+  };
 }
 
 function normalizeRuntimeMode(value: unknown): 'llama' | 'auto' | 'mock' {
@@ -1035,7 +1354,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const previousMode = modeSession?.lastResolvedMode;
     if (localProvider) {
       try {
-        const generated = await localProvider.generateStructured({
+        const generatedFromProvider = await localProvider.generateStructured({
           npcId: request.npcId,
           npcName: request.npcName ?? 'Friend',
           playerMessage: message,
@@ -1043,32 +1362,60 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           globalSafetyBounds: request.globalSafetyBounds,
           context: runtimeContext,
         });
+        const {
+          generated,
+          usedGroundingFallback,
+          groundingDebug,
+        } = enforcePreviewGrounding(generatedFromProvider, request, npc);
+        const usedProviderFallback = generatedFromProvider.usedFallback;
+        const usedFallback = usedProviderFallback || usedGroundingFallback;
+        console.debug('[sugaragent][grounding]', {
+          npcId: request.npcId,
+          stage: groundingDebug.stage,
+          routeIntent: groundingDebug.routeIntent,
+          queryType: groundingDebug.queryType,
+          evidenceCount: groundingDebug.evidenceCount,
+          decision: groundingDebug.decision,
+          unsupportedClaims: groundingDebug.unsupportedClaims,
+          requiresRepair: groundingDebug.requiresRepair,
+          fallbackApplied: usedGroundingFallback,
+        });
         const diagnostics = normalizeTurnDiagnostics(generated.diagnostics, {
           interactionMode,
           interactionPolicy,
           hasBeatContract: Boolean(beatContract),
           previousMode,
-          usedFallback: generated.usedFallback,
+          usedFallback,
           validationErrors: generated.validationErrors,
           timestamp: now,
         });
         updateRuntimeStatus({
           provider: 'local',
           healthy: true,
-          detail: generated.usedFallback ? 'validation-fallback' : 'provider-ok',
-          lastOutcome: generated.usedFallback ? 'provider_fallback_validation' : 'provider_ok',
+          detail: usedProviderFallback
+            ? 'validation-fallback'
+            : usedGroundingFallback
+              ? 'grounding-fallback'
+              : 'provider-ok',
+          lastOutcome: usedFallback ? 'provider_fallback_validation' : 'provider_ok',
           lastAttempts: generated.attempts,
           lastValidationErrors: generated.validationErrors.slice(-3),
           lastTurnDiagnostics: diagnostics,
         });
-        if (generated.usedFallback) {
+        if (usedProviderFallback) {
           console.warn('[sugaragent] Local provider returned fallback output after validation failures.', {
             npcId: request.npcId,
             attempts: generated.attempts,
             errors: generated.validationErrors,
           });
         }
-        const providerTurn = generated.usedFallback
+        if (usedGroundingFallback) {
+          console.warn('[sugaragent] Grounding validation rejected provider output; returning uncertainty response.', {
+            npcId: request.npcId,
+            errors: generated.validationErrors,
+          });
+        }
+        const providerTurn = usedProviderFallback
           ? buildProviderUnavailableTurn(request.npcName)
           : {
             utterance: generated.output.utterance,

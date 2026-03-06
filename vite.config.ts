@@ -3,7 +3,6 @@ import { resolve } from 'path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'url';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
@@ -37,6 +36,7 @@ export default defineConfig({
           }>;
           startup?: { runtime?: { health?: { detail?: string } } };
         }>>();
+        const loreFallbackWarnings = new Set<string>();
 
         const isValidSlug = (value: string): boolean => /^[a-z0-9-]+$/.test(value);
 
@@ -361,20 +361,6 @@ export default defineConfig({
             && fsSync.existsSync(resolve(loreDir, 'chunks.json'));
         };
 
-        const readLoreGeneratedAtMs = (loreDir: string): number => {
-          const manifestPath = resolve(loreDir, 'manifest.json');
-          if (!fsSync.existsSync(manifestPath)) return 0;
-          try {
-            const raw = fsSync.readFileSync(manifestPath, 'utf8');
-            const parsed = JSON.parse(raw) as { generatedAt?: unknown };
-            if (typeof parsed.generatedAt !== 'string') return 0;
-            const parsedMs = Date.parse(parsed.generatedAt);
-            return Number.isFinite(parsedMs) ? parsedMs : 0;
-          } catch {
-            return 0;
-          }
-        };
-
         const resolveSessionLoreConfig = (slug: string): { loreDir: string; useLore: boolean } => {
           if (!slug) {
             return {
@@ -383,29 +369,36 @@ export default defineConfig({
             };
           }
 
-          const candidateLoreDirs = [
-            resolve(projectRoot, 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated'),
-            resolve(projectRoot, 'public', 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated'),
-            defaultLoreDir,
-          ];
-          const available = candidateLoreDirs
-            .map((candidate, index) => ({
-              candidate,
-              index,
-              available: hasLoreArtifacts(candidate),
-              generatedAtMs: readLoreGeneratedAtMs(candidate),
-            }))
-            .filter((entry) => entry.available);
-          const matched = available
-            .sort((a, b) => {
-              if (b.generatedAtMs !== a.generatedAtMs) {
-                return b.generatedAtMs - a.generatedAtMs;
-              }
-              return a.index - b.index;
-            })[0]?.candidate;
+          const gameLoreDir = resolve(projectRoot, 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated');
+          const gamePublicLoreDir = resolve(projectRoot, 'public', 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated');
+          const matchedGameLore = [gameLoreDir, gamePublicLoreDir].find((candidate) => hasLoreArtifacts(candidate));
+          if (matchedGameLore) {
+            return {
+              loreDir: matchedGameLore,
+              useLore: true,
+            };
+          }
+
+          const defaultAvailable = hasLoreArtifacts(defaultLoreDir);
+          if (defaultAvailable) {
+            const warningKey = `${slug}:default-lore-fallback`;
+            if (!loreFallbackWarnings.has(warningKey)) {
+              loreFallbackWarnings.add(warningKey);
+              console.warn(
+                `[sugaragent][lore][warn] No game-specific lore bundle found for "${slug}".\n`
+                + `Expected one of:\n`
+                + `  - ${gameLoreDir}\n`
+                + `  - ${gamePublicLoreDir}\n`
+                + `Using plugin default lore fallback:\n`
+                + `  - ${defaultLoreDir}\n`
+                + 'Re-ingest game lore to restore game-specific grounding.',
+              );
+            }
+          }
+
           return {
-            loreDir: matched ?? candidateLoreDirs[0] ?? defaultLoreDir,
-            useLore: Boolean(matched),
+            loreDir: defaultLoreDir,
+            useLore: defaultAvailable,
           };
         };
 
@@ -540,13 +533,10 @@ export default defineConfig({
           const repo = normalizeOptionalString(overrides.repo) ?? lockValues.repo ?? 'local';
           const ref = normalizeOptionalString(overrides.ref) ?? lockValues.ref;
 
-          const loreModulePath = pathToFileURL(
-            resolve(projectRoot, 'src/plugins/sugaragent/lore/lore-lib.mjs'),
-          ).href;
           const {
             ingestLoreDirectory,
             writeLoreArtifacts,
-          } = await import(loreModulePath) as {
+          } = await server.ssrLoadModule('/src/plugins/sugaragent/lore/lore-lib.ts') as {
             ingestLoreDirectory: (options: {
               sourceDir: string;
               commit: string;
@@ -596,10 +586,7 @@ export default defineConfig({
           if (!pending) {
             pending = (async () => {
               const loreConfig = resolveSessionLoreConfig(slug);
-              const runtimeModulePath = pathToFileURL(
-                resolve(projectRoot, 'src/plugins/sugaragent/session/runtime.mjs'),
-              ).href;
-              const { createSugarAgentSession } = await import(runtimeModulePath) as {
+              const { createSugarAgentSession } = await server.ssrLoadModule('/src/plugins/sugaragent/session/runtime.ts') as {
                 createSugarAgentSession: (options: Record<string, unknown>) => Promise<{
                   runTurn: (
                     playerMessage: string,
@@ -608,6 +595,8 @@ export default defineConfig({
                       npcProfileOverride?: Record<string, unknown>;
                       globalSafetyBoundsOverride?: string[];
                       context?: Record<string, unknown>;
+                      attempt?: number;
+                      repair?: boolean;
                     },
                   ) => Promise<{
                     output: Record<string, unknown>;
@@ -730,6 +719,10 @@ export default defineConfig({
                 ? request.npcProfile as Record<string, unknown>
                 : undefined;
               const globalSafetyBounds = normalizeStringArray(request.globalSafetyBounds);
+              const attempt = Number.isFinite(request.attempt)
+                ? Math.max(1, Math.floor(Number(request.attempt)))
+                : 1;
+              const repair = request.repair === true;
               if (!playerMessage) {
                 writeJson(res, 400, { ok: false, error: 'Missing playerMessage' });
                 return;
@@ -741,6 +734,8 @@ export default defineConfig({
                 npcProfileOverride: npcProfile,
                 globalSafetyBoundsOverride: globalSafetyBounds,
                 context: requestContext,
+                attempt,
+                repair,
               });
               const diagnostics = buildTurnDiagnostics(result, requestContext);
               writeJson(res, 200, {

@@ -151,7 +151,7 @@ SugarAgent is now available as a plugin package:
 
 - `src/plugins/sugaragent`
 
-See [SugarAgent Plugin API](./16-sugaragent-plugin.md) for phase-by-phase usage, real local llama runtime simulation, and lore ingestion/citation commands.
+See [SugarAgent Plugin API](./plugins/sugaragent/16-sugaragent-plugin.md) for in-engine plugin integration and runtime turn behavior.
 
 ## Example
 

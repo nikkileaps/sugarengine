@@ -12,7 +12,7 @@ At the same time, the real provider/runtime stack already exists:
 
 - `LocalLLMProvider` (`src/plugins/sugaragent/providers/llm/LocalLLMProvider.ts`)
 - runtime bridge contract (`src/plugins/sugaragent/runtime/types.ts`)
-- local runtime/session orchestration used by CLI/sim (`src/plugins/sugaragent/session/runtime.mjs`)
+- local runtime/session orchestration used by CLI/sim (`src/plugins/sugaragent/session/runtime.ts`)
 
 Current gap: the in-engine `runAgentTurn` path is not wired to the provider stack, so authored persona/lore/constraints cannot produce real LLM quality responses during gameplay.
 

@@ -51,7 +51,6 @@ Current implementation in this repo delivers:
 
 1. Plugin-owned eval runner:
    - `src/plugins/sugaragent/eval/runner.ts` (source of truth)
-   - `src/plugins/sugaragent/eval/runner.runtime.mjs` (generated runtime adapter)
 2. Public command integration:
    - `SugarAgent.execute({ command: "eval", ... })`
    - `npm run sugaragent:eval -- --suite smoke`
