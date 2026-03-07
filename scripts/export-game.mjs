@@ -11,7 +11,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { resolveGameSlug } from './lib/active-game.mjs';
+import { resolveGameSelection } from './lib/active-game.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -49,16 +49,6 @@ function parseArgs(argv) {
   return result;
 }
 
-async function resolveProjectPath(rawProjectPath, slug) {
-  if (rawProjectPath) {
-    return path.isAbsolute(rawProjectPath)
-      ? rawProjectPath
-      : path.join(projectRoot, rawProjectPath);
-  }
-
-  return path.join(projectRoot, 'games', slug, 'project.sgrgame');
-}
-
 function normalizeGameMeta(project, slug) {
   const inputMeta = typeof project.meta === 'object' && project.meta !== null
     ? project.meta
@@ -82,13 +72,22 @@ function normalizeGameMeta(project, slug) {
 
 async function exportGame() {
   const args = parseArgs(process.argv.slice(2));
-  const slug = await resolveGameSlug({ cliSlug: args.slug });
+  const selection = await resolveGameSelection({
+    cliSlug: args.slug,
+    cliPath: args.projectPath,
+  });
+  const slug = selection?.slug ?? '';
   if (!slug) {
-    console.error('✗ Missing game selection. Use --slug <game-slug>, set GAME_SLUG, or run: npm run game:use -- <game-slug>');
+    console.error('✗ Missing game selection. Use --slug <game-slug>, set GAME_SLUG, or run: npm run game:use -- <game-slug|/path/to/project.sgrgame>.');
     process.exit(1);
   }
 
-  const projectPath = await resolveProjectPath(args.projectPath, slug);
+  const projectPath = selection?.projectFilePath;
+  if (!projectPath) {
+    console.error(`✗ Could not resolve a project path for '${slug}'.`);
+    console.error('  Open the game in SugarEngine or run: npm run game:use -- /path/to/project.sgrgame');
+    process.exit(1);
+  }
   const outputPath = args.outPath
     ? (path.isAbsolute(args.outPath) ? args.outPath : path.join(projectRoot, args.outPath))
     : path.join(projectRoot, 'public', 'games', slug, 'game.json');
@@ -125,8 +124,7 @@ async function exportGame() {
       console.error('');
       console.error('Usage: node scripts/export-game.mjs --slug <game-slug> [--project path/to/project.sgrgame]');
       console.error('');
-      console.error('Expected default project location: games/<slug>/project.sgrgame');
-      console.error('Save your project there, or pass --project explicitly.');
+      console.error('Open the game in SugarEngine or pass --project explicitly.');
       process.exit(1);
     }
     console.error('✗ Export failed:', err.message);

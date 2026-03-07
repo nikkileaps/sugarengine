@@ -6,6 +6,7 @@ dist/
 dist-game/
 src-tauri/target/
 public/games/
+.sugarengine/
 games/.active-game
 
 # Netlify

@@ -218,6 +218,12 @@ interface EditorState {
   // Project state
   projectLoaded: boolean;
   projectName: string | null;
+  gameId: string | null;
+  gameRootPath: string | null;
+  projectFilePath: string | null;
+  projectCreatedAt: string | null;
+  projectVersion: string | null;
+  defaultEpisodeId: string | null;
 
   // Project data
   seasons: SeasonData[];
@@ -258,6 +264,16 @@ interface EditorState {
   setCurrentEpisode: (episodeId: string | null) => void;
   setEpisodeFilter: (filter: 'all' | 'current') => void;
   setProjectLoaded: (loaded: boolean, name?: string | null) => void;
+  setProjectContext: (context: {
+    loaded: boolean;
+    name?: string | null;
+    gameId?: string | null;
+    gameRootPath?: string | null;
+    projectFilePath?: string | null;
+    projectCreatedAt?: string | null;
+    projectVersion?: string | null;
+    defaultEpisodeId?: string | null;
+  }) => void;
 
   // Data actions
   setSeasons: (seasons: SeasonData[]) => void;
@@ -288,6 +304,12 @@ export const useEditorStore = create<EditorState>((set) => ({
   searchQuery: '',
   projectLoaded: false,
   projectName: null,
+  gameId: null,
+  gameRootPath: null,
+  projectFilePath: null,
+  projectCreatedAt: null,
+  projectVersion: null,
+  defaultEpisodeId: null,
   currentSeasonId: null,
   currentEpisodeId: null,
   episodeFilter: 'all',
@@ -322,6 +344,16 @@ export const useEditorStore = create<EditorState>((set) => ({
   setCurrentEpisode: (episodeId) => set({ currentEpisodeId: episodeId }),
   setEpisodeFilter: (filter) => set({ episodeFilter: filter }),
   setProjectLoaded: (loaded, name = null) => set({ projectLoaded: loaded, projectName: name }),
+  setProjectContext: (context) => set({
+    projectLoaded: context.loaded,
+    projectName: context.name ?? null,
+    gameId: context.gameId ?? null,
+    gameRootPath: context.gameRootPath ?? null,
+    projectFilePath: context.projectFilePath ?? null,
+    projectCreatedAt: context.projectCreatedAt ?? null,
+    projectVersion: context.projectVersion ?? null,
+    defaultEpisodeId: context.defaultEpisodeId ?? null,
+  }),
 
   // Data actions
   setSeasons: (seasons) => set({ seasons }),

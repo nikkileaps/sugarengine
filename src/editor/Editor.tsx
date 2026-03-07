@@ -5,8 +5,8 @@
  * migrated here from the legacy vanilla EditorApp over time.
  */
 
-import { useState, useRef } from 'react';
-import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
+import { useRef, useState } from 'react';
+import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
 import type { EditorTab } from './store/useEditorStore';
@@ -21,12 +21,22 @@ import { PlayerPanel } from './panels/player';
 import { ResonancePanel } from './panels/resonance';
 import { VFXPanel } from './panels/vfx';
 import { WelcomeDialog } from './components/WelcomeDialog';
+import { NewGameDialog } from './components/NewGameDialog';
+import { OpenGameDialog } from './components/OpenGameDialog';
 import { ProjectMenu } from './components/ProjectMenu';
 import { ProjectExplorer } from './components/ProjectExplorer';
 import { EpisodeDialog } from './components/EpisodeDialog';
 import { EpisodeDetailsDialog } from './components/EpisodeDetailsDialog';
 import { PreviewManager } from './PreviewManager';
+import type { ProjectData as PreviewProjectData } from './PreviewManager';
 import type { PluginConfigData } from './store/useEditorStore';
+import { createGame, openGame, pickGameProjectFile, pickGameRootDirectory, saveGame } from './game-root/service';
+import {
+  buildPreviewProjectDocument,
+  buildProjectDocumentFromSnapshot,
+  buildRuntimeExportDocument,
+  type EditorProjectDocument,
+} from './game-root/project-document';
 
 const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'dialogues', label: 'Dialogues', icon: '💬' },
@@ -146,11 +156,17 @@ function toGameSlug(value: string | null | undefined): string {
   return normalized || 'untitled-game';
 }
 
-async function syncCliActiveGame(slug: string): Promise<void> {
+async function syncCliActiveGame(slug: string, rootPath: string, projectFilePath: string): Promise<void> {
   const cleanSlug = toGameSlug(slug);
   try {
-    const response = await fetch(`/__sugarengine/active-game?slug=${encodeURIComponent(cleanSlug)}`, {
+    const response = await fetch('/__sugarengine/active-game', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: cleanSlug,
+        rootPath,
+        projectFilePath,
+      }),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
@@ -169,7 +185,13 @@ export function Editor() {
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
   const projectLoaded = useEditorStore((s) => s.projectLoaded);
   const projectName = useEditorStore((s) => s.projectName);
-  const setProjectLoaded = useEditorStore((s) => s.setProjectLoaded);
+  const setProjectContext = useEditorStore((s) => s.setProjectContext);
+  const gameId = useEditorStore((s) => s.gameId);
+  const gameRootPath = useEditorStore((s) => s.gameRootPath);
+  const projectFilePath = useEditorStore((s) => s.projectFilePath);
+  const projectCreatedAt = useEditorStore((s) => s.projectCreatedAt);
+  const projectVersion = useEditorStore((s) => s.projectVersion);
+  const defaultEpisodeId = useEditorStore((s) => s.defaultEpisodeId);
   const npcs = useEditorStore((s) => s.npcs);
   const setNPCs = useEditorStore((s) => s.setNPCs);
   const dialogues = useEditorStore((s) => s.dialogues);
@@ -220,9 +242,18 @@ export function Editor() {
   const [episodeDetailsDialogOpen, setEpisodeDetailsDialogOpen] = useState(false);
 
   // New project dialog state (for creating from menu)
-  const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('My Game');
-  const [gameId, setGameId] = useState('my-game');
+  const [newGameDialogOpen, setNewGameDialogOpen] = useState(false);
+  const [newGameName, setNewGameName] = useState('My Game');
+  const [newGameSlug, setNewGameSlug] = useState('my-game');
+  const [newGameRootPath, setNewGameRootPath] = useState('games/my-game');
+  const [newGameSlugDirty, setNewGameSlugDirty] = useState(false);
+  const [newGameRootPathDirty, setNewGameRootPathDirty] = useState(false);
+  const [pickingNewGameRoot, setPickingNewGameRoot] = useState(false);
+  const [openGameDialogOpen, setOpenGameDialogOpen] = useState(false);
+  const [openGamePath, setOpenGamePath] = useState('');
+  const [pickingOpenGamePath, setPickingOpenGamePath] = useState(false);
+  const [gameLifecycleBusy, setGameLifecycleBusy] = useState(false);
+  const [gameLifecycleError, setGameLifecycleError] = useState<string | null>(null);
   const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
   const [resettingSugarAgentRuntime, setResettingSugarAgentRuntime] = useState(false);
   const [resettingSugarAgentSessions, setResettingSugarAgentSessions] = useState(false);
@@ -234,8 +265,9 @@ export function Editor() {
 
   // Get current episode
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId);
+  const resolvedGameId = gameId ?? toGameSlug(projectName ?? 'untitled-game');
 
-  const isEditorEnabled = projectLoaded && currentEpisodeId;
+  const isEditorEnabled = Boolean(projectLoaded && currentEpisodeId);
   const setDirty = useEditorStore((s) => s.setDirty);
 
   // Preview manager (singleton)
@@ -244,23 +276,121 @@ export function Editor() {
     previewManagerRef.current = new PreviewManager();
   }
 
-  // Open preview
-  const handlePreview = () => {
-    if (!previewManagerRef.current) return;
+  const resetNewGameDraft = () => {
+    const nextName = 'My Game';
+    const nextSlug = toGameSlug(nextName);
+    setNewGameName(nextName);
+    setNewGameSlug(nextSlug);
+    setNewGameRootPath(`games/${nextSlug}`);
+    setNewGameSlugDirty(false);
+    setNewGameRootPathDirty(false);
+  };
 
-    const projectData = {
-      version: 1,
-      meta: {
-        gameId,
-        name: projectName || 'Preview',
-        contentBasePath: `games/${gameId}/assets/`,
-      },
+  const closeNewGameDialog = () => {
+    setNewGameDialogOpen(false);
+    setGameLifecycleError(null);
+    if (!projectLoaded) {
+      setWelcomeDialogOpen(true);
+    }
+  };
+
+  const closeOpenGameDialog = () => {
+    setOpenGameDialogOpen(false);
+    setGameLifecycleError(null);
+    if (!projectLoaded) {
+      setWelcomeDialogOpen(true);
+    }
+  };
+
+  const openNewGameDialog = () => {
+    setGameLifecycleError(null);
+    resetNewGameDraft();
+    setWelcomeDialogOpen(false);
+    setOpenGameDialogOpen(false);
+    setNewGameDialogOpen(true);
+  };
+
+  const openOpenGameDialog = () => {
+    setGameLifecycleError(null);
+    setOpenGamePath('');
+    setWelcomeDialogOpen(false);
+    setNewGameDialogOpen(false);
+    setOpenGameDialogOpen(true);
+  };
+
+  const applyProjectToEditor = async (result: {
+    rootPath: string;
+    projectFilePath: string;
+    project: EditorProjectDocument;
+  }) => {
+    const project = result.project;
+    const loadedSeasons = project.seasons;
+    const loadedEpisodes = project.episodes;
+    const firstSeason = [...loadedSeasons].sort((a, b) => a.order - b.order)[0];
+    const preferredEpisodeId = project.defaultEpisode
+      ?? loadedEpisodes[0]?.id
+      ?? null;
+    const preferredEpisode = preferredEpisodeId
+      ? loadedEpisodes.find((episode) => episode.id === preferredEpisodeId) ?? null
+      : null;
+    const resolvedSeasonId = preferredEpisode?.seasonId
+      ?? firstSeason?.id
+      ?? null;
+    const resolvedEpisodeId = preferredEpisode?.id ?? (resolvedSeasonId
+      ? [...loadedEpisodes]
+        .filter((episode) => episode.seasonId === resolvedSeasonId)
+        .sort((a, b) => a.order - b.order)[0]?.id ?? null
+      : null);
+
+    setSeasons(loadedSeasons);
+    setEpisodes(loadedEpisodes);
+    setPlugins(normalizePlugins(project.plugins));
+    setNPCs(project.npcs);
+    setDialogues(project.dialogues);
+    setQuests(project.quests);
+    setItems(project.items);
+    setInspections(project.inspections);
+    setRegions(project.regions);
+    setPlayerCaster(project.playerCaster);
+    setPlayerModel(project.playerModel);
+    setPlayerAnimations(project.playerAnimations);
+    setTitleScreen(project.titleScreen);
+    setSpells(project.spells);
+    setResonancePoints(project.resonancePoints);
+    setVFXDefinitions(project.vfxDefinitions);
+    setCurrentSeason(resolvedSeasonId);
+    setCurrentEpisode(resolvedEpisodeId);
+    setProjectContext({
+      loaded: true,
+      name: project.meta.name,
+      gameId: project.meta.gameId,
+      gameRootPath: result.rootPath,
+      projectFilePath: result.projectFilePath,
+      projectCreatedAt: project.meta.createdAt ?? null,
+      projectVersion: project.meta.version,
+      defaultEpisodeId: project.defaultEpisode ?? resolvedEpisodeId,
+    });
+    setDirty(false);
+    setWelcomeDialogOpen(false);
+    setNewGameDialogOpen(false);
+    setOpenGameDialogOpen(false);
+    setGameLifecycleError(null);
+    await syncCliActiveGame(project.meta.gameId, result.rootPath, result.projectFilePath);
+  };
+
+  const buildCurrentProjectDocument = (): EditorProjectDocument => {
+    return buildProjectDocumentFromSnapshot({
+      gameId: resolvedGameId,
+      name: projectName || 'Untitled Game',
+      version: projectVersion,
+      createdAt: projectCreatedAt,
+      defaultEpisode: defaultEpisodeId ?? currentEpisodeId,
       seasons,
       episodes,
       plugins,
+      npcs,
       dialogues,
       quests,
-      npcs,
       items,
       inspections,
       regions,
@@ -271,6 +401,19 @@ export function Editor() {
       spells,
       resonancePoints,
       vfxDefinitions,
+    });
+  };
+
+  // Open preview
+  const handlePreview = () => {
+    if (!previewManagerRef.current) return;
+
+    const projectData: PreviewProjectData = {
+      version: 1,
+      ...buildPreviewProjectDocument(
+        buildCurrentProjectDocument(),
+        `__sugarengine/game-assets/${resolvedGameId}/`,
+      ),
     };
 
     console.log('[Editor] handlePreview: playerCaster =', playerCaster);
@@ -291,6 +434,18 @@ export function Editor() {
 
     setEpisodes([...episodes, newEpisode]);
     setCurrentEpisode(newEpisode.id);
+    if (!defaultEpisodeId) {
+      setProjectContext({
+        loaded: projectLoaded,
+        name: projectName,
+        gameId: resolvedGameId,
+        gameRootPath,
+        projectFilePath,
+        projectCreatedAt,
+        projectVersion,
+        defaultEpisodeId: newEpisode.id,
+      });
+    }
     setDirty(true);
   };
 
@@ -300,39 +455,103 @@ export function Editor() {
     return `Episode ${existingCount + 1}`;
   };
 
-  // Project handlers
-  const handleCreateProject = (name: string) => {
-    // Create a default season and episode
-    const seasonId = crypto.randomUUID();
-    const episodeId = crypto.randomUUID();
-
-    const newSeason = { id: seasonId, name: 'Season 1', order: 1 };
-    const newEpisode = { id: episodeId, seasonId, name: 'Episode 1', order: 1 };
-
-    setSeasons([newSeason]);
-    setEpisodes([newEpisode]);
-    setPlugins([]);
-    setNPCs([]);
-    setDialogues([]);
-    setQuests([]);
-    setItems([]);
-    setInspections([]);
-    setRegions([]);
-    setPlayerCaster(null);
-    setSpells([]);
-    setResonancePoints([]);
-    setVFXDefinitions([]);
-    setCurrentSeason(seasonId);
-    setCurrentEpisode(episodeId);
-    setGameId(toGameSlug(name));
-    setProjectLoaded(true, name);
-    setWelcomeDialogOpen(false);
-    setNewProjectDialogOpen(false);
+  const handleNewGameNameChange = (value: string) => {
+    const nextSlug = toGameSlug(value);
+    const currentSuggestedSlug = toGameSlug(newGameName);
+    const currentSuggestedRoot = `games/${currentSuggestedSlug}`;
+    setNewGameName(value);
+    if (!newGameSlugDirty) {
+      setNewGameSlug(nextSlug);
+    }
+    if (!newGameRootPathDirty || newGameRootPath === currentSuggestedRoot) {
+      setNewGameRootPath(`games/${nextSlug}`);
+    }
   };
 
-  const handleOpenProjectFromFile = async () => {
-    // Same file picker logic as in welcome dialog
-    await handleOpenProject();
+  const handleNewGameSlugChange = (value: string) => {
+    const nextSlug = toGameSlug(value);
+    const currentSuggestedRoot = `games/${newGameSlug}`;
+    setNewGameSlug(nextSlug);
+    setNewGameSlugDirty(true);
+    if (!newGameRootPathDirty || newGameRootPath === currentSuggestedRoot) {
+      setNewGameRootPath(`games/${nextSlug}`);
+    }
+  };
+
+  const handleNewGameRootPathChange = (value: string) => {
+    setNewGameRootPath(value);
+    setNewGameRootPathDirty(true);
+  };
+
+  const handleBrowseNewGameRootPath = async () => {
+    setPickingNewGameRoot(true);
+    setGameLifecycleError(null);
+    try {
+      const selectedPath = await pickGameRootDirectory();
+      if (!selectedPath) return;
+      setNewGameRootPath(selectedPath);
+      setNewGameRootPathDirty(true);
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPickingNewGameRoot(false);
+    }
+  };
+
+  const handleCreateGame = async () => {
+    const name = newGameName.trim();
+    const slug = toGameSlug(newGameSlug);
+    const rootPath = newGameRootPath.trim();
+    if (!name || !rootPath) {
+      setGameLifecycleError('Game name and root directory are required.');
+      return;
+    }
+
+    setGameLifecycleBusy(true);
+    setGameLifecycleError(null);
+    try {
+      const result = await createGame({ name, slug, rootPath });
+      await applyProjectToEditor(result);
+      resetNewGameDraft();
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGameLifecycleBusy(false);
+    }
+  };
+
+  const handleOpenGame = async () => {
+    const inputPath = openGamePath.trim();
+    if (!inputPath) {
+      setGameLifecycleError('Select a project.sgrgame file.');
+      return;
+    }
+
+    setGameLifecycleBusy(true);
+    setGameLifecycleError(null);
+    try {
+      const result = await openGame(inputPath);
+      await applyProjectToEditor(result);
+      setOpenGamePath('');
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGameLifecycleBusy(false);
+    }
+  };
+
+  const handleBrowseOpenGamePath = async () => {
+    setPickingOpenGamePath(true);
+    setGameLifecycleError(null);
+    try {
+      const selectedPath = await pickGameProjectFile();
+      if (!selectedPath) return;
+      setOpenGamePath(selectedPath);
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPickingOpenGamePath(false);
+    }
   };
 
   const handleOpenEpisode = (seasonId: string, episodeId: string) => {
@@ -357,104 +576,61 @@ export function Editor() {
     // Select another episode in the same season, or clear selection
     const nextEpisode = remainingEpisodes.find((e) => e.seasonId === currentSeasonId);
     setCurrentEpisode(nextEpisode?.id || null);
+    if (defaultEpisodeId === currentEpisodeId) {
+      setProjectContext({
+        loaded: projectLoaded,
+        name: projectName,
+        gameId: resolvedGameId,
+        gameRootPath,
+        projectFilePath,
+        projectCreatedAt,
+        projectVersion,
+        defaultEpisodeId: nextEpisode?.id ?? null,
+      });
+    }
     setDirty(true);
   };
 
-  const handleSaveProject = async () => {
-    // Gather all project data
-    const projectData = {
-      meta: {
-        gameId,
-        name: projectName || 'My Project',
-        contentBasePath: `games/${gameId}/assets/`,
-        version: '1.0.0',
-        savedAt: new Date().toISOString(),
-      },
-      seasons,
-      episodes,
-      plugins,
-      npcs,
-      dialogues,
-      quests,
-      items,
-      inspections,
-      regions,
-      playerCaster,
-      playerModel,
-      playerAnimations,
-      titleScreen,
-      spells,
-      resonancePoints,
-      vfxDefinitions,
-    };
+  const handleSaveGame = async () => {
+    if (!projectFilePath || !gameRootPath) {
+      const message = 'No game root is open. Open or create a game before saving.';
+      setGameLifecycleError(message);
+      alert(message);
+      return;
+    }
 
-    const jsonContent = JSON.stringify(projectData, null, 2);
-
+    setGameLifecycleBusy(true);
+    setGameLifecycleError(null);
     try {
-      // Try File System Access API first (Chrome/Edge)
-      if ('showSaveFilePicker' in window) {
-        const handle = await (window as Window & {
-          showSaveFilePicker: (options: {
-            suggestedName?: string;
-            types: { description: string; accept: Record<string, string[]> }[];
-          }) => Promise<FileSystemFileHandle>;
-        }).showSaveFilePicker({
-          suggestedName: `${gameId}.sgrgame`,
-          types: [{
-            description: 'Sugar Engine Project',
-            accept: { 'application/json': ['.sgrgame'] },
-          }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(jsonContent);
-        await writable.close();
-        setDirty(false);
-      } else {
-        // Fallback to download
-        const blob = new Blob([jsonContent], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${gameId}.sgrgame`;
-        a.click();
-        URL.revokeObjectURL(url);
-        setDirty(false);
-      }
-    } catch (err) {
-      // User cancelled or error
-      console.error('Save failed:', err);
+      const project = buildCurrentProjectDocument();
+      await saveGame({
+        rootPath: gameRootPath,
+        projectFilePath,
+        project,
+      });
+      setProjectContext({
+        loaded: true,
+        name: project.meta.name,
+        gameId: project.meta.gameId,
+        gameRootPath,
+        projectFilePath,
+        projectCreatedAt: project.meta.createdAt ?? null,
+        projectVersion: project.meta.version,
+        defaultEpisodeId: project.defaultEpisode ?? currentEpisodeId,
+      });
+      setDirty(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setGameLifecycleError(message);
+      alert(`Save failed: ${message}`);
+    } finally {
+      setGameLifecycleBusy(false);
     }
   };
 
   const handlePublish = async () => {
     // Build game data for publishing
-    const gameData = {
-      version: 1,
-      meta: {
-        gameId,
-        name: projectName || 'Untitled Project',
-        contentBasePath: `games/${gameId}/assets/`,
-      },
-      defaultEpisode: currentEpisodeId,
-      seasons,
-      episodes,
-      plugins,
-      dialogues,
-      quests,
-      npcs,
-      items,
-      inspections,
-      regions,
-      playerCaster,
-      playerModel,
-      playerAnimations,
-      titleScreen,
-      spells,
-      resonancePoints,
-      vfxDefinitions,
-    };
-
-    const jsonContent = JSON.stringify(gameData, null, 2);
+    const jsonContent = JSON.stringify(buildRuntimeExportDocument(buildCurrentProjectDocument()), null, 2);
 
     try {
       // Optional export of a runtime game.json snapshot.
@@ -477,7 +653,7 @@ export function Editor() {
         console.log('[Editor] Published game.json');
         alert(
           'Exported game.json snapshot.\n\n' +
-          `Recommended workflow:\n1) Save project as games/${gameId}/project.sgrgame\n2) Run npm run game:build`
+          'Use this for runtime inspection or downstream build tooling.'
         );
       } else {
         // Fallback to download
@@ -490,129 +666,12 @@ export function Editor() {
         URL.revokeObjectURL(url);
         alert(
           'Downloaded game.json snapshot.\n\n' +
-          `Recommended workflow:\n1) Save project as games/${gameId}/project.sgrgame\n2) Run npm run game:build`
+          'Use this for runtime inspection or downstream build tooling.'
         );
       }
     } catch (err) {
       // User cancelled or error
       console.error('Publish failed:', err);
-    }
-  };
-
-  const handleOpenProject = async () => {
-    try {
-      let fileText: string;
-      let fileName: string;
-
-      // Try File System Access API first (Chrome/Edge)
-      if ('showOpenFilePicker' in window) {
-        const handles = await (window as Window & {
-          showOpenFilePicker: (options: {
-            types: { description: string; accept: Record<string, string[]> }[];
-          }) => Promise<FileSystemFileHandle[]>;
-        }).showOpenFilePicker({
-          types: [{
-            description: 'Sugar Engine Project',
-            accept: { 'application/json': ['.sgrgame', '.json'] },
-          }],
-        });
-        const handle = handles[0];
-        if (!handle) return;
-        const file = await handle.getFile();
-        fileText = await file.text();
-        fileName = file.name;
-      } else {
-        // Fallback to file input
-        const result = await new Promise<{ text: string; name: string } | null>((resolve) => {
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = '.sgrgame,.json';
-          input.onchange = async () => {
-            const file = input.files?.[0];
-            if (file) {
-              const text = await file.text();
-              resolve({ text, name: file.name });
-            } else {
-              resolve(null);
-            }
-          };
-          input.oncancel = () => resolve(null);
-          input.click();
-        });
-        if (!result) return;
-        fileText = result.text;
-        fileName = result.name;
-      }
-
-      // Parse and load the project data
-      const data = JSON.parse(fileText);
-      const loadedProjectName = data.meta?.name || fileName.replace('.sgrgame', '').replace('.json', '') || 'Untitled Project';
-      const loadedGameId = data.meta?.gameId || toGameSlug(loadedProjectName);
-
-      // Load seasons and episodes
-      const loadedSeasons = (data.seasons || []).map((s: { id: string; name: string; order: number }) => ({
-        id: s.id,
-        name: s.name,
-        order: s.order,
-      }));
-      const loadedEpisodes = (data.episodes || []).map((e: {
-        id: string;
-        seasonId: string;
-        name: string;
-        order: number;
-        startRegion?: string;
-        completionCondition?: { type: 'quest'; questId: string };
-      }) => ({
-        id: e.id,
-        seasonId: e.seasonId,
-        name: e.name,
-        order: e.order,
-        startRegion: e.startRegion,
-        completionCondition: e.completionCondition,
-      }));
-
-      setSeasons(loadedSeasons);
-      setEpisodes(loadedEpisodes);
-      setPlugins(normalizePlugins(data.plugins));
-
-      // Load other data
-      setNPCs(data.npcs || []);
-      setDialogues(data.dialogues || []);
-      setQuests(data.quests || []);
-      setItems(data.items || []);
-      setInspections(data.inspections || []);
-      setRegions(data.regions || []);
-      setPlayerCaster(data.playerCaster || null);
-      setPlayerModel(data.playerModel || null);
-      setPlayerAnimations(data.playerAnimations || {});
-      setTitleScreen(data.titleScreen || null);
-      setSpells(data.spells || []);
-      setResonancePoints(data.resonancePoints || []);
-      setVFXDefinitions(data.vfxDefinitions || []);
-
-      // Set current season/episode to first available
-      const firstSeason = loadedSeasons.sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
-      if (firstSeason) {
-        setCurrentSeason(firstSeason.id);
-        const firstEpisode = loadedEpisodes
-          .filter((e: { seasonId: string }) => e.seasonId === firstSeason.id)
-          .sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
-        if (firstEpisode) {
-          setCurrentEpisode(firstEpisode.id);
-        }
-      }
-
-      setGameId(loadedGameId);
-      await syncCliActiveGame(loadedGameId);
-      setProjectLoaded(true, loadedProjectName);
-      setWelcomeDialogOpen(false);
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        // User cancelled - ignore
-        return;
-      }
-      console.error('Failed to open project:', e);
-      alert('Failed to open project: ' + (e as Error).message);
     }
   };
 
@@ -746,7 +805,7 @@ export function Editor() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           op: 'reingestLore',
-          gameId,
+          gameId: resolvedGameId,
         }),
       });
       if (!response.ok) {
@@ -781,7 +840,7 @@ export function Editor() {
     setResettingSugarAgentSessions(true);
     setSugarAgentRuntimeMessage({
       kind: 'info',
-      text: `Clearing all persisted NPC sessions for ${gameId}...`,
+      text: `Clearing all persisted NPC sessions for ${resolvedGameId}...`,
     });
     try {
       const response = await fetch('/__sugaragent/runtime', {
@@ -789,7 +848,7 @@ export function Editor() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           op: 'clearSessionsForGame',
-          gameId,
+          gameId: resolvedGameId,
         }),
       });
       if (!response.ok) {
@@ -801,7 +860,7 @@ export function Editor() {
         removedFiles?: string[];
       }));
       const removedCount = Array.isArray(payload.removedFiles) ? payload.removedFiles.length : null;
-      const detail = payload.detail ?? `Persisted NPC sessions cleared for ${gameId}.`;
+      const detail = payload.detail ?? `Persisted NPC sessions cleared for ${resolvedGameId}.`;
       setSugarAgentRuntimeMessage({
         kind: 'success',
         text: removedCount !== null ? `${detail} (${removedCount} files removed)` : detail,
@@ -930,9 +989,9 @@ export function Editor() {
 
                                       {/* Project menu */}
                                       <ProjectMenu
-                                        onNewProject={() => setNewProjectDialogOpen(true)}
-                                        onOpenProject={handleOpenProjectFromFile}
-                                        onSaveProject={handleSaveProject}
+                                        onNewGame={openNewGameDialog}
+                                        onOpenGame={openOpenGameDialog}
+                                        onSaveGame={handleSaveGame}
                                         onManagePlugins={() => setPluginsDialogOpen(true)}
                                         projectLoaded={projectLoaded}
                                       />
@@ -1084,8 +1143,8 @@ export function Editor() {
       <WelcomeDialog
         opened={welcomeDialogOpen}
         onClose={() => setWelcomeDialogOpen(false)}
-        onCreateProject={handleCreateProject}
-        onOpenProject={handleOpenProject}
+        onCreateGame={openNewGameDialog}
+        onOpenGame={openOpenGameDialog}
       />
 
       {/* Project Explorer */}
@@ -1110,43 +1169,33 @@ export function Editor() {
         onDelete={handleDeleteCurrentEpisode}
       />
 
-      {/* New Project Dialog (from menu) */}
-      <Modal
-        opened={newProjectDialogOpen}
-        onClose={() => setNewProjectDialogOpen(false)}
-        title="Create New Project"
-        centered
-        styles={{
-          header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
-          title: { color: '#cdd6f4', fontWeight: 600 },
-          body: { background: '#1e1e2e', padding: '20px' },
-          content: { background: '#1e1e2e' },
-          close: { color: '#6c7086', '&:hover': { background: '#313244' } },
-        }}
-      >
-        <Stack gap="md">
-          <TextInput
-            label="Project Name"
-            placeholder="My Game"
-            value={newProjectName}
-            onChange={(e) => setNewProjectName(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleCreateProject(newProjectName)}
-            autoFocus
-            styles={{
-              input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
-              label: { color: '#a6adc8' },
-            }}
-          />
-          <Group justify="flex-end" mt="md">
-            <Button variant="subtle" color="gray" onClick={() => setNewProjectDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button color="green" onClick={() => handleCreateProject(newProjectName)}>
-              Create
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+      <NewGameDialog
+        opened={newGameDialogOpen}
+        onClose={closeNewGameDialog}
+        name={newGameName}
+        slug={newGameSlug}
+        rootPath={newGameRootPath}
+        error={newGameDialogOpen ? gameLifecycleError : null}
+        busy={gameLifecycleBusy}
+        browseBusy={pickingNewGameRoot}
+        onNameChange={handleNewGameNameChange}
+        onSlugChange={handleNewGameSlugChange}
+        onRootPathChange={handleNewGameRootPathChange}
+        onBrowseRootPath={handleBrowseNewGameRootPath}
+        onSubmit={handleCreateGame}
+      />
+
+      <OpenGameDialog
+        opened={openGameDialogOpen}
+        onClose={closeOpenGameDialog}
+        path={openGamePath}
+        error={openGameDialogOpen ? gameLifecycleError : null}
+        busy={gameLifecycleBusy}
+        browseBusy={pickingOpenGamePath}
+        onPathChange={setOpenGamePath}
+        onBrowsePath={handleBrowseOpenGamePath}
+        onSubmit={handleOpenGame}
+      />
 
       {/* Plugins Dialog */}
       <Modal

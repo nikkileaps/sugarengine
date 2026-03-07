@@ -3,6 +3,8 @@ set -euo pipefail
 
 DIST_DIR="${DIST_DIR:-dist-game}"
 GAME_SLUG="${GAME_SLUG:-}"
+GAME_ROOT="${GAME_ROOT:-}"
+GAME_PROJECT="${GAME_PROJECT:-}"
 SITE_DIR="${SITE_DIR:-}"
 LANDING_DIR="${LANDING_DIR:-}"
 DEPLOY_DIR_NAME="${DEPLOY_DIR_NAME:-}"
@@ -11,20 +13,62 @@ DEPLOY_URL="${DEPLOY_URL:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ACTIVE_GAME_FILE="$PROJECT_ROOT/games/.active-game"
+ACTIVE_GAME_FILE="$PROJECT_ROOT/.sugarengine/active-game.json"
 
-if [[ -z "$GAME_SLUG" && -f "$ACTIVE_GAME_FILE" ]]; then
-  GAME_SLUG="$(tr -d '[:space:]' < "$ACTIVE_GAME_FILE")"
+read_active_game_value() {
+  local key="$1"
+  node --input-type=module -e '
+    import fs from "node:fs";
+
+    const filePath = process.argv[1];
+    const key = process.argv[2];
+    if (!filePath || !key || !fs.existsSync(filePath)) process.exit(0);
+
+    let current;
+    try {
+      current = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+      process.exit(0);
+    }
+
+    const value = current?.[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      process.stdout.write(value.trim());
+    }
+  ' "$ACTIVE_GAME_FILE" "$key"
+}
+
+ACTIVE_SLUG=""
+ACTIVE_ROOT=""
+ACTIVE_PROJECT=""
+if [[ -f "$ACTIVE_GAME_FILE" ]]; then
+  ACTIVE_SLUG="$(read_active_game_value "slug")"
+  ACTIVE_ROOT="$(read_active_game_value "rootPath")"
+  ACTIVE_PROJECT="$(read_active_game_value "projectFilePath")"
+fi
+
+if [[ -z "$GAME_SLUG" ]]; then
+  GAME_SLUG="$ACTIVE_SLUG"
+fi
+if [[ -z "$GAME_ROOT" ]]; then
+  GAME_ROOT="$ACTIVE_ROOT"
+fi
+if [[ -z "$GAME_PROJECT" ]]; then
+  GAME_PROJECT="$ACTIVE_PROJECT"
 fi
 
 if [[ -z "$GAME_SLUG" ]]; then
   echo "✗ Missing game selection."
-  echo "  Use: npm run game:use -- <game-slug>"
+  echo "  Use: npm run game:use -- <game-slug|/path/to/project.sgrgame>"
   echo "  Or set: GAME_SLUG=<game-slug>"
   exit 1
 fi
 
-GAME_CONFIG_PATH="$PROJECT_ROOT/games/$GAME_SLUG/config/game.config.json"
+if [[ -z "$GAME_ROOT" ]]; then
+  GAME_ROOT="$PROJECT_ROOT/games/$GAME_SLUG"
+fi
+
+GAME_CONFIG_PATH="$GAME_ROOT/config/game.config.json"
 
 read_game_config_value() {
   local key="$1"
@@ -96,7 +140,7 @@ fi
 DEPLOY_DIR="$SITE_DIR/$DEPLOY_DIR_NAME"
 
 echo "Building game for deploy..."
-GAME_SLUG="$GAME_SLUG" DEPLOY_BUILD=true DEPLOY_BASE_PATH="$DEPLOY_BASE_PATH" npm run game:build
+GAME_SLUG="$GAME_SLUG" GAME_ROOT="$GAME_ROOT" GAME_PROJECT="$GAME_PROJECT" DEPLOY_BUILD=true DEPLOY_BASE_PATH="$DEPLOY_BASE_PATH" npm run game:build
 
 echo "Compressing GLB files with Draco..."
 node scripts/compress-glb.mjs "$DIST_DIR"

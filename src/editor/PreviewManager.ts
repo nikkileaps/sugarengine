@@ -12,6 +12,7 @@ export interface ProjectData {
   meta?: {
     gameId: string;
     name: string;
+    contentBasePath?: string;
   };
   seasons?: unknown[];
   episodes?: unknown[];

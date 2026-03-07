@@ -5,7 +5,7 @@ import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
-import { resolveGameSlug } from './lib/active-game.mjs';
+import { resolveGameSelection } from './lib/active-game.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -22,16 +22,19 @@ function runOrExit(command, args, env) {
 }
 
 async function main() {
-  const slug = await resolveGameSlug();
-  if (!slug) {
-    console.error('✗ Missing game selection. Use GAME_SLUG=<slug> or run: npm run game:use -- <slug>');
+  const selection = await resolveGameSelection();
+  if (!selection?.slug || !selection.rootPath || !selection.projectFilePath) {
+    console.error('✗ Missing active game selection with root path.');
+    console.error('  Open the game in SugarEngine or run: npm run game:use -- <game-slug|/path/to/project.sgrgame>');
     process.exit(1);
   }
 
   const env = {
     ...process.env,
-    GAME_SLUG: slug,
-    VITE_GAME_SLUG: slug,
+    GAME_SLUG: selection.slug,
+    GAME_ROOT: selection.rootPath,
+    GAME_PROJECT: selection.projectFilePath,
+    VITE_GAME_SLUG: selection.slug,
   };
 
   const publicGamesDir = path.join(projectRoot, 'public', 'games');
@@ -40,7 +43,7 @@ async function main() {
     await fs.rm(publicGamesDir, { recursive: true, force: true });
   }
 
-  console.log(`Building game: ${slug}`);
+  console.log(`Building game: ${selection.slug}`);
   runOrExit('npm', ['run', 'game:export'], env);
   runOrExit('npm', ['run', 'game:stage'], env);
   runOrExit('npx', ['vite', 'build', '--config', 'vite.config.game.ts'], env);

@@ -10,6 +10,10 @@ use tauri::Manager;
 const TURN_JSON_SCHEMA: &str = r#"{"type":"object","properties":{"utterance":{"type":"string"},"emotion":{"type":"string"},"intent":{"type":"string"},"proposedIntents":{"type":"array","items":{"type":"object"}},"citations":{"type":"array","items":{"type":"object","properties":{"sourceId":{"type":"string"},"snippet":{"type":"string"}},"required":["sourceId"],"additionalProperties":true}}},"required":["utterance","emotion","intent","proposedIntents","citations"],"additionalProperties":false}"#;
 
 const MODEL_CANDIDATES: &[&str] = &[
+  "runtime/models/qwen3-4b-instruct-2507-q4_k_m.gguf",
+  "runtime/models/qwen3-4b-instruct-2507-q5_k_m.gguf",
+  "runtime/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+  "runtime/models/qwen2.5-0.5b-instruct-q2_k.gguf",
   "src/plugins/sugaragent/runtime/bundle/models/qwen3-4b-instruct-2507-q4_k_m.gguf",
   "src/plugins/sugaragent/runtime/bundle/models/qwen3-4b-instruct-2507-q5_k_m.gguf",
   "src/plugins/sugaragent/runtime/bundle/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
@@ -17,6 +21,7 @@ const MODEL_CANDIDATES: &[&str] = &[
 ];
 
 const LLAMA_BIN_CANDIDATES: &[&str] = &[
+  "runtime/bin/llama-completion",
   "src/plugins/sugaragent/runtime/bundle/bin/llama-completion",
   "plugins/sugaragent/runtime/bundle/bin/llama-completion",
   "sugaragent/runtime/bundle/bin/llama-completion",
@@ -140,6 +145,9 @@ fn resolve_candidate_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
     roots.push(current);
   }
   roots.push(project_root());
+  if let Some(active_root) = read_active_game_root() {
+    roots.push(active_root);
+  }
   if let Ok(resource_dir) = app.path().resource_dir() {
     roots.push(resource_dir);
   }
@@ -155,6 +163,21 @@ fn resolve_candidate_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
     deduped.push(root);
   }
   deduped
+}
+
+fn read_active_game_root() -> Option<PathBuf> {
+  let active_game_file = project_root().join(".sugarengine/active-game.json");
+  let Ok(raw) = fs::read_to_string(active_game_file) else {
+    return None;
+  };
+  let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
+    return None;
+  };
+  let root = parsed.get("rootPath")?.as_str()?.trim();
+  if root.is_empty() {
+    return None;
+  }
+  Some(PathBuf::from(root))
 }
 
 fn resolve_bundle_binary_path(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -234,6 +257,8 @@ fn resolve_lore_chunks_path(app: &tauri::AppHandle, game_id: &str) -> Option<Pat
   let roots = resolve_candidate_roots(app);
   let mut game_candidates = Vec::new();
   if !game_id.trim().is_empty() {
+    game_candidates.push("plugins/sugaragent/lore/generated/chunks.json".to_string());
+    game_candidates.push("public/plugins/sugaragent/lore/generated/chunks.json".to_string());
     game_candidates.push(format!("games/{game_id}/plugins/sugaragent/lore/generated/chunks.json"));
     game_candidates.push(format!("public/games/{game_id}/plugins/sugaragent/lore/generated/chunks.json"));
   }

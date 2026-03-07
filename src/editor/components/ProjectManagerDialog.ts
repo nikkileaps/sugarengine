@@ -1,5 +1,5 @@
 /**
- * ProjectManagerDialog - Central hub for project and narrative management
+ * ProjectManagerDialog - Legacy central hub for game and narrative management
  *
  * Opens on app launch. Handles:
  * - Create/Open/Save projects
@@ -151,7 +151,7 @@ export class ProjectManagerDialog {
     const titleArea = document.createElement('div');
 
     const title = document.createElement('h2');
-    title.textContent = 'Project Manager';
+      title.textContent = 'Game Manager';
     title.style.cssText = 'margin: 0; font-size: 18px; color: #cdd6f4;';
     titleArea.appendChild(title);
 
@@ -208,19 +208,19 @@ export class ProjectManagerDialog {
     view.appendChild(message);
 
     const submessage = document.createElement('p');
-    submessage.textContent = 'Create a new project or open an existing one to get started.';
+    submessage.textContent = 'Create a new game or open an existing game to get started.';
     submessage.style.cssText = 'color: #6c7086; font-size: 14px; margin: 0 0 32px 0;';
     view.appendChild(submessage);
 
     const buttons = document.createElement('div');
     buttons.style.cssText = 'display: flex; gap: 16px;';
 
-    const newBtn = this.createActionButton('+ New Project', '#a6e3a1', () => {
+    const newBtn = this.createActionButton('+ New Game', '#a6e3a1', () => {
       this.showNewProjectPrompt();
     });
     buttons.appendChild(newBtn);
 
-    const openBtn = this.createActionButton('📂 Open Project', '#89b4fa', () => {
+    const openBtn = this.createActionButton('📂 Open Game', '#89b4fa', () => {
       this.config.onProjectOpen();
     });
     buttons.appendChild(openBtn);

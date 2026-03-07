@@ -1,9 +1,14 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import react from '@vitejs/plugin-react';
+import {
+  readActiveGameSelection,
+  readActiveGameSelectionSync,
+  writeActiveGameSelection,
+} from './scripts/lib/active-game.mjs';
 
 export default defineConfig({
   plugins: [
@@ -12,8 +17,6 @@ export default defineConfig({
       name: 'sugarengine-active-game-sync',
       configureServer(server) {
         const projectRoot = process.cwd();
-        const gamesRoot = resolve(projectRoot, 'games');
-        const activeGameFile = resolve(gamesRoot, '.active-game');
         const defaultAuthoringBundlePath = resolve(projectRoot, 'public', 'plugins', 'sugaragent', 'authoring.bundle.json');
         const defaultLoreDir = resolve(projectRoot, 'src', 'plugins', 'sugaragent', 'lore', 'generated');
         const sessionCache = new Map<string, Promise<{
@@ -36,6 +39,7 @@ export default defineConfig({
           }>;
           startup?: { runtime?: { health?: { detail?: string } } };
         }>>();
+        const registeredGameRoots = new Map<string, string>();
         const loreFallbackWarnings = new Set<string>();
 
         const isValidSlug = (value: string): boolean => /^[a-z0-9-]+$/.test(value);
@@ -51,6 +55,232 @@ export default defineConfig({
           if (typeof value !== 'string') return undefined;
           const trimmed = value.trim();
           return trimmed.length > 0 ? trimmed : undefined;
+        };
+
+        const resolveAbsoluteInputPath = (value: string): string => {
+          const trimmed = value.trim();
+          if (!trimmed) return '';
+          return normalize(isAbsolute(trimmed) ? trimmed : resolve(projectRoot, trimmed));
+        };
+
+        const resolveGameRootPaths = (rootPath: string) => {
+          const normalizedRoot = resolveAbsoluteInputPath(rootPath);
+          return {
+            rootPath: normalizedRoot,
+            projectFilePath: join(normalizedRoot, 'project.sgrgame'),
+            assetsPath: join(normalizedRoot, 'assets'),
+            pluginsPath: join(normalizedRoot, 'plugins'),
+            runtimePath: join(normalizedRoot, 'runtime'),
+            runtimeBinPath: join(normalizedRoot, 'runtime', 'bin'),
+            runtimeModelsPath: join(normalizedRoot, 'runtime', 'models'),
+            configPath: join(normalizedRoot, 'config'),
+            gameConfigPath: join(normalizedRoot, 'config', 'game.config.json'),
+            manifestsPath: join(normalizedRoot, 'manifests'),
+            publishedAssetsManifestPath: join(normalizedRoot, 'manifests', 'published-assets.json'),
+            exportsPath: join(normalizedRoot, 'exports'),
+          };
+        };
+
+        const resolveProjectInputPath = (inputPath: string) => {
+          const normalizedInput = resolveAbsoluteInputPath(inputPath);
+          const projectFilePath = normalizedInput.toLowerCase().endsWith('/project.sgrgame')
+            || normalizedInput.toLowerCase().endsWith('\\project.sgrgame')
+            ? normalizedInput
+            : join(normalizedInput, 'project.sgrgame');
+          const rootPath = dirname(projectFilePath);
+          return {
+            rootPath,
+            projectFilePath,
+          };
+        };
+
+        const registerGameRoot = (gameId: string, rootPath: string) => {
+          const slug = normalizeOptionalString(gameId);
+          if (!slug || !isValidSlug(slug)) return;
+          registeredGameRoots.set(slug, resolveAbsoluteInputPath(rootPath));
+        };
+
+        const seedRegisteredGameRootsFromActiveSelection = () => {
+          const activeSelection = readActiveGameSelectionSync();
+          if (activeSelection?.slug && activeSelection.rootPath) {
+            registeredGameRoots.set(activeSelection.slug, resolveAbsoluteInputPath(activeSelection.rootPath));
+          }
+        };
+
+        seedRegisteredGameRootsFromActiveSelection();
+
+        const resolveRegisteredGameRoot = (gameId?: string): string | null => {
+          const slug = normalizeOptionalString(gameId);
+          if (!slug) return null;
+          const registered = registeredGameRoots.get(slug);
+          if (registered) return registered;
+          const activeSelection = readActiveGameSelectionSync();
+          if (activeSelection?.slug === slug && activeSelection.rootPath) {
+            const activeRoot = resolveAbsoluteInputPath(activeSelection.rootPath);
+            registeredGameRoots.set(slug, activeRoot);
+            return activeRoot;
+          }
+          return null;
+        };
+
+        let gameRootModulePromise: Promise<{
+          createStarterProjectDocument: (options: { gameId: string; name: string }) => Record<string, unknown>;
+          normalizeLoadedProjectDocument: (raw: unknown, options?: { fallbackName?: string; fallbackGameId?: string }) => Record<string, unknown>;
+          stringifyProjectDocument: (project: Record<string, unknown>) => string;
+          createStarterGameConfig: (gameId: string) => Record<string, unknown>;
+          createEmptyPublishedAssetsManifest: () => Record<string, unknown>;
+        }> | null = null;
+
+        const getGameRootModule = () => {
+          if (!gameRootModulePromise) {
+            gameRootModulePromise = server.ssrLoadModule('/src/editor/game-root/project-document.ts') as Promise<{
+              createStarterProjectDocument: (options: { gameId: string; name: string }) => Record<string, unknown>;
+              normalizeLoadedProjectDocument: (raw: unknown, options?: { fallbackName?: string; fallbackGameId?: string }) => Record<string, unknown>;
+              stringifyProjectDocument: (project: Record<string, unknown>) => string;
+              createStarterGameConfig: (gameId: string) => Record<string, unknown>;
+              createEmptyPublishedAssetsManifest: () => Record<string, unknown>;
+            }>;
+          }
+          return gameRootModulePromise;
+        };
+
+        const contentTypeForPath = (filePath: string): string => {
+          switch (extname(filePath).toLowerCase()) {
+            case '.json': return 'application/json';
+            case '.glb': return 'model/gltf-binary';
+            case '.gltf': return 'model/gltf+json';
+            case '.bin': return 'application/octet-stream';
+            case '.fbx': return 'application/octet-stream';
+            case '.png': return 'image/png';
+            case '.jpg':
+            case '.jpeg': return 'image/jpeg';
+            case '.webp': return 'image/webp';
+            case '.gif': return 'image/gif';
+            case '.ogg': return 'audio/ogg';
+            case '.mp3': return 'audio/mpeg';
+            case '.wav': return 'audio/wav';
+            default: return 'application/octet-stream';
+          }
+        };
+
+        const pickDirectoryPath = (): { cancelled: boolean; path?: string; error?: string } => {
+          if (process.platform === 'darwin') {
+            const result = spawnSync(
+              'osascript',
+              ['-e', 'POSIX path of (choose folder with prompt "Choose a game root directory")'],
+              { encoding: 'utf8' },
+            );
+            if (result.status === 0) {
+              const selectedPath = result.stdout.trim().replace(/[\\/]+$/, '');
+              return selectedPath.length > 0
+                ? { cancelled: false, path: normalize(selectedPath) }
+                : { cancelled: true };
+            }
+            const stderr = `${result.stderr ?? ''}`.trim();
+            if (stderr.includes('User canceled')) {
+              return { cancelled: true };
+            }
+            return { cancelled: false, error: stderr || 'Directory picker failed.' };
+          }
+
+          if (process.platform === 'linux') {
+            const result = spawnSync('zenity', ['--file-selection', '--directory', '--title=Choose a game root directory'], {
+              encoding: 'utf8',
+            });
+            if (result.status === 0) {
+              const selectedPath = result.stdout.trim().replace(/[\\/]+$/, '');
+              return selectedPath.length > 0
+                ? { cancelled: false, path: normalize(selectedPath) }
+                : { cancelled: true };
+            }
+            return result.status === 1
+              ? { cancelled: true }
+              : { cancelled: false, error: `${result.stderr ?? ''}`.trim() || 'Directory picker failed.' };
+          }
+
+          if (process.platform === 'win32') {
+            const script = [
+              'Add-Type -AssemblyName System.Windows.Forms',
+              '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+              '$dialog.Description = "Choose a game root directory"',
+              '$dialog.UseDescriptionForTitle = $true',
+              'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }',
+            ].join('; ');
+            const result = spawnSync(
+              'powershell',
+              ['-NoProfile', '-Command', script],
+              { encoding: 'utf8' },
+            );
+            if (result.status === 0) {
+              const selectedPath = result.stdout.trim().replace(/[\\/]+$/, '');
+              return selectedPath.length > 0
+                ? { cancelled: false, path: normalize(selectedPath) }
+                : { cancelled: true };
+            }
+            return { cancelled: false, error: `${result.stderr ?? ''}`.trim() || 'Directory picker failed.' };
+          }
+
+          return { cancelled: false, error: `Directory picker is not implemented for platform ${process.platform}.` };
+        };
+
+        const pickGameProjectFilePath = (): { cancelled: boolean; path?: string; error?: string } => {
+          if (process.platform === 'darwin') {
+            const result = spawnSync(
+              'osascript',
+              ['-e', 'POSIX path of (choose file with prompt "Choose a project.sgrgame file" of type {"sgrgame"})'],
+              { encoding: 'utf8' },
+            );
+            if (result.status === 0) {
+              const selectedPath = result.stdout.trim();
+              return selectedPath.length > 0
+                ? { cancelled: false, path: normalize(selectedPath) }
+                : { cancelled: true };
+            }
+            const stderr = `${result.stderr ?? ''}`.trim();
+            if (stderr.includes('User canceled')) {
+              return { cancelled: true };
+            }
+            return { cancelled: false, error: stderr || 'Project file picker failed.' };
+          }
+
+          if (process.platform === 'linux') {
+            const result = spawnSync('zenity', ['--file-selection', '--title=Choose a project.sgrgame file', '--file-filter=*.sgrgame'], {
+              encoding: 'utf8',
+            });
+            if (result.status === 0) {
+              const selectedPath = result.stdout.trim();
+              return selectedPath.length > 0
+                ? { cancelled: false, path: normalize(selectedPath) }
+                : { cancelled: true };
+            }
+            return result.status === 1
+              ? { cancelled: true }
+              : { cancelled: false, error: `${result.stderr ?? ''}`.trim() || 'Project file picker failed.' };
+          }
+
+          if (process.platform === 'win32') {
+            const script = [
+              'Add-Type -AssemblyName System.Windows.Forms',
+              '$dialog = New-Object System.Windows.Forms.OpenFileDialog',
+              '$dialog.Title = "Choose a project.sgrgame file"',
+              '$dialog.Filter = "Sugar Engine Game (*.sgrgame)|*.sgrgame"',
+              'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.FileName }',
+            ].join('; ');
+            const result = spawnSync(
+              'powershell',
+              ['-NoProfile', '-Command', script],
+              { encoding: 'utf8' },
+            );
+            if (result.status === 0) {
+              const selectedPath = result.stdout.trim();
+              return selectedPath.length > 0
+                ? { cancelled: false, path: normalize(selectedPath) }
+                : { cancelled: true };
+            }
+            return { cancelled: false, error: `${result.stderr ?? ''}`.trim() || 'Project file picker failed.' };
+          }
+
+          return { cancelled: false, error: `Project file picker is not implemented for platform ${process.platform}.` };
         };
 
         const toFiniteNumber = (value: unknown): number | undefined => {
@@ -373,20 +603,260 @@ export default defineConfig({
           }
         };
 
+        server.middlewares.use(async (req, res, next) => {
+          const url = new URL(req.url ?? '/', 'http://localhost');
+          if (!url.pathname.startsWith('/__sugarengine/game-assets/')) {
+            next();
+            return;
+          }
+
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            res.statusCode = 405;
+            res.end('Method not allowed');
+            return;
+          }
+
+          const remainder = decodeURIComponent(url.pathname.slice('/__sugarengine/game-assets/'.length));
+          const firstSlashIndex = remainder.indexOf('/');
+          if (firstSlashIndex <= 0) {
+            res.statusCode = 400;
+            res.end('Missing game id or asset path');
+            return;
+          }
+
+          const gameId = remainder.slice(0, firstSlashIndex).trim();
+          const assetPath = remainder.slice(firstSlashIndex + 1).trim();
+          const gameRoot = resolveRegisteredGameRoot(gameId);
+          if (!gameRoot) {
+            res.statusCode = 404;
+            res.end('Unknown game root');
+            return;
+          }
+
+          const assetsRoot = join(gameRoot, 'assets');
+          const filePath = resolve(assetsRoot, assetPath);
+          const relativePath = relative(assetsRoot, filePath);
+          if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+            res.statusCode = 403;
+            res.end('Forbidden asset path');
+            return;
+          }
+
+          if (!fsSync.existsSync(filePath) || fsSync.statSync(filePath).isDirectory()) {
+            res.statusCode = 404;
+            res.end('Asset not found');
+            return;
+          }
+
+          try {
+            const content = await fs.readFile(filePath);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', contentTypeForPath(filePath));
+            res.setHeader('Cache-Control', 'no-store');
+            res.end(req.method === 'HEAD' ? undefined : content);
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(error instanceof Error ? error.message : String(error));
+          }
+        });
+
+        server.middlewares.use('/__sugarengine/pick-directory', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          const selection = pickDirectoryPath();
+          if (selection.cancelled) {
+            writeJson(res, 200, { ok: true, cancelled: true, path: null });
+            return;
+          }
+          if (selection.error) {
+            writeJson(res, 500, { ok: false, error: selection.error });
+            return;
+          }
+          writeJson(res, 200, { ok: true, cancelled: false, path: selection.path ?? null });
+        });
+
+        server.middlewares.use('/__sugarengine/pick-project-file', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          const selection = pickGameProjectFilePath();
+          if (selection.cancelled) {
+            writeJson(res, 200, { ok: true, cancelled: true, path: null });
+            return;
+          }
+          if (selection.error) {
+            writeJson(res, 500, { ok: false, error: selection.error });
+            return;
+          }
+          writeJson(res, 200, { ok: true, cancelled: false, path: selection.path ?? null });
+        });
+
+        server.middlewares.use('/__sugarengine/game-root', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          try {
+            const body = await readRequestBody(req);
+            const op = normalizeOptionalString(body.op);
+            const module = await getGameRootModule();
+
+            if (op === 'register') {
+              const gameId = normalizeOptionalString(body.gameId);
+              const rootPath = normalizeOptionalString(body.rootPath);
+              if (!gameId || !rootPath || !isValidSlug(gameId)) {
+                writeJson(res, 400, { ok: false, error: 'Missing or invalid gameId/rootPath' });
+                return;
+              }
+              registerGameRoot(gameId, rootPath);
+              writeJson(res, 200, { ok: true, gameId, rootPath: resolveAbsoluteInputPath(rootPath) });
+              return;
+            }
+
+            if (op === 'create') {
+              const name = normalizeOptionalString(body.name);
+              const slug = normalizeOptionalString(body.slug);
+              const rootPathInput = normalizeOptionalString(body.rootPath);
+              if (!name || !slug || !rootPathInput || !isValidSlug(slug)) {
+                writeJson(res, 400, { ok: false, error: 'Missing required create-game fields' });
+                return;
+              }
+
+              const paths = resolveGameRootPaths(rootPathInput);
+              const conflictingFiles = [
+                paths.projectFilePath,
+                paths.gameConfigPath,
+                paths.publishedAssetsManifestPath,
+              ].filter((candidate) => fsSync.existsSync(candidate));
+              if (conflictingFiles.length > 0) {
+                writeJson(res, 409, {
+                  ok: false,
+                  error: `Refusing to scaffold over existing file: ${conflictingFiles[0]}`,
+                });
+                return;
+              }
+
+              const directories = [
+                paths.rootPath,
+                paths.assetsPath,
+                join(paths.assetsPath, 'audio'),
+                join(paths.assetsPath, 'items'),
+                join(paths.assetsPath, 'models'),
+                join(paths.assetsPath, 'regions'),
+                join(paths.assetsPath, 'ui'),
+                paths.pluginsPath,
+                paths.runtimePath,
+                paths.runtimeBinPath,
+                paths.runtimeModelsPath,
+                paths.configPath,
+                paths.manifestsPath,
+                paths.exportsPath,
+              ];
+              for (const directory of directories) {
+                await fs.mkdir(directory, { recursive: true });
+              }
+
+              const project = module.createStarterProjectDocument({ gameId: slug, name });
+              await fs.writeFile(paths.projectFilePath, module.stringifyProjectDocument(project), 'utf8');
+              await fs.writeFile(
+                paths.gameConfigPath,
+                `${JSON.stringify(module.createStarterGameConfig(slug), null, 2)}\n`,
+                'utf8',
+              );
+              await fs.writeFile(
+                paths.publishedAssetsManifestPath,
+                `${JSON.stringify(module.createEmptyPublishedAssetsManifest(), null, 2)}\n`,
+                'utf8',
+              );
+              registerGameRoot(slug, paths.rootPath);
+              writeJson(res, 200, {
+                ok: true,
+                rootPath: paths.rootPath,
+                projectFilePath: paths.projectFilePath,
+                project,
+              });
+              return;
+            }
+
+            if (op === 'open') {
+              const inputPath = normalizeOptionalString(body.path);
+              if (!inputPath) {
+                writeJson(res, 400, { ok: false, error: 'Missing game path' });
+                return;
+              }
+
+              const resolvedPaths = resolveProjectInputPath(inputPath);
+              if (!fsSync.existsSync(resolvedPaths.projectFilePath)) {
+                writeJson(res, 404, { ok: false, error: `No project.sgrgame found at ${resolvedPaths.projectFilePath}` });
+                return;
+              }
+
+              const raw = await fs.readFile(resolvedPaths.projectFilePath, 'utf8');
+              const project = module.normalizeLoadedProjectDocument(JSON.parse(raw), {
+                fallbackName: resolvedPaths.rootPath,
+              });
+              const projectGameId = normalizeOptionalString((project as { meta?: { gameId?: string } }).meta?.gameId);
+              if (projectGameId) {
+                registerGameRoot(projectGameId, resolvedPaths.rootPath);
+              }
+
+              writeJson(res, 200, {
+                ok: true,
+                rootPath: resolvedPaths.rootPath,
+                projectFilePath: resolvedPaths.projectFilePath,
+                project,
+              });
+              return;
+            }
+
+            if (op === 'save') {
+              const projectInput = (typeof body.project === 'object' && body.project !== null)
+                ? body.project
+                : null;
+              const projectFilePathInput = normalizeOptionalString(body.projectFilePath);
+              const rootPathInput = normalizeOptionalString(body.rootPath);
+              if (!projectInput || !projectFilePathInput || !rootPathInput) {
+                writeJson(res, 400, { ok: false, error: 'Missing save payload' });
+                return;
+              }
+
+              const rootPath = resolveAbsoluteInputPath(rootPathInput);
+              const projectFilePath = resolveAbsoluteInputPath(projectFilePathInput);
+              await fs.mkdir(dirname(projectFilePath), { recursive: true });
+              const project = module.normalizeLoadedProjectDocument(projectInput);
+              await fs.writeFile(projectFilePath, module.stringifyProjectDocument(project), 'utf8');
+              registerGameRoot((project as { meta: { gameId: string } }).meta.gameId, rootPath);
+              writeJson(res, 200, {
+                ok: true,
+                rootPath,
+                projectFilePath,
+                project,
+              });
+              return;
+            }
+
+            writeJson(res, 400, { ok: false, error: 'Unknown game-root op' });
+          } catch (error) {
+            writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
+        });
+
         const readActiveGameSlug = async (): Promise<string> => {
-          if (!fsSync.existsSync(activeGameFile)) return '';
-          const raw = await fs.readFile(activeGameFile, 'utf8');
-          return raw.trim();
+          const selection = await readActiveGameSelection();
+          return selection?.slug ?? '';
         };
 
         const resolveRuntimeGameSlug = async (requestedGameId?: string): Promise<string> => {
           if (typeof requestedGameId === 'string') {
             const trimmed = requestedGameId.trim();
-            if (isValidSlug(trimmed)) {
-              const requestedGameDir = resolve(projectRoot, 'games', trimmed);
-              if (fsSync.existsSync(requestedGameDir)) {
-                return trimmed;
-              }
+            if (isValidSlug(trimmed) && resolveRegisteredGameRoot(trimmed)) {
+              return trimmed;
             }
           }
           return readActiveGameSlug();
@@ -405,9 +875,14 @@ export default defineConfig({
             };
           }
 
-          const gameLoreDir = resolve(projectRoot, 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated');
+          const registeredGameRoot = resolveRegisteredGameRoot(slug);
+          const gameLoreDir = registeredGameRoot
+            ? resolve(registeredGameRoot, 'plugins', 'sugaragent', 'lore', 'generated')
+            : '';
           const gamePublicLoreDir = resolve(projectRoot, 'public', 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated');
-          const matchedGameLore = [gameLoreDir, gamePublicLoreDir].find((candidate) => hasLoreArtifacts(candidate));
+          const matchedGameLore = [gameLoreDir, gamePublicLoreDir]
+            .filter((candidate) => candidate.length > 0)
+            .find((candidate) => hasLoreArtifacts(candidate));
           if (matchedGameLore) {
             return {
               loreDir: matchedGameLore,
@@ -499,7 +974,10 @@ export default defineConfig({
           if (!slug) {
             return defaultAuthoringBundlePath;
           }
-          const gameBundle = resolve(projectRoot, 'games', slug, 'plugins', 'sugaragent', 'authoring.bundle.json');
+          const registeredGameRoot = resolveRegisteredGameRoot(slug);
+          const gameBundle = registeredGameRoot
+            ? resolve(registeredGameRoot, 'plugins', 'sugaragent', 'authoring.bundle.json')
+            : '';
           if (fsSync.existsSync(gameBundle)) {
             return gameBundle;
           }
@@ -507,9 +985,10 @@ export default defineConfig({
         };
 
         const resolveLoreLockPath = (slug: string): string | null => {
+          const registeredGameRoot = slug ? resolveRegisteredGameRoot(slug) : null;
           const candidatePaths = [
-            slug
-              ? resolve(projectRoot, 'games', slug, 'plugins', 'sugaragent', 'lore', 'lore-source.lock.json')
+            registeredGameRoot
+              ? resolve(registeredGameRoot, 'plugins', 'sugaragent', 'lore', 'lore-source.lock.json')
               : '',
             resolve(projectRoot, 'src', 'plugins', 'sugaragent', 'lore', 'lore-source.lock.json'),
           ].filter(Boolean);
@@ -550,8 +1029,14 @@ export default defineConfig({
 
         const reingestLoreForGame = async (requestedGameId?: string, overrides: Record<string, unknown> = {}) => {
           const slug = await resolveRuntimeGameSlug(requestedGameId);
+          const registeredGameRoot = slug ? resolveRegisteredGameRoot(slug) : null;
+          if (slug && !registeredGameRoot) {
+            throw new Error(`No registered game root found for "${slug}". Open the game in SugarEngine first.`);
+          }
           const outputDir = slug
-            ? resolve(projectRoot, 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated')
+            ? registeredGameRoot
+              ? resolve(registeredGameRoot, 'plugins', 'sugaragent', 'lore', 'generated')
+              : defaultLoreDir
             : defaultLoreDir;
           const lockPath = resolveLoreLockPath(slug);
           const lockValues = await readLoreLockValues(lockPath);
@@ -678,23 +1163,33 @@ export default defineConfig({
             return;
           }
 
-          const url = new URL(req.url ?? '', 'http://localhost');
-          const slug = (url.searchParams.get('slug') ?? '').trim();
+          const body = await readRequestBody(req);
+          const slug = normalizeOptionalString(body.slug) ?? '';
+          const rootPath = normalizeOptionalString(body.rootPath);
+          const projectFilePath = normalizeOptionalString(body.projectFilePath);
           if (!isValidSlug(slug)) {
             res.statusCode = 400;
             res.end('Invalid game slug');
             return;
           }
 
-          const gameDir = resolve(projectRoot, 'games', slug);
-          if (!fsSync.existsSync(gameDir)) {
+          const resolvedRootPath = rootPath
+            ? resolveAbsoluteInputPath(rootPath)
+            : resolveRegisteredGameRoot(slug);
+          if (!resolvedRootPath) {
             res.statusCode = 404;
-            res.end('Unknown game slug');
+            res.end('Missing game root for active game selection');
             return;
           }
 
-          await fs.mkdir(gamesRoot, { recursive: true });
-          await fs.writeFile(activeGameFile, `${slug}\n`, 'utf8');
+          registerGameRoot(slug, resolvedRootPath);
+          await writeActiveGameSelection({
+            slug,
+            rootPath: resolvedRootPath,
+            projectFilePath: projectFilePath
+              ? resolveAbsoluteInputPath(projectFilePath)
+              : join(resolvedRootPath, 'project.sgrgame'),
+          });
 
           res.statusCode = 204;
           res.end();
