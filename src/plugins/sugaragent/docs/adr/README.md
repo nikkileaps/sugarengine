@@ -29,6 +29,7 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - [021-beat-control-plane-and-deterministic-progression.md](./021-beat-control-plane-and-deterministic-progression.md)
 - [022-evaluation-stack-and-deployment-gate-governance.md](./022-evaluation-stack-and-deployment-gate-governance.md)
 - [023-two-lane-conversation-and-llm-claim-span-tagging.md](./023-two-lane-conversation-and-llm-claim-span-tagging.md)
+- [024-runtime-owned-reply-parts-grounding-contract.md](./024-runtime-owned-reply-parts-grounding-contract.md)
 
 ## Mapping to Implementation Phases
 
@@ -45,6 +46,7 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - Dialogue architecture hardening and v2 pipeline -> ADR-011..016
 - Strategic dual-mode and governance contracts -> ADR-017..022
 - Two-lane conversational grounding refinement -> ADR-023
+- Runtime-owned grounded reply contract -> ADR-024
 
 ## Deferred Backlog
 
@@ -55,4 +57,5 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 Across ADR-001..022, authored quest/episode data remains canonical.
 SugarAgent is responsible for free-form conversational delivery and structured evidence only; engine systems remain the deterministic authority for progression and world mutation.
 
-ADR-023 refines grounded-turn validation by introducing LLM claim-tagging with deterministic span/evidence enforcement, while preserving the same canonical authority boundaries.
+ADR-023 remains historical context for the rejected exact quote claim-tag contract.
+ADR-024 is the active grounded-turn contract: runtime-owned reply parts with turn-local support slots and deterministic validation.

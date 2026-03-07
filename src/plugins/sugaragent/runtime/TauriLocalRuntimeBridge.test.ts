@@ -90,6 +90,34 @@ describe('TauriLocalRuntimeBridge', () => {
     expect(fallbackGenerate).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves fallback metadata from the bridge response', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      ok: true,
+      jsonText: '{"utterance":"fallback","emotion":"neutral","intent":"conversation","proposedIntents":[],"citations":[]}',
+      attempts: 2,
+      usedFallback: true,
+      validationErrors: ['attempt 1: invalid JSON'],
+      diagnostics: { validation: { decision: 'fallback' } },
+    });
+
+    const bridge = new TauriLocalRuntimeBridge({
+      invokeFn: invoke,
+    });
+
+    const generated = await bridge.generateStructured({
+      npcId: 'npc.baker',
+      npcName: 'Baker',
+      playerMessage: 'hello',
+      attempt: 1,
+      repair: false,
+    });
+
+    expect(generated.usedFallback).toBe(true);
+    expect(generated.attempts).toBe(2);
+    expect(generated.validationErrors).toEqual(['attempt 1: invalid JSON']);
+    expect(generated.diagnostics).toEqual({ validation: { decision: 'fallback' } });
+  });
+
   it('does not hide non-command errors behind fallback', async () => {
     const invoke = vi.fn().mockRejectedValue(new Error('runtime timeout'));
     const fallback = createFallbackBridge();

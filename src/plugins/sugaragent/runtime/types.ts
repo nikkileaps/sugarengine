@@ -47,6 +47,9 @@ export interface RuntimeGenerateStructuredRequest {
 
 export interface RuntimeGenerateStructuredResponse {
   jsonText: string;
+  attempts?: number;
+  usedFallback?: boolean;
+  validationErrors?: string[];
   diagnostics?: Record<string, unknown>;
 }
 

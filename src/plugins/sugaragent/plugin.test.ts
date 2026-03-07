@@ -68,6 +68,9 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(turn?.diagnostics?.modeResolution?.interactionMode).toBe('unknown');
     expect(turn?.diagnostics?.modeTransition?.changed).toBe(false);
     expect(turn?.diagnostics?.validation?.decision).toBe('accept');
+    expect(turn?.diagnostics?.validation?.source).toBe('npc_output');
+    expect(turn?.diagnostics?.validation?.npcOutputValidated).toBe(true);
+    expect(turn?.diagnostics?.validation?.progressionGateEvaluated).toBe(false);
     expect(turn?.diagnostics?.initiative?.expectedPlayerResponseType).toBe('free_text');
     const snapshot = plugin.serializeState?.() as {
       runtime?: {
@@ -85,7 +88,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(snapshot.runtime?.lastTurnDiagnostics?.mode).toBe('character');
   });
 
-  it('enforces grounding in preview and converts unsupported knowledge claims to uncertainty', async () => {
+  it('requires a reply-parts contract for grounded turns and converts legacy grounded output to uncertainty', async () => {
     const plugin = createSugarAgentPlugin({
       runtimeBridge: {
         async health() {
@@ -135,7 +138,86 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(turn?.utterance.toLowerCase()).toContain('not sure');
     expect(turn?.utterance.toLowerCase()).not.toContain('local language runtime is unavailable');
     expect(turn?.diagnostics?.validation?.decision).toBe('fallback');
-    expect(turn?.diagnostics?.validation?.errors?.join(' | ')).toContain('grounding repair required');
+    expect(turn?.diagnostics?.validation?.errors?.join(' | ')).toContain('reply-parts contract missing for grounded turn');
+    expect(turn?.diagnostics?.generation?.replyParts).toMatchObject({
+      attempted: false,
+      success: false,
+      failureReason: 'required_but_not_provided_by_runtime',
+    });
+  });
+
+  it('accepts mixed social and factual turns when the runtime supplies reply-parts validation', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'Yes! The Wordlark Hollow Resort and Spa is just outside Earendale.',
+              emotion: 'warm',
+              intent: 'explain',
+              proposedIntents: [],
+              citations: [
+                {
+                  sourceId: 'lore.locations.towns.town.earendale#overview',
+                  snippet: 'The Wordlark Hollow Resort and Spa is located just outside the town.',
+                },
+              ],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            diagnostics: {
+              validation: {
+                decision: 'accept',
+                errors: [],
+                unsupportedClaims: 0,
+                requiresRepair: false,
+              },
+              generation: {
+                replyParts: {
+                  attempted: true,
+                  success: true,
+                  partCount: 2,
+                  groundedPartCount: 1,
+                },
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'what do you know about the resort near here?',
+    });
+
+    expect(turn?.utterance).toContain('Yes!');
+    expect(turn?.utterance).toContain('just outside Earendale');
+    expect(turn?.diagnostics?.validation?.decision).toBe('accept');
+    expect(turn?.diagnostics?.validation?.errors?.join(' | ') ?? '').not.toContain('reply-parts contract missing');
   });
 
   it('preserves mixed-initiative decision metadata from provider diagnostics', async () => {
@@ -248,6 +330,137 @@ describe('createSugarAgentPlugin (phase 3)', () => {
       policyBounded: true,
     });
     expect(turn?.utterance.toLowerCase()).toContain('local language runtime is unavailable');
+  });
+
+  it('does not run grounding against provider fallback output returned by the runtime bridge', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'I heard you say "hello". I need a moment, please try again.',
+              emotion: 'neutral',
+              intent: 'conversation',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            attempts: 2,
+            usedFallback: true,
+            validationErrors: ['attempt 1: invalid JSON'],
+            diagnostics: {
+              validation: {
+                decision: 'fallback',
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'what do you know about the resort?',
+    });
+
+    expect(turn?.utterance.toLowerCase()).toContain('i need a moment');
+    expect(turn?.diagnostics?.validation?.decision).toBe('fallback');
+    expect(turn?.diagnostics?.validation?.errors?.join(' | ')).not.toContain('grounding repair required');
+  });
+
+  it('preserves runtime reply-parts fallback as uncertainty instead of provider-unavailable output', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'I am not sure yet. I do not want to guess about my own background without records.',
+              emotion: 'uncertain',
+              intent: 'uncertain',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            attempts: 2,
+            usedFallback: false,
+            validationErrors: ['pipeline-v4 reply-parts validation fallback: self_query_ownership'],
+            diagnostics: {
+              validation: {
+                decision: 'fallback',
+                errors: ['pipeline-v4 reply-parts validation fallback: self_query_ownership'],
+                unsupportedClaims: 1,
+                requiresRepair: true,
+              },
+              generation: {
+                replyParts: {
+                  attempted: true,
+                  success: false,
+                  partCount: 1,
+                  groundedPartCount: 0,
+                },
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'who are you?',
+    });
+
+    expect(turn?.utterance.toLowerCase()).toContain('do not want to guess');
+    expect(turn?.utterance.toLowerCase()).not.toContain('local language runtime is unavailable');
+    expect(turn?.diagnostics?.validation?.decision).toBe('fallback');
   });
 
   it('returns beatEvidence when a beat contract is active', async () => {

@@ -51,6 +51,7 @@ describe('LocalLLMProvider', () => {
     });
 
     expect(result.usedFallback).toBe(true);
+    expect(result.fallbackKind).toBe('validation_fallback');
     expect(result.attempts).toBe(2);
     expect(result.output.utterance).toContain('try again');
     expect(result.validationErrors.length).toBeGreaterThan(0);
@@ -91,7 +92,63 @@ describe('LocalLLMProvider', () => {
     });
 
     expect(result.usedFallback).toBe(true);
+    expect(result.fallbackKind).toBe('provider_unavailable');
     expect(result.validationErrors.some((entry) => entry.includes('runtime error'))).toBe(true);
+  });
+
+  it('preserves runtime-reported fallback metadata instead of treating fallback output as success', async () => {
+    const provider = new LocalLLMProvider({
+      runtime: {
+        async health() {
+          return { ok: true };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'I heard you say "hello". I need a moment, please try again.',
+              emotion: 'neutral',
+              intent: 'conversation',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            attempts: 3,
+            usedFallback: true,
+            validationErrors: ['attempt 1: invalid JSON', 'attempt 2: invalid JSON'],
+            diagnostics: {
+              validation: {
+                decision: 'fallback',
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+
+    const result = await provider.generateStructured({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'hello',
+    });
+
+    expect(result.usedFallback).toBe(true);
+    expect(result.fallbackKind).toBe('validation_fallback');
+    expect(result.attempts).toBe(3);
+    expect(result.validationErrors).toEqual([
+      'attempt 1: invalid JSON',
+      'attempt 2: invalid JSON',
+    ]);
+    expect(result.diagnostics?.validation?.decision).toBe('fallback');
   });
 
   it('forwards npc profile, global safety bounds, and context to the runtime bridge', async () => {

@@ -20,6 +20,9 @@ interface RuntimeBridgeResponse {
   ok: boolean;
   detail?: string;
   jsonText?: string;
+  attempts?: number;
+  usedFallback?: boolean;
+  validationErrors?: string[];
   diagnostics?: Record<string, unknown>;
   vectors?: number[][];
   error?: string;
@@ -122,6 +125,9 @@ export class TauriLocalRuntimeBridge implements LocalRuntimeBridge {
         return {
           ok: true,
           jsonText: generated.jsonText,
+          attempts: generated.attempts,
+          usedFallback: generated.usedFallback,
+          validationErrors: generated.validationErrors,
           diagnostics: generated.diagnostics,
         };
       }
@@ -170,6 +176,11 @@ export class TauriLocalRuntimeBridge implements LocalRuntimeBridge {
     });
     return {
       jsonText: typeof result.jsonText === 'string' ? result.jsonText : '{}',
+      attempts: Number.isFinite(result.attempts) ? Number(result.attempts) : undefined,
+      usedFallback: result.usedFallback === true,
+      validationErrors: Array.isArray(result.validationErrors)
+        ? result.validationErrors.filter((entry): entry is string => typeof entry === 'string')
+        : undefined,
       diagnostics: (typeof result.diagnostics === 'object' && result.diagnostics !== null)
         ? result.diagnostics
         : undefined,

@@ -13,10 +13,6 @@ import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
-  parseTurnOutput,
-  validateTurnOutput,
-} from '../contracts/turn';
-import {
   loadLoreArtifacts,
   retrieveLoreChunks,
 } from '../lore/lore-lib';
@@ -39,51 +35,32 @@ import {
   loadSessionState,
   MAX_HISTORY_ENTRIES,
 } from './core/session-state';
+import {
+  buildGroundingEvidenceEntries,
+} from './core/grounding/evidence';
+import {
+  REPLY_PARTS_JSON_SCHEMA,
+  buildReplyPartsPrompt,
+  buildReplyPartsRepairPrompt,
+  buildSupportSlotsFromGroundingEvidence,
+  filterSupportSlotsForQueryType,
+  materializeTurnOutputFromReplyParts,
+  normalizeReplyPartsForValidation,
+  parseReplyPartsResponseDetailed,
+} from './core/grounding/reply-parts';
+import {
+  buildReplyPartsValidationRepairReason,
+  validateReplyPartsContract,
+} from './core/grounding/reply-parts-validator';
+import {
+  createGroundedUncertaintyReply,
+} from './core/turn-realization';
 
 const execFileAsync = promisify(execFile);
 const BUNDLE_ROOT = path.resolve('src/plugins/sugaragent/runtime/bundle');
 const BUNDLE_LOCK_PATH = path.join(BUNDLE_ROOT, 'bundle.lock.json');
 const DEFAULT_BUNDLED_LLAMA_BIN = path.resolve('src/plugins/sugaragent/runtime/bundle/bin/llama-completion');
 const LEGACY_BUNDLED_MODEL_PATH = path.join(BUNDLE_ROOT, 'models', 'qwen2.5-0.5b-instruct-q2_k.gguf');
-
-const TURN_JSON_SCHEMA = JSON.stringify({
-  type: 'object',
-  properties: {
-    utterance: { type: 'string' },
-    emotion: { type: 'string' },
-    intent: { type: 'string' },
-    proposedIntents: { type: 'array', items: { type: 'object' } },
-    citations: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          sourceId: { type: 'string' },
-          snippet: { type: 'string' },
-        },
-        required: ['sourceId'],
-        additionalProperties: true,
-      },
-    },
-    beatEvidence: {
-      type: 'object',
-      properties: {
-        beatId: { type: 'string' },
-        coveredFacts: { type: 'array', items: { type: 'string' } },
-        uncoveredFacts: { type: 'array', items: { type: 'string' } },
-        completionSignal: {
-          type: 'string',
-          enum: ['none', 'player_ack', 'player_action', 'engine_flag'],
-        },
-        confidence: { type: 'number' },
-      },
-      required: ['coveredFacts', 'uncoveredFacts', 'completionSignal', 'confidence'],
-      additionalProperties: false,
-    },
-  },
-  required: ['utterance', 'emotion', 'intent', 'proposedIntents', 'citations'],
-  additionalProperties: false,
-});
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null;
@@ -184,114 +161,9 @@ function sanitizeRuntimeOutput(text) {
   return withoutAnsi.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
-function extractJsonCandidates(text) {
-  const source = sanitizeRuntimeOutput(text);
-  const candidates = [];
-  const seen = new Set();
-
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line.startsWith('{') || !line.endsWith('}')) continue;
-    if (seen.has(line)) continue;
-    seen.add(line);
-    candidates.push(line);
-  }
-
-  for (let start = source.indexOf('{'); start >= 0; start = source.indexOf('{', start + 1)) {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let i = start; i < source.length; i += 1) {
-      const ch = source[i];
-      if (!ch) continue;
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (ch === '\\') {
-          escaped = true;
-          continue;
-        }
-        if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') {
-        inString = true;
-        continue;
-      }
-      if (ch === '{') {
-        depth += 1;
-        continue;
-      }
-      if (ch === '}') {
-        depth -= 1;
-        if (depth === 0) {
-          const candidate = source.slice(start, i + 1);
-          if (!seen.has(candidate)) {
-            seen.add(candidate);
-            candidates.push(candidate);
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  return candidates;
-}
-
-function selectBestJsonCandidate(text) {
-  const candidates = extractJsonCandidates(text);
-  if (candidates.length === 0) return null;
-
-  for (let i = candidates.length - 1; i >= 0; i -= 1) {
-    const candidate = candidates[i]?.trim();
-    if (!candidate) continue;
-    try {
-      const parsed = JSON.parse(candidate);
-      if (validateTurnOutput(parsed).valid) {
-        return JSON.stringify(parsed);
-      }
-    } catch {
-      // continue
-    }
-  }
-  for (let i = candidates.length - 1; i >= 0; i -= 1) {
-    const candidate = candidates[i]?.trim();
-    if (!candidate) continue;
-    try {
-      const parsed = JSON.parse(candidate);
-      if (isRecord(parsed)) {
-        return JSON.stringify(parsed);
-      }
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
-
-function parseStructuredFromText(text) {
+function parseReplyPartsTurnFromText(text) {
   if (typeof text !== 'string' || text.trim().length === 0) return null;
-  try {
-    const direct = JSON.parse(text);
-    const parsed = parseTurnOutput(direct);
-    if (parsed) return parsed;
-  } catch {
-    // continue
-  }
-  const candidates = extractJsonCandidates(text);
-  for (let i = candidates.length - 1; i >= 0; i -= 1) {
-    const candidate = candidates[i];
-    try {
-      const parsed = parseTurnOutput(JSON.parse(candidate));
-      if (parsed) return parsed;
-    } catch {
-      // continue
-    }
-  }
-  return null;
+  return parseReplyPartsResponseDetailed(text).turn;
 }
 
 function fallbackOutput(playerMessage) {
@@ -523,10 +395,10 @@ function buildLlamaPrompt(input) {
     playerMessage,
     history,
     memoryFacts,
-    loreMatches,
     npcProfile,
     globalSafetyBounds,
     turnContext,
+    supportSlots,
     attempt,
     repair,
     repairReason,
@@ -538,32 +410,74 @@ function buildLlamaPrompt(input) {
     'Respond in the same language as the player message unless asked to switch languages.',
     'If the player message is English, respond in English.',
     'Never repeat the player message verbatim.',
-    'Keep utterance concise (1-2 sentences).',
+    'Keep the total visible reply concise (1-2 sentences).',
     buildGlobalSafetyBlock(globalSafetyBounds),
     buildNpcProfileBlock(npcProfile),
     buildTurnContextBlock(turnContext),
-    buildLoreEvidenceBlock(loreMatches, playerMessage, input.loreArtifacts),
     buildMemoryFactBlock(memoryFacts),
     buildHistoryBlock(history),
-    'Return ONLY valid JSON with these keys:',
-    '- utterance: NPC reply text',
-    '- emotion: short lowercase tag',
-    '- intent: short lowercase tag',
-    '- proposedIntents: array (can be [])',
-    '- citations: array of { sourceId, snippet? }',
-    '- beatEvidence: { coveredFacts[], uncoveredFacts[], completionSignal, confidence }',
-    'Do not wrap the JSON in markdown.',
-    'Return a single JSON object and nothing else.',
+    buildReplyPartsPrompt({
+      npcName,
+      playerMessage,
+      queryType: turnContext?.queryType,
+      routeIntent: turnContext?.routingIntent,
+      supportSlots,
+    }),
   ].filter(Boolean);
 
   if (repair) {
-    blocks.push(`Previous attempt was invalid: ${sanitizePromptText(repairReason ?? 'invalid output')}.`);
-    blocks.push('Rewrite with fresh wording and return strict JSON only.');
+    blocks.push(buildReplyPartsRepairPrompt({
+      npcName,
+      playerMessage,
+      queryType: turnContext?.queryType,
+      routeIntent: turnContext?.routingIntent,
+      supportSlots,
+      failureReason: repairReason,
+    }));
   }
 
   blocks.push(`attempt=${Number.isFinite(attempt) ? attempt : 1}`);
   blocks.push(`Current player message: ${sanitizePromptText(playerMessage)}`);
   return blocks.join('\n');
+}
+
+function createGenerationDiagnostics() {
+  return {
+    draft: {
+      attempted: false,
+      success: false,
+      failureReason: undefined,
+      skippedReason: undefined,
+    },
+    replyParts: {
+      attempted: false,
+      success: false,
+      partCount: 0,
+      groundedPartCount: 0,
+      failureReason: undefined,
+      skippedReason: undefined,
+      rawResponsePreview: undefined,
+      rawPartsPreview: undefined,
+      allowedSupportSlots: undefined,
+    },
+  };
+}
+
+function resetGenerationDiagnosticsForAttempt(generationDiagnostics) {
+  generationDiagnostics.draft.attempted = false;
+  generationDiagnostics.draft.success = false;
+  generationDiagnostics.draft.failureReason = undefined;
+  generationDiagnostics.draft.skippedReason = undefined;
+
+  generationDiagnostics.replyParts.attempted = false;
+  generationDiagnostics.replyParts.success = false;
+  generationDiagnostics.replyParts.partCount = 0;
+  generationDiagnostics.replyParts.groundedPartCount = 0;
+  generationDiagnostics.replyParts.failureReason = undefined;
+  generationDiagnostics.replyParts.skippedReason = undefined;
+  generationDiagnostics.replyParts.rawResponsePreview = undefined;
+  generationDiagnostics.replyParts.rawPartsPreview = undefined;
+  generationDiagnostics.replyParts.allowedSupportSlots = undefined;
 }
 
 function normalizeRuntimeMode(runtime) {
@@ -600,6 +514,30 @@ function resolveConfiguredLlamaBin(args) {
 
 function createMockRuntime() {
   let loaded = false;
+  async function generateJson(request) {
+    if (!loaded) {
+      throw new Error('Model must be loaded before generateStructured');
+    }
+    return {
+      jsonText: JSON.stringify({
+        parts: [
+          {
+            kind: 'social',
+            text: `I heard you say: "${request?.input?.playerMessage}".`,
+          },
+        ],
+        emotion: 'warm',
+        intent: 'conversation',
+        proposedIntents: [],
+        beatEvidence: {
+          coveredFacts: [],
+          uncoveredFacts: [],
+          completionSignal: 'none',
+          confidence: 0,
+        },
+      }),
+    };
+  }
   return {
     name: 'mock',
     async health() {
@@ -608,25 +546,14 @@ function createMockRuntime() {
     async loadModel() {
       loaded = true;
     },
+    async generateJson(request) {
+      return generateJson(request);
+    },
     async generateStructured(input) {
-      if (!loaded) {
-        throw new Error('Model must be loaded before generateStructured');
-      }
-      return {
-        jsonText: JSON.stringify({
-          utterance: `I heard you say: "${input.playerMessage}".`,
-          emotion: 'warm',
-          intent: 'conversation',
-          proposedIntents: [],
-          citations: [],
-          beatEvidence: {
-            coveredFacts: [],
-            uncoveredFacts: [],
-            completionSignal: 'none',
-            confidence: 0,
-          },
-        }),
-      };
+      return generateJson({
+        kind: 'draft-turn',
+        input,
+      });
     },
   };
 }
@@ -638,6 +565,71 @@ function createLlamaRuntime(args) {
   const llamaBinArgs = Array.isArray(args.llamaBinArgs) ? args.llamaBinArgs.map((entry) => String(entry)) : [];
   const llamaArgs = Array.isArray(args.llamaArgs) ? args.llamaArgs.map((entry) => String(entry)) : [];
   let loaded = false;
+
+  async function generateJson(request) {
+    if (!loaded) {
+      throw new Error('Model must be loaded before generateStructured');
+    }
+    const prompt = typeof request?.prompt === 'string'
+      ? request.prompt.trim()
+      : '';
+    if (!prompt) {
+      throw new Error('Prompt must be a non-empty string');
+    }
+
+    const commandName = path.basename(commandPath);
+    const isCompletionBinary = commandName === 'llama-completion';
+    const attempt = Number.isFinite(request?.attempt) ? Math.max(1, Math.floor(request.attempt)) : 1;
+    const temperature = normalizeOptionalString(request?.temperature)
+      ?? (attempt >= 3 ? '0.95' : attempt === 2 ? '0.75' : '0.55');
+    const schemaText = normalizeOptionalString(request?.schemaText) ?? REPLY_PARTS_JSON_SCHEMA;
+    const maxTokens = Number.isFinite(request?.maxTokens) ? Math.max(32, Math.floor(request.maxTokens)) : 180;
+
+    const argsForExec = [
+      ...llamaBinArgs,
+      '-m',
+      modelPath,
+      '--device',
+      'none',
+      '--single-turn',
+      ...(isCompletionBinary ? ['--no-conversation'] : []),
+      '--no-display-prompt',
+      '--color',
+      'off',
+      '--json-schema',
+      schemaText,
+      '-n',
+      String(maxTokens),
+      '--ctx-size',
+      '4096',
+      '--temp',
+      temperature,
+      '--top-k',
+      '60',
+      '--top-p',
+      '0.92',
+      '--repeat-penalty',
+      '1.15',
+      '--presence-penalty',
+      '0.3',
+      '--frequency-penalty',
+      '0.25',
+      '--no-warmup',
+      '-p',
+      prompt,
+      ...llamaArgs,
+    ];
+
+    const { stdout = '', stderr = '' } = await execFileAsync(commandPath, argsForExec, {
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    const combined = `${stdout}\n${stderr}`;
+    const rawText = sanitizeRuntimeOutput(combined).trim();
+    // Reply-parts parsing owns candidate selection. Preselecting here can
+    // collapse a valid top-level reply object down to a nested JSON fragment.
+    return { jsonText: rawText, rawText };
+  }
 
   return {
     name: 'llama',
@@ -656,59 +648,17 @@ function createLlamaRuntime(args) {
       }
       loaded = true;
     },
+    async generateJson(request) {
+      return generateJson(request);
+    },
     async generateStructured(input) {
-      if (!loaded) {
-        throw new Error('Model must be loaded before generateStructured');
-      }
-      const prompt = buildLlamaPrompt(input);
-      const commandName = path.basename(commandPath);
-      const isCompletionBinary = commandName === 'llama-completion';
-      const attempt = Number.isFinite(input.attempt) ? Math.max(1, Math.floor(input.attempt)) : 1;
-      const temperature = attempt >= 3 ? '0.95' : attempt === 2 ? '0.75' : '0.55';
-
-      const argsForExec = [
-        ...llamaBinArgs,
-        '-m',
-        modelPath,
-        '--device',
-        'none',
-        '--single-turn',
-        ...(isCompletionBinary ? ['--no-conversation'] : []),
-        '--no-display-prompt',
-        '--color',
-        'off',
-        '--json-schema',
-        TURN_JSON_SCHEMA,
-        '-n',
-        '180',
-        '--ctx-size',
-        '4096',
-        '--temp',
-        temperature,
-        '--top-k',
-        '60',
-        '--top-p',
-        '0.92',
-        '--repeat-penalty',
-        '1.15',
-        '--presence-penalty',
-        '0.3',
-        '--frequency-penalty',
-        '0.25',
-        '--no-warmup',
-        '-p',
-        prompt,
-        ...llamaArgs,
-      ];
-
-      const { stdout = '', stderr = '' } = await execFileAsync(commandPath, argsForExec, {
-        timeout: timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
+      return generateJson({
+        kind: 'draft-turn',
+        prompt: buildLlamaPrompt(input),
+        schemaText: REPLY_PARTS_JSON_SCHEMA,
+        maxTokens: 180,
+        attempt: input.attempt,
       });
-      const combined = `${stdout}\n${stderr}`;
-      const rawText = sanitizeRuntimeOutput(combined).trim();
-      const jsonText = selectBestJsonCandidate(combined) ?? rawText;
-      return { jsonText, rawText };
     },
   };
 }
@@ -720,6 +670,14 @@ function defaultPipelineDiagnostics(input) {
   const loreMatchCount = Array.isArray(input.loreMatches) ? input.loreMatches.length : 0;
   const retrievalAttempted = input.retrievalAttempted === true;
   const validationErrors = Array.isArray(input.validationErrors) ? input.validationErrors : [];
+  const validationDecision = normalizeOptionalString(input.validationDecision)
+    ?? (input.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'));
+  const unsupportedClaims = Number.isFinite(input.unsupportedClaims)
+    ? Math.max(0, Math.floor(input.unsupportedClaims))
+    : 0;
+  const requiresRepair = input.requiresRepair === true
+    || validationDecision === 'repair'
+    || validationDecision === 'fallback';
 
   return {
     version: 'v2',
@@ -752,14 +710,18 @@ function defaultPipelineDiagnostics(input) {
       bounds: {},
       goalStack: [],
     },
-    groundingDecision: input.usedFallback ? 'fallback' : 'accept',
+    groundingDecision: validationDecision,
     fallbackReason: input.usedFallback ? 'generation-fallback' : undefined,
     validation: {
-      decision: input.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'),
+      decision: validationDecision,
       errors: validationErrors,
-      unsupportedClaims: 0,
-      requiresRepair: false,
+      unsupportedClaims,
+      requiresRepair,
+      source: 'npc_output',
+      npcOutputValidated: true,
+      progressionGateEvaluated: false,
     },
+    generation: isRecord(input.generation) ? input.generation : createGenerationDiagnostics(),
   };
 }
 
@@ -952,9 +914,12 @@ export async function createSugarAgentSession(options = {}) {
       turnContext.queryType = queryType;
       turnContext.routingIntent = routing.intent;
       turnContext.routingPolicyPath = routing.policyPath;
+      const generationDiagnostics = createGenerationDiagnostics();
 
       if (args.provider === 'echo') {
         const output = createEchoReply(message);
+        generationDiagnostics.draft.skippedReason = 'echo_provider';
+        generationDiagnostics.replyParts.skippedReason = 'echo_provider';
         applyTurnToSession(session, args.npc, message, output.utterance);
         return {
           output,
@@ -971,6 +936,7 @@ export async function createSugarAgentSession(options = {}) {
             usedFallback: false,
             validationErrors: [],
             turnContext,
+            generation: generationDiagnostics,
           }),
           grounding: {
             summary: {
@@ -994,55 +960,151 @@ export async function createSugarAgentSession(options = {}) {
         npcProfile,
         requireLoreScopeForRetrieval: args.requireLoreScopeForRetrieval,
       });
+      const groundingEvidenceEntries = buildGroundingEvidenceEntries({
+        loreMatches: retrieval.matches,
+        loreArtifacts,
+        npcId: args.npc,
+        npcName,
+        npcProfile,
+        selfEntityId: npcProfile.selfEntityId,
+        memoryFacts,
+        playerMessage: message,
+        history,
+      });
+      const supportSlots = filterSupportSlotsForQueryType({
+        supportSlots: buildSupportSlotsFromGroundingEvidence({
+          evidenceEntries: groundingEvidenceEntries,
+          selfEntityId: npcProfile.selfEntityId,
+          npcId: args.npc,
+          maxSlots: 6,
+        }),
+        queryType,
+      });
 
       const attempt = Number.isFinite(turnOptionsRecord.attempt)
         ? Math.max(1, Math.floor(turnOptionsRecord.attempt))
         : 1;
-      const repair = turnOptionsRecord.repair === true;
-      const repairReason = normalizeOptionalString(turnOptionsRecord.repairReason);
-      const generated = await runtime.generateStructured({
-        npcName,
-        playerMessage: message,
-        history,
-        memoryFacts,
-        loreMatches: retrieval.matches,
-        loreArtifacts,
-        npcProfile,
-        globalSafetyBounds,
-        turnContext,
-        attempt,
-        repair,
-        repairReason,
-      });
-
-      const parsed = parseStructuredFromText(generated.jsonText);
       const validationErrors = [];
       let usedFallback = false;
-      let output = parsed;
-      if (!output) {
-        usedFallback = true;
-        validationErrors.push(`attempt ${attempt}: invalid JSON`);
-        output = fallbackOutput(message);
-      } else {
-        const beatEvidence = isRecord(output.beatEvidence)
-          ? output.beatEvidence
-          : {
-            coveredFacts: [],
-            uncoveredFacts: [],
-            completionSignal: 'none',
-            confidence: 0,
-          };
-        const citations = hydrateModelCitationsWithLore(
-          output.citations,
-          retrieval.matches,
-          message,
-          loreArtifacts,
-        );
+      let output = null;
+      let attemptsUsed = 0;
+      let validationDecision = 'accept';
+      let requiresRepair = false;
+      let unsupportedClaims = 0;
+      let internalRepair = turnOptionsRecord.repair === true;
+      let internalRepairReason = normalizeOptionalString(turnOptionsRecord.repairReason);
+
+      while (!output) {
+        attemptsUsed += 1;
+        const modelAttempt = attempt + attemptsUsed - 1;
+        resetGenerationDiagnosticsForAttempt(generationDiagnostics);
+        generationDiagnostics.draft.attempted = true;
+        generationDiagnostics.replyParts.attempted = true;
+        generationDiagnostics.replyParts.allowedSupportSlots = supportSlots.map((slot) => slot.slotId);
+        const generated = await runtime.generateStructured({
+          npcName,
+          playerMessage: message,
+          history,
+          memoryFacts,
+          npcProfile,
+          globalSafetyBounds,
+          turnContext,
+          supportSlots,
+          attempt: modelAttempt,
+          repair: internalRepair,
+          repairReason: internalRepairReason,
+        });
+
+        const replyPartsSourceText = typeof generated.rawText === 'string' && generated.rawText.trim().length > 0
+          ? generated.rawText
+          : generated.jsonText;
+        generationDiagnostics.replyParts.rawResponsePreview = sanitizePromptText(replyPartsSourceText).slice(0, 320);
+        const parsed = parseReplyPartsTurnFromText(replyPartsSourceText);
+        if (!parsed) {
+          generationDiagnostics.draft.success = false;
+          generationDiagnostics.draft.failureReason = `attempt ${modelAttempt}: invalid JSON`;
+          generationDiagnostics.replyParts.success = false;
+          generationDiagnostics.replyParts.failureReason = 'invalid_json';
+          if (!internalRepair) {
+            internalRepair = true;
+            internalRepairReason = `attempt ${modelAttempt}: invalid JSON`;
+            continue;
+          }
+          usedFallback = true;
+          validationDecision = 'fallback';
+          requiresRepair = true;
+          validationErrors.push(`attempt ${modelAttempt}: invalid JSON`);
+          output = isKnowledgeSeekingQueryType(queryType)
+            ? {
+              ...createGroundedUncertaintyReply(queryType),
+            }
+            : fallbackOutput(message);
+          break;
+        }
+
+        const normalizedReplyParts = normalizeReplyPartsForValidation({
+          turn: parsed,
+          supportSlots,
+          queryType,
+        }) ?? parsed;
+        generationDiagnostics.draft.success = true;
+        generationDiagnostics.draft.failureReason = undefined;
+        generationDiagnostics.replyParts.rawPartsPreview = normalizedReplyParts.parts.map((part) => ({
+          kind: part.kind,
+          text: part.text,
+          support: Array.isArray(part.support) ? part.support : undefined,
+        }));
+        const replyPartsValidation = validateReplyPartsContract({
+          parts: normalizedReplyParts.parts,
+          supportSlots,
+          queryType,
+          intent: normalizedReplyParts.intent,
+        });
+
+        if (replyPartsValidation.valid) {
+          generationDiagnostics.replyParts.success = true;
+          generationDiagnostics.replyParts.failureReason = undefined;
+          generationDiagnostics.replyParts.partCount = normalizedReplyParts.parts.length;
+          generationDiagnostics.replyParts.groundedPartCount = normalizedReplyParts.parts.filter((part) => part.kind === 'grounded').length;
+          output = materializeTurnOutputFromReplyParts({
+            turn: {
+              ...normalizedReplyParts,
+              beatEvidence: isRecord(normalizedReplyParts.beatEvidence)
+                ? normalizedReplyParts.beatEvidence
+                : {
+                  coveredFacts: [],
+                  uncoveredFacts: [],
+                  completionSignal: 'none',
+                  confidence: 0,
+                },
+            },
+            supportSlots,
+          });
+          validationDecision = 'accept';
+          unsupportedClaims = 0;
+          requiresRepair = false;
+          break;
+        }
+
+        const replyPartsRepairReason = buildReplyPartsValidationRepairReason(replyPartsValidation);
+        generationDiagnostics.replyParts.success = false;
+        generationDiagnostics.replyParts.failureReason = replyPartsRepairReason;
+        generationDiagnostics.replyParts.partCount = normalizedReplyParts.parts.length;
+        generationDiagnostics.replyParts.groundedPartCount = normalizedReplyParts.parts.filter((part) => part.kind === 'grounded').length;
+
+        if (!internalRepair) {
+          internalRepair = true;
+          internalRepairReason = replyPartsRepairReason;
+          continue;
+        }
+
         output = {
-          ...output,
-          citations,
-          beatEvidence,
+          ...createGroundedUncertaintyReply(queryType),
         };
+        validationDecision = 'fallback';
+        requiresRepair = true;
+        unsupportedClaims = replyPartsValidation.summary.invalidGroundedParts || 1;
+        validationErrors.push(`pipeline-v4 reply-parts validation fallback: ${replyPartsRepairReason}`);
       }
 
       applyTurnToSession(session, args.npc, message, output.utterance);
@@ -1054,12 +1116,16 @@ export async function createSugarAgentSession(options = {}) {
         retrievalAttempted: retrieval.attempted,
         usedFallback,
         validationErrors,
+        validationDecision,
+        unsupportedClaims,
+        requiresRepair,
         turnContext,
+        generation: generationDiagnostics,
       });
 
       return {
         output,
-        attempts: 1,
+        attempts: attemptsUsed,
         usedFallback,
         validationErrors,
         loreMatches: retrieval.matches,
@@ -1067,8 +1133,8 @@ export async function createSugarAgentSession(options = {}) {
         pipeline,
         grounding: {
           summary: {
-            decision: usedFallback ? 'fallback' : 'accept',
-            unsupportedCount: 0,
+            decision: validationDecision,
+            unsupportedCount: unsupportedClaims,
           },
         },
       };

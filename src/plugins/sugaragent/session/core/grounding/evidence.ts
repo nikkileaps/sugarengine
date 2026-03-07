@@ -94,6 +94,7 @@ interface BuildGroundingEvidenceInput {
   loreMatches?: unknown;
   loreArtifacts?: LoreArtifactsLike | null;
   npcId?: unknown;
+  npcName?: unknown;
   npcProfile?: NpcProfileLike | null;
   selfEntityId?: unknown;
   beatContract?: BeatContractLike | null;
@@ -170,6 +171,7 @@ export function buildGroundingEvidenceEntries({
   loreMatches,
   loreArtifacts,
   npcId,
+  npcName,
   npcProfile,
   selfEntityId,
   beatContract,
@@ -260,6 +262,10 @@ export function buildGroundingEvidenceEntries({
   }
 
   const profileEvidenceParts: string[] = [];
+  const normalizedNpcName = normalizeOptionalString(npcName);
+  if (normalizedNpcName) {
+    profileEvidenceParts.push(`NPC name: ${normalizedNpcName}.`);
+  }
   if (normalizedSelfEntityId) {
     profileEvidenceParts.push(`Identity entity: ${normalizedSelfEntityId}.`);
   }

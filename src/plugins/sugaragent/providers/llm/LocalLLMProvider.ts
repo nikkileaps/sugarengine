@@ -11,6 +11,7 @@ import type {
 } from './types';
 import type { LocalRuntimeBridge } from '../../runtime/types';
 import type { SugarAgentRuntimeMode } from '../../runtime/types';
+import type { RuntimeGenerateStructuredResponse } from '../../runtime/types';
 import type { PluginAgentTurnDiagnostics } from '../../../../engine/plugins/types';
 
 export interface LocalLLMProviderOptions {
@@ -94,6 +95,7 @@ export class LocalLLMProvider implements LLMProvider {
           output: fallbackOutput(request.playerMessage),
           attempts: 0,
           usedFallback: true,
+          fallbackKind: 'provider_unavailable',
           validationErrors,
           rawResponses,
           diagnostics: latestDiagnostics,
@@ -102,7 +104,7 @@ export class LocalLLMProvider implements LLMProvider {
     }
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
-      let runtimeResponse: { jsonText: string; diagnostics?: Record<string, unknown> };
+      let runtimeResponse: RuntimeGenerateStructuredResponse;
       try {
         const runtimeContext: NonNullable<LLMGenerateRequest['context']> = request.context
           ? { ...request.context }
@@ -130,6 +132,14 @@ export class LocalLLMProvider implements LLMProvider {
       if (runtimeResponse.diagnostics) {
         latestDiagnostics = runtimeResponse.diagnostics as PluginAgentTurnDiagnostics;
       }
+      const runtimeValidationErrors = Array.isArray(runtimeResponse.validationErrors)
+        ? runtimeResponse.validationErrors
+          .filter((entry): entry is string => typeof entry === 'string')
+        : [];
+      const runtimeAttempts = Number.isFinite(runtimeResponse.attempts)
+        ? Math.max(1, Number(runtimeResponse.attempts))
+        : attempt;
+      const runtimeUsedFallback = runtimeResponse.usedFallback === true;
 
       let parsed: unknown;
       try {
@@ -151,11 +161,30 @@ export class LocalLLMProvider implements LLMProvider {
         continue;
       }
 
+      if (runtimeUsedFallback) {
+        const mergedValidationErrors = [
+          ...validationErrors,
+          ...runtimeValidationErrors,
+        ].filter((entry, index, arr) => arr.indexOf(entry) === index);
+        return {
+          output,
+          attempts: runtimeAttempts,
+          usedFallback: true,
+          fallbackKind: 'validation_fallback',
+          validationErrors: mergedValidationErrors,
+          rawResponses,
+          diagnostics: latestDiagnostics,
+        };
+      }
+
       return {
         output,
-        attempts: attempt,
+        attempts: runtimeAttempts,
         usedFallback: false,
-        validationErrors,
+        validationErrors: [
+          ...validationErrors,
+          ...runtimeValidationErrors,
+        ].filter((entry, index, arr) => arr.indexOf(entry) === index),
         rawResponses,
         diagnostics: latestDiagnostics,
       };
@@ -165,6 +194,9 @@ export class LocalLLMProvider implements LLMProvider {
       output: fallbackOutput(request.playerMessage),
       attempts: this.maxAttempts,
       usedFallback: true,
+      fallbackKind: validationErrors.some((entry) => entry.includes('runtime error') || entry.includes('loadModel failed'))
+        ? 'provider_unavailable'
+        : 'validation_fallback',
       validationErrors,
       rawResponses,
       diagnostics: latestDiagnostics,

@@ -19,7 +19,7 @@ import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
 import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
 import { FadeOverlay } from '../ui/FadeOverlay';
-import { PluginManager, PluginSystem } from '../plugins';
+import { PluginManager, PluginSystem, mergeValidationBoundary } from '../plugins';
 import { normalizeContentBasePath, resolveContentUrl } from './contentPaths';
 import type { ItemView } from '../inventory/types';
 import type { InspectionData } from '../inspection/types';
@@ -607,7 +607,7 @@ export class Game {
         `goal=${diagnostics.initiative?.primaryGoal ?? 'unknown'}`,
         `evidence=${evidenceUsage}`,
         `retrieval=${diagnostics.retrieval?.qualityPath ?? (diagnostics.retrieval?.attempted ? 'attempted' : 'n/a')}${diagnostics.retrieval?.correctiveAttempted ? ':corrective' : ''}`,
-        `validation=${diagnostics.validation?.decision ?? 'unknown'}`,
+        `validation=${diagnostics.validation?.decision ?? 'unknown'}${diagnostics.validation?.source ? `:${diagnostics.validation.source}` : ''}`,
         `beat=${diagnostics.beatEvaluator?.status ?? 'not_applicable'}`,
       );
       if (activeTopic) {
@@ -687,6 +687,9 @@ export class Game {
     ) {
       const now = Date.now();
       this.lastSugarAgentTurnDiagnostics = {
+        validation: mergeValidationBoundary(undefined, {
+          progressionGateEvaluated: true,
+        }),
         beatEvaluator: {
           status: 'failed',
           beatId: activeBeatContract.id,
@@ -744,6 +747,9 @@ export class Game {
       const diagnostics: PluginAgentTurnDiagnostics = {
         ...(result.diagnostics ?? {}),
       };
+      diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
+        npcOutputValidated: diagnostics.validation?.npcOutputValidated !== false,
+      });
       if (!diagnostics.beatEvaluator) {
         diagnostics.beatEvaluator = {
           status: 'not_applicable',
@@ -783,6 +789,9 @@ export class Game {
                     ? 'completion-rule-not-satisfied'
                     : 'low-confidence-evidence')))),
         };
+        diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
+          progressionGateEvaluated: true,
+        });
         diagnostics.timestampMs = Date.now();
 
         if (evaluation.passed && activeBeatContract.objectiveId) {
@@ -812,6 +821,9 @@ export class Game {
           completionSignal: 'none',
           reason: 'missing-beat-evidence',
         };
+        diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
+          progressionGateEvaluated: true,
+        });
         diagnostics.timestampMs = Date.now();
       }
 

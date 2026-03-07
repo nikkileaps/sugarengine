@@ -107,6 +107,9 @@ export default defineConfig({
           const pipelineInitiative = (typeof pipeline.initiative === 'object' && pipeline.initiative !== null)
             ? pipeline.initiative as Record<string, unknown>
             : {};
+          const pipelineValidation = (typeof pipeline.validation === 'object' && pipeline.validation !== null)
+            ? pipeline.validation as Record<string, unknown>
+            : {};
           const initiativeDecision = (typeof pipelineInitiative.decision === 'object' && pipelineInitiative.decision !== null)
             ? pipelineInitiative.decision as Record<string, unknown>
             : {};
@@ -115,6 +118,15 @@ export default defineConfig({
             : {};
           const pipelineEvidenceBudget = (typeof pipeline.evidenceBudget === 'object' && pipeline.evidenceBudget !== null)
             ? pipeline.evidenceBudget as Record<string, unknown>
+            : {};
+          const pipelineGeneration = (typeof pipeline.generation === 'object' && pipeline.generation !== null)
+            ? pipeline.generation as Record<string, unknown>
+            : {};
+          const pipelineDraftGeneration = (typeof pipelineGeneration.draft === 'object' && pipelineGeneration.draft !== null)
+            ? pipelineGeneration.draft as Record<string, unknown>
+            : {};
+          const pipelineReplyPartsGeneration = (typeof pipelineGeneration.replyParts === 'object' && pipelineGeneration.replyParts !== null)
+            ? pipelineGeneration.replyParts as Record<string, unknown>
             : {};
           const pipelineEvidenceBudgetLimits = (typeof pipelineEvidenceBudget.limits === 'object' && pipelineEvidenceBudget.limits !== null)
             ? pipelineEvidenceBudget.limits as Record<string, unknown>
@@ -289,6 +301,30 @@ export default defineConfig({
               errors: validationErrors,
               unsupportedClaims: toFiniteNumber(groundingSummary.unsupportedCount) ?? 0,
               requiresRepair: validationDecision === 'repair' || validationDecision === 'fallback',
+              source: normalizeOptionalString(pipelineValidation.source) ?? 'npc_output',
+              npcOutputValidated: pipelineValidation.npcOutputValidated !== false,
+              progressionGateEvaluated: pipelineValidation.progressionGateEvaluated === true,
+            },
+            generation: {
+              draft: {
+                attempted: pipelineDraftGeneration.attempted === true,
+                success: pipelineDraftGeneration.success === true,
+                failureReason: normalizeOptionalString(pipelineDraftGeneration.failureReason) ?? undefined,
+                skippedReason: normalizeOptionalString(pipelineDraftGeneration.skippedReason) ?? undefined,
+              },
+              replyParts: {
+                attempted: pipelineReplyPartsGeneration.attempted === true,
+                success: pipelineReplyPartsGeneration.success === true,
+                partCount: toFiniteNumber(pipelineReplyPartsGeneration.partCount) ?? 0,
+                groundedPartCount: toFiniteNumber(pipelineReplyPartsGeneration.groundedPartCount) ?? 0,
+                failureReason: normalizeOptionalString(pipelineReplyPartsGeneration.failureReason) ?? undefined,
+                skippedReason: normalizeOptionalString(pipelineReplyPartsGeneration.skippedReason) ?? undefined,
+                rawResponsePreview: normalizeOptionalString(pipelineReplyPartsGeneration.rawResponsePreview) ?? undefined,
+                rawPartsPreview: Array.isArray(pipelineReplyPartsGeneration.rawPartsPreview)
+                  ? pipelineReplyPartsGeneration.rawPartsPreview as Array<Record<string, unknown>>
+                  : undefined,
+                allowedSupportSlots: normalizeStringArray(pipelineReplyPartsGeneration.allowedSupportSlots),
+              },
             },
             pipelineVersion: normalizeOptionalString(pipeline.version) ?? 'v2',
             timestampMs: Date.now(),
@@ -741,6 +777,9 @@ export default defineConfig({
               writeJson(res, 200, {
                 ok: true,
                 jsonText: JSON.stringify(result.output),
+                attempts: result.attempts,
+                usedFallback: result.usedFallback,
+                validationErrors: result.validationErrors,
                 detail: result.usedFallback ? 'provider-fallback' : 'provider-ok',
                 diagnostics,
               });

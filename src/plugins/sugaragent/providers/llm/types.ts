@@ -38,6 +38,7 @@ export interface LLMGenerateResult {
   output: SugarAgentTurnOutput;
   attempts: number;
   usedFallback: boolean;
+  fallbackKind?: 'provider_unavailable' | 'validation_fallback';
   validationErrors: string[];
   rawResponses: string[];
   diagnostics?: PluginAgentTurnDiagnostics;

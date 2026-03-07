@@ -1,6 +1,10 @@
 export { PluginManager } from './PluginManager';
 export { PluginSystem } from './PluginSystem';
 export {
+  deriveValidationSource,
+  mergeValidationBoundary,
+} from './validationBoundary';
+export {
   PLUGIN_API_VERSION,
 } from './types';
 export type {
@@ -17,6 +21,7 @@ export type {
   PluginAgentConversationMode,
   PluginAgentInitiativeAction,
   PluginAgentValidationDecision,
+  PluginAgentValidationSource,
   PluginAgentBeatEvaluationStatus,
   PluginAgentTurnDiagnostics,
   PluginAgentProfile,

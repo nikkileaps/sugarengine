@@ -83,6 +83,7 @@ export type PluginAgentExpectedPlayerResponseType =
   | 'action'
   | 'unknown';
 export type PluginAgentValidationDecision = 'accept' | 'repair' | 'fallback' | 'reject' | 'abstain' | 'unknown';
+export type PluginAgentValidationSource = 'none' | 'npc_output' | 'progression_gate' | 'npc_output+progression_gate';
 export type PluginAgentBeatEvaluationStatus = 'passed' | 'failed' | 'not_applicable';
 
 export interface PluginAgentTurnDiagnostics {
@@ -147,6 +148,32 @@ export interface PluginAgentTurnDiagnostics {
     errors?: string[];
     unsupportedClaims?: number;
     requiresRepair?: boolean;
+    source?: PluginAgentValidationSource;
+    npcOutputValidated?: boolean;
+    progressionGateEvaluated?: boolean;
+  };
+  generation?: {
+    draft?: {
+      attempted?: boolean;
+      success?: boolean;
+      failureReason?: string;
+      skippedReason?: string;
+    };
+    replyParts?: {
+      attempted?: boolean;
+      success?: boolean;
+      partCount?: number;
+      groundedPartCount?: number;
+      failureReason?: string;
+      skippedReason?: string;
+      rawResponsePreview?: string;
+      rawPartsPreview?: Array<{
+        kind: 'social' | 'grounded' | 'uncertain' | 'close';
+        text: string;
+        support?: string[];
+      }>;
+      allowedSupportSlots?: string[];
+    };
   };
   beatEvaluator?: {
     status?: PluginAgentBeatEvaluationStatus;
