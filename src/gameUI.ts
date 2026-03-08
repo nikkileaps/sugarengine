@@ -134,6 +134,19 @@ export function setupGameUI(game: Game, container: HTMLElement) {
       // If utterance is empty, the scene is done (close intent already fired).
       if (!envelope.utterance) return;
 
+      // Trigger world-object highlights from grounding metadata.
+      if (envelope.groundingMetadata?.references) {
+        for (const ref of envelope.groundingMetadata.references) {
+          if (ref.worldObjectId && ref.highlightAction) {
+            // TODO: Wire to engine highlight API when visual system exists.
+            console.log(
+              `[Sugarlang Grounding] ${ref.highlightAction}: ${ref.worldObjectId}` +
+              `${ref.conceptId ? ` (concept: ${ref.conceptId}, form: "${ref.targetForm}")` : ''}`,
+            );
+          }
+        }
+      }
+
       // Extract support text and band policy from middleware annotations.
       const slAnnotations = envelope.middlewareAnnotations['sugarlang'] as
         | {

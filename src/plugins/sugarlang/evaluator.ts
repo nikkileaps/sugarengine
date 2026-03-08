@@ -23,8 +23,8 @@ export interface EvaluationResult {
   correct: boolean;
   /** Communicative task success (player accomplished the goal). */
   taskSuccess: boolean;
-  /** Form accuracy (the specific answer matched perfectly). */
-  formAccuracy: boolean;
+  /** Form accuracy score (0–1). 1.0 = exact match, partial credit for close matches. */
+  formAccuracy: number;
   /** Which accepted answer matched, if any. */
   matchedAnswer?: string;
   /** Feedback message for the player. */
@@ -67,7 +67,7 @@ function evaluateYesNo(
 ): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
   const expected = turn.evaluation?.expectedYesNo;
   if (expected === undefined) {
-    return { correct: true, taskSuccess: true, formAccuracy: true };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0 };
   }
 
   // yes_no can come as text ("yes", "no", "sí", "no") or choiceIndex (0=yes, 1=no)
@@ -79,14 +79,14 @@ function evaluateYesNo(
     const yesWords = ['yes', 'yeah', 'yep', 'sí', 'si'];
     playerSaidYes = yesWords.includes(norm);
   } else {
-    return { correct: false, taskSuccess: false, formAccuracy: false };
+    return { correct: false, taskSuccess: false, formAccuracy: 0 };
   }
 
   const correct = playerSaidYes === expected;
   return {
     correct,
     taskSuccess: correct,
-    formAccuracy: correct,
+    formAccuracy: correct ? 1.0 : 0,
     matchedAnswer: correct ? (playerSaidYes ? 'yes' : 'no') : undefined,
   };
 }
@@ -97,7 +97,7 @@ function evaluateObjectSelection(
 ): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
   const accepted = turn.evaluation?.acceptedObjectIds ?? [];
   if (accepted.length === 0) {
-    return { correct: true, taskSuccess: true, formAccuracy: true };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0 };
   }
 
   const objectId = input.objectId ?? '';
@@ -105,7 +105,7 @@ function evaluateObjectSelection(
   return {
     correct,
     taskSuccess: correct,
-    formAccuracy: correct,
+    formAccuracy: correct ? 1.0 : 0,
     matchedAnswer: correct ? objectId : undefined,
   };
 }
@@ -116,7 +116,7 @@ function evaluateBlankFill(
 ): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
   const accepted = turn.evaluation?.acceptedAnswers ?? [];
   if (accepted.length === 0) {
-    return { correct: true, taskSuccess: true, formAccuracy: true };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0 };
   }
 
   // Single blank: use blankFills['blank1'] or text
@@ -125,7 +125,7 @@ function evaluateBlankFill(
   return {
     correct: !!matched,
     taskSuccess: !!matched,
-    formAccuracy: !!matched,
+    formAccuracy: matched ? 1.0 : 0,
     matchedAnswer: matched,
   };
 }
@@ -136,7 +136,7 @@ function evaluatePhraseAssembly(
 ): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
   const accepted = turn.evaluation?.acceptedAnswers ?? [];
   if (accepted.length === 0) {
-    return { correct: true, taskSuccess: true, formAccuracy: true };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0 };
   }
 
   const playerPhrase = input.text ?? '';
@@ -145,6 +145,7 @@ function evaluatePhraseAssembly(
   // For phrase assembly, allow partial communicative success even if form is wrong.
   // If the player used the right words but wrong order, taskSuccess may still be true.
   let taskSuccess = !!matched;
+  let formAccuracy = matched ? 1.0 : 0;
   if (!matched && playerPhrase) {
     const playerTokens = new Set(normalize(playerPhrase).split(/\s+/));
     for (const answer of accepted) {
@@ -152,6 +153,8 @@ function evaluatePhraseAssembly(
       const hasAllTokens = answerTokens.every((t) => playerTokens.has(t));
       if (hasAllTokens && playerTokens.size === answerTokens.length) {
         taskSuccess = true;
+        // Right words, wrong order — partial form credit
+        formAccuracy = 0.5;
         break;
       }
     }
@@ -160,7 +163,7 @@ function evaluatePhraseAssembly(
   return {
     correct: !!matched,
     taskSuccess,
-    formAccuracy: !!matched,
+    formAccuracy,
     matchedAnswer: matched,
   };
 }
@@ -254,12 +257,12 @@ function evaluateTextInput(
   const intents = turn.evaluation?.intents;
   if (!intents || intents.length === 0) {
     // No intent evaluation configured — accept any input
-    return { correct: true, taskSuccess: true, formAccuracy: true };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0 };
   }
 
   const text = input.text ?? '';
   if (!text.trim()) {
-    return { correct: false, taskSuccess: false, formAccuracy: false };
+    return { correct: false, taskSuccess: false, formAccuracy: 0 };
   }
 
   const normalized = normalizeForIntent(text);
@@ -277,10 +280,10 @@ function evaluateTextInput(
   }
 
   if (bestMatch) {
-    // Compute form accuracy based on slot coverage
+    // Compute form accuracy as continuous score based on slot coverage
     const totalSlots = bestMatch.requiredSlotsTotal + bestMatch.optionalSlotsTotal;
     const filledSlots = bestMatch.requiredSlotsFilled + bestMatch.optionalSlotsFilled;
-    const formAccuracy = totalSlots > 0 ? filledSlots === totalSlots : true;
+    const formAccuracy = totalSlots > 0 ? filledSlots / totalSlots : 1.0;
 
     return {
       correct: true,
@@ -299,14 +302,14 @@ function evaluateTextInput(
         return {
           correct: true,
           taskSuccess: true,
-          formAccuracy: false,
+          formAccuracy: 0.3,
           matchedAnswer: intent.intentId,
         };
       }
     }
   }
 
-  return { correct: false, taskSuccess: false, formAccuracy: false };
+  return { correct: false, taskSuccess: false, formAccuracy: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -319,14 +322,14 @@ function evaluateChipComposition(
 ): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
   const accepted = turn.evaluation?.acceptedCompositions ?? turn.evaluation?.acceptedAnswers ?? [];
   if (accepted.length === 0) {
-    return { correct: true, taskSuccess: true, formAccuracy: true };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0 };
   }
 
   const playerPhrase = input.text ?? '';
   // Exact match (case-insensitive, accent-tolerant)
   const matched = matchesAcceptedAnswer(playerPhrase, accepted);
   if (matched) {
-    return { correct: true, taskSuccess: true, formAccuracy: true, matchedAnswer: matched };
+    return { correct: true, taskSuccess: true, formAccuracy: 1.0, matchedAnswer: matched };
   }
 
   // Token-set match: same words in any order counts as taskSuccess
@@ -344,7 +347,7 @@ function evaluateChipComposition(
   return {
     correct: taskSuccess,
     taskSuccess,
-    formAccuracy: false,
+    formAccuracy: taskSuccess ? 0.5 : 0,
     matchedAnswer: taskSuccess ? playerPhrase : undefined,
   };
 }
@@ -383,11 +386,11 @@ export function evaluateTurn(
 ): EvaluationResult {
   const evaluator = MODE_EVALUATORS[turn.responseMode];
   if (!evaluator) {
-    // Unknown mode or modes without deterministic evaluation (short_text, open_text, etc.)
+    // Unknown mode or modes without deterministic evaluation
     return {
       correct: true,
       taskSuccess: true,
-      formAccuracy: true,
+      formAccuracy: 1.0,
       attemptCount,
     };
   }

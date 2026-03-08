@@ -6,7 +6,7 @@
  */
 
 import type { SugarlangContentBundle } from '../../types';
-import { FIND_THE_LUGGAGE_SCENARIO, FIND_THE_LUGGAGE_GROUNDING } from './scenario';
+import { FIND_THE_LUGGAGE_SCENARIO, FIND_THE_LUGGAGE_GROUNDING, FIND_THE_LUGGAGE_QUEST_BINDINGS } from './scenario';
 import { SPANISH_LEXICON, ENGLISH_LEXICON } from './lexicon';
 import { BAND_POLICIES } from './band-policies';
 import { SCENE_PACK_ES } from './scene-pack-es';
@@ -15,6 +15,7 @@ import { SCENE_PACK_EN } from './scene-pack-en';
 export {
   FIND_THE_LUGGAGE_SCENARIO,
   FIND_THE_LUGGAGE_GROUNDING,
+  FIND_THE_LUGGAGE_QUEST_BINDINGS,
   SPANISH_LEXICON,
   ENGLISH_LEXICON,
   BAND_POLICIES,
@@ -37,5 +38,8 @@ export const FIND_THE_LUGGAGE_BUNDLE: SugarlangContentBundle = {
   sceneLanguagePacks: new Map([
     [`${SCENE_PACK_ES.scenarioId}:${SCENE_PACK_ES.targetLanguage}`, SCENE_PACK_ES],
     [`${SCENE_PACK_EN.scenarioId}:${SCENE_PACK_EN.targetLanguage}`, SCENE_PACK_EN],
+  ]),
+  questBindings: new Map([
+    [FIND_THE_LUGGAGE_SCENARIO.scenarioId, FIND_THE_LUGGAGE_QUEST_BINDINGS],
   ]),
 };

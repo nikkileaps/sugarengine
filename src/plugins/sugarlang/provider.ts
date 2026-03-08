@@ -450,10 +450,34 @@ export function createSugarlangScriptedProvider(
             if (repairOpt.responseContractOverride.hintText) responseContract.hintText = repairOpt.responseContractOverride.hintText;
           }
 
-          // Record repair usage in evidence
-          if (state.lastTurnEvidence) {
-            state.lastTurnEvidence.supportRequested = true;
-          }
+          // Build repair-specific evidence record
+          const bandUsed = (session.learnerBandOverride ?? 'B0') as LearnerBandId;
+          const repairEvidence: TurnEvidence = {
+            turnId: previousTurn.turnId,
+            timestamp: new Date().toISOString(),
+            playerInput: `repair:${repairId}${prefillWord ? `:${prefillWord}` : ''}`,
+            responseMode: previousTurn.responseMode,
+            bandUsed,
+            policyUsed: 'repair',
+            supportShown: true,
+            supportRequested: true,
+            groundingShown: !!repairOpt.groundingAction,
+            groundingUsed: !!repairOpt.groundingAction,
+            retries: 0,
+            deliveryType: previousTurn.initialDelivery ? 'initialDelivery' : 'targetText',
+            repairId,
+            repairType: repairOpt.type,
+            teachingConcepts: previousTurn.teachingConcepts,
+            taskSuccess: false,
+            formAccuracy: 0,
+            supportDependence: 1,
+          };
+          state.lastTurnEvidence = repairEvidence;
+
+          console.log(
+            `[SL·P2] repair → id=${repairId} type=${repairOpt.type}` +
+            ` grounding=${repairOpt.groundingAction ? repairOpt.groundingAction.worldObjectId : 'none'}`,
+          );
 
           setProviderState(session, state);
           return {
@@ -472,6 +496,7 @@ export function createSugarlangScriptedProvider(
                   }],
                 }
               : undefined,
+            turnEvidence: repairEvidence,
             diagnostics: {
               supportText: previousTurn.supportText,
               targetText: previousTurn.targetText,
@@ -496,6 +521,11 @@ export function createSugarlangScriptedProvider(
 
         // Build turn evidence
         const bandUsed = (constraints.learnerBand ?? 'B0') as LearnerBandId;
+        // Resolve the band-variant object ID from grounding scope
+        const bandVariantObjectId = constraints.groundingScope?.find(
+          (ref) => ref.conceptId === 'object.suitcase',
+        )?.worldObjectId;
+
         state.lastTurnEvidence = {
           turnId: previousTurn.turnId,
           timestamp: new Date().toISOString(),
@@ -508,10 +538,25 @@ export function createSugarlangScriptedProvider(
           groundingShown: !!constraints.groundingScope,
           groundingUsed: !!playerInput.objectId,
           retries: state.attemptCount - 1,
+          deliveryType: previousTurn.initialDelivery ? 'initialDelivery' : 'targetText',
+          teachingConcepts: previousTurn.teachingConcepts,
+          shownGroundingRefs: constraints.groundingScope?.map((ref) => ref.worldObjectId).filter((id): id is string => !!id),
+          bandVariantObjectId,
           taskSuccess: evalResult.taskSuccess,
-          formAccuracy: evalResult.formAccuracy ? 1.0 : 0.0,
+          formAccuracy: evalResult.formAccuracy,
           supportDependence: state.attemptCount > 1 ? Math.min(1, (state.attemptCount - 1) * 0.33) : 0,
         };
+
+        console.log(
+          `[SL·P2] eval → turn=${previousTurn.turnId} correct=${evalResult.correct} formAccuracy=${evalResult.formAccuracy}` +
+          ` taskSuccess=${evalResult.taskSuccess} attempt=${state.attemptCount}`,
+        );
+        console.log(
+          `[SL·P2] evidence → delivery=${state.lastTurnEvidence.deliveryType}` +
+          ` concepts=[${state.lastTurnEvidence.teachingConcepts.join(', ')}]` +
+          ` bandVariant=${state.lastTurnEvidence.bandVariantObjectId ?? 'none'}` +
+          ` groundingRefs=[${(state.lastTurnEvidence.shownGroundingRefs ?? []).join(', ')}]`,
+        );
 
         if (!evalResult.correct && state.attemptCount < 3) {
           // Retry the same turn with feedback
@@ -572,6 +617,11 @@ export function createSugarlangScriptedProvider(
     // Render initialDelivery if authored, otherwise fall back to targetText
     const renderedUtterance = currentTurn.initialDelivery ?? currentTurn.targetText;
 
+    console.log(
+      `[SL·P2] turn → id=${currentTurn.turnId} delivery=${currentTurn.initialDelivery ? 'initialDelivery' : 'targetText'}` +
+      ` mode=${currentTurn.responseMode} concepts=[${currentTurn.teachingConcepts.join(', ')}]`,
+    );
+
     // Extract tappable target-language words for clarification prefill
     const tappableWords = currentTurn.teachingConcepts.length > 0 && currentTurn.repairOptions?.some((r) => r.type === 'clarification_template')
       ? extractTappableWords(currentTurn)
@@ -586,6 +636,7 @@ export function createSugarlangScriptedProvider(
       groundingMetadata: constraints.groundingScope
         ? { references: constraints.groundingScope }
         : undefined,
+      turnEvidence: state.lastTurnEvidence,
       diagnostics: {
         supportText: currentTurn.supportText,
         targetText: currentTurn.targetText,

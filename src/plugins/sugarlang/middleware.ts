@@ -27,6 +27,8 @@ import type {
   LearnerBandId,
   BandPolicy,
   GroundingMap,
+  GroundedQuestBinding,
+  LexiconPack,
   ScenarioBrief,
   TurnEvidence,
 } from './types';
@@ -94,17 +96,65 @@ export function createSugarlangMiddleware(
     return contentBundle.bandPolicies.policies.find((p) => p.bandId === bandId);
   }
 
-  function buildGroundingScope(
+  /**
+   * Resolve grounding scope filtered to the active band's quest binding variants.
+   * Also resolves targetForm from the lexicon for each conceptId.
+   */
+  function resolveGroundingScopeForBand(
     groundingMap: GroundingMap | undefined,
+    questBindings: GroundedQuestBinding[] | undefined,
+    bandId: LearnerBandId,
+    lexicon: LexiconPack | undefined,
   ): GroundingReference[] | undefined {
     if (!groundingMap || groundingMap.entries.length === 0) return undefined;
-    return groundingMap.entries.map((entry) => ({
-      conceptId: entry.conceptId,
-      targetForm: '', // Resolved later from lexicon
-      worldObjectId: entry.worldObjectId,
-      worldAttribute: entry.worldAttribute,
-      highlightAction: entry.highlightActions[0],
-    }));
+
+    // Build a set of allowed world object IDs for this band from quest bindings.
+    const bandObjectIds = new Set<string>();
+    if (questBindings) {
+      for (const binding of questBindings) {
+        const variant = binding.bandVariants.find((v) => v.bandId === bandId);
+        if (variant) {
+          bandObjectIds.add(variant.worldObjectId);
+        }
+      }
+    }
+
+    // Build a lookup for targetForm from lexicon.
+    const targetFormByConceptId = new Map<string, string>();
+    if (lexicon) {
+      for (const entry of lexicon.entries) {
+        targetFormByConceptId.set(entry.conceptId, entry.targetForm);
+      }
+    }
+
+    // Filter grounding entries: if quest bindings exist, only include objects
+    // that match the band variant or are non-quest objects (no binding covers them).
+    const questBoundObjectIds = new Set<string>();
+    if (questBindings) {
+      for (const binding of questBindings) {
+        for (const v of binding.bandVariants) {
+          questBoundObjectIds.add(v.worldObjectId);
+        }
+      }
+    }
+
+    return groundingMap.entries
+      .filter((entry) => {
+        // If this object is covered by any quest binding, only include if it
+        // matches the active band's variant.
+        if (questBoundObjectIds.has(entry.worldObjectId)) {
+          return bandObjectIds.has(entry.worldObjectId);
+        }
+        // Non-quest objects pass through unfiltered.
+        return true;
+      })
+      .map((entry) => ({
+        conceptId: entry.conceptId,
+        targetForm: targetFormByConceptId.get(entry.conceptId) ?? '',
+        worldObjectId: entry.worldObjectId,
+        worldAttribute: entry.worldAttribute,
+        highlightAction: entry.highlightActions[0],
+      }));
   }
 
   // -------------------------------------------------------------------------
@@ -165,10 +215,24 @@ export function createSugarlangMiddleware(
     const state = getState(session);
     if (!state.scenarioId) return;
 
-    // Set grounding scope from the grounding map.
-    const scope = buildGroundingScope(state.groundingMap);
+    // Resolve band-filtered grounding scope.
+    const bandId = state.resolvedBand ?? 'B0';
+    const questBindingsForScenario = contentBundle.questBindings.get(state.scenarioId);
+    const targetLang = session.targetLanguage ?? 'es';
+    const lexicon = contentBundle.lexicons.get(targetLang);
+
+    const scope = resolveGroundingScopeForBand(
+      state.groundingMap,
+      questBindingsForScenario,
+      bandId,
+      lexicon,
+    );
     if (scope) {
       constraints.groundingScope = scope;
+      console.log(
+        `[SL·P2] grounding → band=${bandId} objects=[${scope.map((r) => r.worldObjectId).join(', ')}]` +
+        ` (${scope.length}/${state.groundingMap?.entries.length ?? 0} entries passed filter)`,
+      );
     }
 
     // Apply band-specific constraints.
@@ -215,13 +279,11 @@ export function createSugarlangMiddleware(
     const state = getState(_session);
     if (!state.scenarioId) return;
 
-    // Extract turn evidence from provider diagnostics.
-    const providerDiag = envelope.providerDiagnostics as
-      | { lastTurnEvidence?: TurnEvidence }
-      | undefined;
+    // Read turn evidence from the dedicated top-level field.
+    const evidence = envelope.turnEvidence as TurnEvidence | undefined;
 
-    if (providerDiag?.lastTurnEvidence && config.learnerStateManager) {
-      config.learnerStateManager.updateFromEvidence(providerDiag.lastTurnEvidence);
+    if (evidence && config.learnerStateManager) {
+      config.learnerStateManager.updateFromEvidence(evidence);
     }
   }
 

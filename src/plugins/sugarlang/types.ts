@@ -288,6 +288,19 @@ export interface TurnEvidence {
   groundingShown: boolean;
   groundingUsed: boolean;
   retries: number;
+  // Surface and delivery context
+  /** Whether the player saw initialDelivery or targetText. */
+  deliveryType: 'initialDelivery' | 'targetText';
+  /** If a repair was used, which repair option ID. */
+  repairId?: string;
+  /** If a repair was used, the type of repair. */
+  repairType?: 'fixed' | 'clarification_template';
+  /** Teaching concepts active for this turn. */
+  teachingConcepts: string[];
+  /** Grounding references shown to the player this turn. */
+  shownGroundingRefs?: string[];
+  /** The band-variant world object ID resolved for this turn. */
+  bandVariantObjectId?: string;
   // Derived scores
   taskSuccess: boolean;
   formAccuracy: number;
@@ -330,6 +343,51 @@ export interface MorphologyTolerance {
 }
 
 // ---------------------------------------------------------------------------
+// Grounded Quest Binding
+// ---------------------------------------------------------------------------
+
+/** Band-specific variant of a quest world object. */
+export interface QuestBindingBandVariant {
+  bandId: LearnerBandId;
+  /** World object ID the learner interacts with at this band. */
+  worldObjectId: string;
+  /** Teaching concepts actively highlighted at this band. */
+  teachingConcepts: string[];
+}
+
+/** Interaction affordances for a quest binding. */
+export interface QuestBindingAffordances {
+  /** Whether the object can be tapped/clicked to inspect. */
+  tapInspect: boolean;
+  /** Whether the object can be highlighted by grounding. */
+  highlight: boolean;
+  /** Whether the object can be focused by camera. */
+  cameraFocus: boolean;
+}
+
+/**
+ * Binds a stable scenario referent to per-band world object variants.
+ *
+ * The authoring model defines abstract referents (e.g. "target_luggage_primary")
+ * that resolve to different world objects at different bands (B0=red suitcase,
+ * B1=blue suitcase, etc.). This binding drives band-filtered grounding scope.
+ */
+export interface GroundedQuestBinding {
+  /** Stable referent ID used in the scenario brief. */
+  scenarioReferentId: string;
+  /** Per-band world object variants. */
+  bandVariants: QuestBindingBandVariant[];
+  /** Interaction affordances for this referent. */
+  affordances: QuestBindingAffordances;
+  /** Identity shown when picked up (inventory item name). */
+  pickupIdentity?: string;
+  /** Identity shown in inventory UI. */
+  inventoryIdentity?: string;
+  /** Quest completion step this binding contributes to. */
+  questCompletionStep?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Runtime Content Bundle
 // ---------------------------------------------------------------------------
 
@@ -340,4 +398,6 @@ export interface SugarlangContentBundle {
   lexicons: Map<string, LexiconPack>;
   bandPolicies: BandPolicyPack;
   sceneLanguagePacks: Map<string, SceneLanguagePack>;
+  /** Per-scenario quest bindings mapping referents to band-specific world objects. */
+  questBindings: Map<string, GroundedQuestBinding[]>;
 }

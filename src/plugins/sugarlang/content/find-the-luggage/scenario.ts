@@ -5,7 +5,7 @@
  * for the first Sugarlang vertical slice.
  */
 
-import type { ScenarioBrief, GroundingMap } from '../../types';
+import type { ScenarioBrief, GroundingMap, GroundedQuestBinding } from '../../types';
 
 export const FIND_THE_LUGGAGE_SCENARIO: ScenarioBrief = {
   scenarioId: 'find-the-luggage',
@@ -104,3 +104,24 @@ export const FIND_THE_LUGGAGE_GROUNDING: GroundingMap = {
     },
   ],
 };
+
+export const FIND_THE_LUGGAGE_QUEST_BINDINGS: GroundedQuestBinding[] = [
+  {
+    scenarioReferentId: 'target_luggage_primary',
+    bandVariants: [
+      { bandId: 'B0', worldObjectId: 'suitcase-red', teachingConcepts: ['object.suitcase', 'color.red'] },
+      { bandId: 'B1', worldObjectId: 'suitcase-blue', teachingConcepts: ['object.suitcase', 'color.blue'] },
+      { bandId: 'B2', worldObjectId: 'suitcase-black', teachingConcepts: ['object.suitcase', 'color.black'] },
+      { bandId: 'B3', worldObjectId: 'suitcase-ribbon', teachingConcepts: ['object.suitcase', 'object.ribbon_green', 'adjective.leather'] },
+      { bandId: 'B4', worldObjectId: 'suitcase-ribbon', teachingConcepts: ['object.suitcase', 'object.ribbon_green', 'adjective.leather', 'adjective.worn'] },
+    ],
+    affordances: {
+      tapInspect: true,
+      highlight: true,
+      cameraFocus: true,
+    },
+    pickupIdentity: 'Lost Suitcase',
+    inventoryIdentity: 'Recovered Luggage',
+    questCompletionStep: 'recover_luggage',
+  },
+];

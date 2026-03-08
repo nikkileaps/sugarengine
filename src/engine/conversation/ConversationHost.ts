@@ -224,6 +224,7 @@ export class ConversationHost {
       hostActionProposals: providerOutput.hostActionProposals ?? [],
       groundingMetadata: providerOutput.groundingMetadata,
       providerDiagnostics: providerOutput.diagnostics,
+      turnEvidence: providerOutput.turnEvidence,
       middlewareAnnotations: {},
       timestampMs: Date.now(),
     };

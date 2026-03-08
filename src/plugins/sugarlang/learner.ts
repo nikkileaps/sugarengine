@@ -160,6 +160,42 @@ export class LearnerStateManager {
     if (evidence.retries > 0 && evidence.taskSuccess) {
       this.state.repair = Math.min(1, this.state.repair + delta * 0.5);
     }
+
+    // Wire knownStructures / unstableStructures from teaching concepts
+    const concepts = evidence.teachingConcepts;
+    if (concepts && concepts.length > 0) {
+      for (const concept of concepts) {
+        if (evidence.taskSuccess && evidence.formAccuracy >= 0.8) {
+          // Strong success → known
+          if (!this.state.knownStructures.includes(concept)) {
+            this.state.knownStructures.push(concept);
+            console.log(`[SL·P2] learner → known+ "${concept}" (formAccuracy=${evidence.formAccuracy})`);
+          }
+          // Remove from unstable if it was there
+          const unstableIdx = this.state.unstableStructures.indexOf(concept);
+          if (unstableIdx !== -1) {
+            this.state.unstableStructures.splice(unstableIdx, 1);
+            console.log(`[SL·P2] learner → unstable- "${concept}" (promoted to known)`);
+          }
+        } else if (evidence.taskSuccess && evidence.formAccuracy < 0.8) {
+          // Weak success → unstable (unless already known)
+          if (!this.state.knownStructures.includes(concept) && !this.state.unstableStructures.includes(concept)) {
+            this.state.unstableStructures.push(concept);
+            console.log(`[SL·P2] learner → unstable+ "${concept}" (formAccuracy=${evidence.formAccuracy})`);
+          }
+        } else {
+          // Failure → if previously known, demote to unstable
+          const knownIdx = this.state.knownStructures.indexOf(concept);
+          if (knownIdx !== -1) {
+            this.state.knownStructures.splice(knownIdx, 1);
+            if (!this.state.unstableStructures.includes(concept)) {
+              this.state.unstableStructures.push(concept);
+            }
+            console.log(`[SL·P2] learner → demoted "${concept}" (known→unstable, task failed)`);
+          }
+        }
+      }
+    }
   }
 
   /** Get all accumulated evidence for the session. */

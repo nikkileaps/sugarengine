@@ -10,6 +10,7 @@ import type {
   SugarlangContentBundle,
   ScenarioBrief,
   GroundingMap,
+  GroundedQuestBinding,
   LexiconPack,
   BandPolicyPack,
   SceneLanguagePack,
@@ -19,6 +20,7 @@ import type {
 export interface SugarlangProjectData {
   scenarios?: ScenarioBrief[];
   groundingMaps?: GroundingMap[];
+  questBindings?: Record<string, GroundedQuestBinding[]>;
   lexicons?: LexiconPack[];
   bandPolicies?: BandPolicyPack;
   sceneLanguagePacks?: SceneLanguagePack[];
@@ -32,6 +34,7 @@ export function createEmptyBundle(): SugarlangContentBundle {
     lexicons: new Map(),
     bandPolicies: { policies: [] },
     sceneLanguagePacks: new Map(),
+    questBindings: new Map(),
   };
 }
 
@@ -88,6 +91,15 @@ export function loadContentFromProject(data: unknown): {
   // Band policies
   if (project.bandPolicies && Array.isArray(project.bandPolicies.policies)) {
     bundle.bandPolicies = project.bandPolicies;
+  }
+
+  // Quest bindings
+  if (project.questBindings && typeof project.questBindings === 'object') {
+    for (const [scenarioId, bindings] of Object.entries(project.questBindings)) {
+      if (Array.isArray(bindings)) {
+        bundle.questBindings.set(scenarioId, bindings);
+      }
+    }
   }
 
   // Scene language packs — keyed by `${scenarioId}:${targetLanguage}`

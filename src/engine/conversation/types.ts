@@ -165,6 +165,9 @@ export interface ConversationTurnEnvelope {
   // Provider diagnostics (opaque to engine)
   providerDiagnostics?: unknown;
 
+  // Structured turn evidence from pedagogical providers
+  turnEvidence?: unknown;
+
   // Middleware annotations (each middleware writes under its own key)
   middlewareAnnotations: Record<string, unknown>;
 
@@ -248,6 +251,8 @@ export interface ProviderTurnOutput {
   hostActionProposals?: PluginIntent[];
   groundingMetadata?: GroundingMetadata;
   diagnostics?: unknown;
+  /** Structured turn evidence from pedagogical providers. */
+  turnEvidence?: unknown;
 }
 
 // ---------------------------------------------------------------------------
