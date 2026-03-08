@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { PLUGIN_API_VERSION } from '../../engine/plugins';
+import type { SugarAgentAuthoringBundleV1 } from './authoring/artifacts';
 import { createSugarAgentPlugin } from './plugin';
 import { MockLocalRuntimeBridge } from './runtime';
+
+function createAuthoringBundle(overrides: Partial<SugarAgentAuthoringBundleV1> = {}): SugarAgentAuthoringBundleV1 {
+  return {
+    schemaVersion: 1,
+    generatedAt: '2026-03-07T00:00:00.000Z',
+    source: {
+      gameId: 'test-game',
+      name: 'Test Game',
+      ...(overrides.source ?? {}),
+    },
+    policy: {
+      runtimeMode: 'llama',
+      globalSafetyBounds: [],
+      ...(overrides.policy ?? {}),
+    },
+    profiles: overrides.profiles ?? [],
+    beatContracts: overrides.beatContracts ?? [],
+  };
+}
 
 describe('createSugarAgentPlugin (phase 3)', () => {
   it('exposes valid plugin descriptor metadata', () => {
@@ -464,24 +484,41 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   });
 
   it('returns beatEvidence when a beat contract is active', async () => {
-    const plugin = createSugarAgentPlugin();
+    const plugin = createSugarAgentPlugin({
+      authoringBundle: createAuthoringBundle({
+        beatContracts: [
+          {
+            id: 'beat.guard.alert',
+            questId: 'quest.guard.alert',
+            npcId: 'npc-guard',
+            objective: 'Explain gate alert and passphrase.',
+            requiredFacts: [
+              'The gate is under lockdown.',
+              'The passphrase is Sunforge.',
+            ],
+            forbiddenFacts: [],
+            completionRule: 'player_ack',
+            maxTurns: 2,
+            objectiveId: 'obj.guard.talk',
+          },
+        ],
+      }),
+    });
     const turn = await plugin.runAgentTurn?.({
       npcId: 'npc-guard',
       npcName: 'Guard',
       playerMessage: 'hello there',
-      beatContract: {
-        id: 'beat.guard.alert',
-        questId: 'quest.guard.alert',
-        npcId: 'npc-guard',
-        objective: 'Explain gate alert and passphrase.',
-        requiredFacts: [
-          'The gate is under lockdown.',
-          'The passphrase is Sunforge.',
+      context: {
+        interactionMode: 'agent',
+        interactionPolicy: 'agent-first',
+        questSnapshot: [
+          {
+            questId: 'quest.guard.alert',
+            currentStageId: 'stage.alert',
+            objectives: [{ objectiveId: 'obj.guard.talk', state: 'active' }],
+          },
         ],
-        completionRule: 'player_ack',
-        maxTurns: 2,
       },
-      beatTurnCount: 1,
     });
 
     expect(turn?.beatEvidence?.beatId).toBe('beat.guard.alert');
@@ -493,7 +530,25 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   });
 
   it('tracks explicit mode transitions from character to narrative when beat context appears', async () => {
-    const plugin = createSugarAgentPlugin();
+    const plugin = createSugarAgentPlugin({
+      authoringBundle: createAuthoringBundle({
+        beatContracts: [
+          {
+            id: 'beat.guard.alert',
+            questId: 'quest.guard.alert',
+            npcId: 'npc-guard',
+            objective: 'Explain gate alert and passphrase.',
+            requiredFacts: [
+              'The gate is under lockdown.',
+              'The passphrase is Sunforge.',
+            ],
+            forbiddenFacts: [],
+            completionRule: 'player_ack',
+            objectiveId: 'obj.guard.talk',
+          },
+        ],
+      }),
+    });
     const baseline = await plugin.runAgentTurn?.({
       npcId: 'npc-guard',
       npcName: 'Guard',
@@ -513,17 +568,13 @@ describe('createSugarAgentPlugin (phase 3)', () => {
       context: {
         interactionMode: 'agent',
         interactionPolicy: 'agent-first',
-      },
-      beatContract: {
-        id: 'beat.guard.alert',
-        questId: 'quest.guard.alert',
-        npcId: 'npc-guard',
-        objective: 'Explain gate alert and passphrase.',
-        requiredFacts: [
-          'The gate is under lockdown.',
-          'The passphrase is Sunforge.',
+        questSnapshot: [
+          {
+            questId: 'quest.guard.alert',
+            currentStageId: 'stage.alert',
+            objectives: [{ objectiveId: 'obj.guard.talk', state: 'active' }],
+          },
         ],
-        completionRule: 'player_ack',
       },
     });
 
@@ -534,44 +585,63 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   });
 
   it('persists beat turn continuity across serialize/load and clears session on objective completion', async () => {
-    const plugin = createSugarAgentPlugin();
+    const authoringBundle = createAuthoringBundle({
+      beatContracts: [
+        {
+          id: 'beat.guard.alert',
+          questId: 'quest.guard.alert',
+          npcId: 'npc-guard',
+          objective: 'Explain gate alert and passphrase.',
+          requiredFacts: [
+            'The gate is under lockdown.',
+            'The passphrase is Sunforge.',
+          ],
+          forbiddenFacts: [],
+          completionRule: 'player_ack',
+          objectiveId: 'obj.guard.talk',
+        },
+      ],
+    });
+    const plugin = createSugarAgentPlugin({
+      authoringBundle,
+    });
     await plugin.runAgentTurn?.({
       npcId: 'npc-guard',
       npcName: 'Guard',
       playerMessage: 'hello there',
-      beatContract: {
-        id: 'beat.guard.alert',
-        questId: 'quest.guard.alert',
-        npcId: 'npc-guard',
-        objective: 'Explain gate alert and passphrase.',
-        requiredFacts: [
-          'The gate is under lockdown.',
-          'The passphrase is Sunforge.',
+      context: {
+        interactionMode: 'agent',
+        interactionPolicy: 'agent-first',
+        questSnapshot: [
+          {
+            questId: 'quest.guard.alert',
+            currentStageId: 'stage.alert',
+            objectives: [{ objectiveId: 'obj.guard.talk', state: 'active' }],
+          },
         ],
-        completionRule: 'player_ack',
-        objectiveId: 'obj.guard.talk',
       },
     });
 
     const snapshot = plugin.serializeState?.();
-    const restored = createSugarAgentPlugin();
+    const restored = createSugarAgentPlugin({
+      authoringBundle,
+    });
     restored.loadState?.(snapshot);
 
     await restored.runAgentTurn?.({
       npcId: 'npc-guard',
       npcName: 'Guard',
       playerMessage: 'thanks, got it',
-      beatContract: {
-        id: 'beat.guard.alert',
-        questId: 'quest.guard.alert',
-        npcId: 'npc-guard',
-        objective: 'Explain gate alert and passphrase.',
-        requiredFacts: [
-          'The gate is under lockdown.',
-          'The passphrase is Sunforge.',
+      context: {
+        interactionMode: 'agent',
+        interactionPolicy: 'agent-first',
+        questSnapshot: [
+          {
+            questId: 'quest.guard.alert',
+            currentStageId: 'stage.alert',
+            objectives: [{ objectiveId: 'obj.guard.talk', state: 'active' }],
+          },
         ],
-        completionRule: 'player_ack',
-        objectiveId: 'obj.guard.talk',
       },
     });
 

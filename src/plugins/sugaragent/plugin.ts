@@ -4,23 +4,34 @@ import {
 } from '../../engine/plugins';
 import type {
   EnginePlugin,
-  InteractionRequest,
   PluginAgentBeatContract,
   PluginAgentBeatEvidence,
   PluginAgentTurnDiagnostics,
   PluginAgentTurnRequest,
   PluginAgentTurnResult,
   PluginEvent,
+  InteractionRequest,
 } from '../../engine/plugins';
 import { LocalLLMProvider } from './providers/llm/LocalLLMProvider';
 import type { LLMGenerateResult } from './providers/llm/types';
 import type { LocalRuntimeBridge } from './runtime';
 import { HttpLocalRuntimeBridge, TauriLocalRuntimeBridge } from './runtime';
+import type { SugarAgentAuthoringBundleV1 } from './authoring/artifacts';
+import {
+  isObjectiveActiveInQuestSnapshot,
+  resolveSugarAgentPolicy,
+  resolveSugarAgentProfile,
+  selectActiveSugarAgentBeatContract,
+} from './authoring/runtime-resolution';
 import {
   isKnowledgeSeekingQueryType,
   routeIntentToQueryType,
   routeTurnIntent,
 } from './session/core/routing';
+import {
+  evaluateSugarAgentBeatCompletion,
+  shouldFallbackToScriptedForBeat,
+} from './session/core/beat-runtime';
 import {
   createGroundedUncertaintyReply,
 } from './session/core/turn-realization';
@@ -49,6 +60,10 @@ export interface SugarAgentPluginOptions {
    * Defaults to "llama".
    */
   runtimeMode?: 'llama' | 'auto' | 'mock';
+  /**
+   * Optional packed authoring bundle resolved outside engine core.
+   */
+  authoringBundle?: SugarAgentAuthoringBundleV1 | null;
 }
 
 export interface SugarAgentPlayerModelV1 {
@@ -1012,7 +1027,12 @@ function migrateV0ToV1(raw: SugarAgentPluginStateV0, now: number): SugarAgentPlu
 export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): EnginePlugin {
   const pluginId = options.id ?? 'sugaragent';
   const captureEvents = options.captureEvents ?? true;
-  const defaultRuntimeMode = normalizeRuntimeMode(options.runtimeMode);
+  const authoringBundle = options.authoringBundle ?? null;
+  const resolvedPolicy = resolveSugarAgentPolicy(
+    authoringBundle,
+    normalizeRuntimeMode(options.runtimeMode),
+  );
+  const resolvedRuntimeMode = resolvedPolicy.runtimeMode;
   let state: SugarAgentPluginStateV1 = createDefaultState(Date.now());
   let lastNpcId: string | null = null;
   let localProvider: LocalLLMProvider | null = null;
@@ -1033,21 +1053,35 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     state.updatedAt = now;
   };
 
+  const recordLastTurnDiagnostics = (diagnostics: PluginAgentTurnDiagnostics): void => {
+    const now = Date.now();
+    state.runtime = {
+      ...(state.runtime ?? {
+        provider: localProvider ? 'local' : 'deterministic',
+        healthy: localProvider !== null,
+        lastUpdated: now,
+      }),
+      lastTurnDiagnostics: diagnostics,
+      lastUpdated: now,
+    };
+    state.updatedAt = now;
+  };
+
   function resolveRuntimeBridge(): LocalRuntimeBridge | null {
     if (options.disableProvider) return null;
     if (options.runtimeBridge) return options.runtimeBridge;
     if (typeof window !== 'undefined') {
       if (isTauriRuntimeEnvironment()) {
         return new TauriLocalRuntimeBridge({
-          runtimeMode: defaultRuntimeMode,
+          runtimeMode: resolvedRuntimeMode,
           // Keep preview/dev parity when native command surface is not available yet.
           fallbackBridge: new HttpLocalRuntimeBridge({
-            runtimeMode: defaultRuntimeMode,
+            runtimeMode: resolvedRuntimeMode,
           }),
         });
       }
       return new HttpLocalRuntimeBridge({
-        runtimeMode: defaultRuntimeMode,
+        runtimeMode: resolvedRuntimeMode,
       });
     }
     return null;
@@ -1172,30 +1206,109 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const now = Date.now();
     state.updatedAt = now;
     const npc = ensureNpcMemory(state, request.npcId, now);
-    const beatContract = request.beatContract;
     const sessions = ensureDialogueSessions(state);
+    const activeQuests = Array.isArray(request.context?.questSnapshot)
+      ? request.context.questSnapshot
+      : [];
+    const flagSnapshot = isRecord(request.context?.flagSnapshot)
+      ? request.context.flagSnapshot as Record<string, unknown>
+      : {};
+    const beatContract = selectActiveSugarAgentBeatContract(
+      authoringBundle,
+      request.npcId,
+      activeQuests,
+    );
     const beatSessionKey = beatContract ? `${request.npcId}:${beatContract.id}` : request.npcId;
-    const beatExistingSession = sessions[beatSessionKey];
+    const beatExistingSession = beatContract ? sessions[beatSessionKey] : undefined;
     const modeSession = beatExistingSession ?? sessions[request.npcId];
 
     let turn: PluginAgentTurnResult;
     const interactionMode = request.context?.interactionMode;
     const interactionPolicy = request.context?.interactionPolicy;
-    const runtimeContext = request.context
-      ? {
-        ...request.context,
-        runtimeMode: request.context.runtimeMode ?? defaultRuntimeMode,
-      }
-      : { runtimeMode: defaultRuntimeMode };
     const previousMode = modeSession?.lastResolvedMode;
-    if (localProvider) {
+    const nextTurnCount = (modeSession?.turnCount ?? 0) + 1;
+    const nextBeatTurnCount = beatContract ? ((beatExistingSession?.turnCount ?? 0) + 1) : undefined;
+    const turnBudgetFallback = Boolean(
+      beatContract
+      && nextBeatTurnCount !== undefined
+      && shouldFallbackToScriptedForBeat(beatContract, nextBeatTurnCount),
+    );
+    const npcProfile = resolveSugarAgentProfile(authoringBundle, request.npcId);
+    const runtimeContext = {
+      gameId: request.context?.gameId,
+      regionPath: request.context?.regionPath,
+      episodeId: request.context?.episodeId,
+      runtimeMode: resolvedRuntimeMode,
+      interactionMode,
+      interactionPolicy,
+      isFirstMeeting: (modeSession?.turnCount ?? 0) === 0,
+      turnIndexWithNpc: nextTurnCount,
+      topicCoverage: request.context?.topicCoverage,
+    };
+
+    if (turnBudgetFallback && beatContract && nextBeatTurnCount !== undefined) {
+      const diagnostics = normalizeTurnDiagnostics(undefined, {
+        interactionMode,
+        interactionPolicy,
+        hasBeatContract: true,
+        previousMode,
+        usedFallback: true,
+        validationErrors: ['turn-budget-exhausted-fallback-routed'],
+        timestamp: now,
+      });
+      diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
+        progressionGateEvaluated: true,
+      });
+      diagnostics.beatEvaluator = {
+        status: 'failed',
+        beatId: beatContract.id,
+        questId: beatContract.questId,
+        objectiveId: beatContract.objectiveId,
+        coveragePassed: false,
+        rulePassed: false,
+        beatIdMatched: false,
+        forbiddenPassed: true,
+        confidencePassed: false,
+        confidence: 0,
+        completionSignal: 'none',
+        reason: 'turn-budget-exhausted-fallback-routed',
+      };
+      diagnostics.timestampMs = now;
+      recordLastTurnDiagnostics(diagnostics);
+
+      const actions: NonNullable<PluginAgentTurnResult['actions']> = [];
+      if (beatContract.fallbackScriptId) {
+        actions.push({ type: 'startDialogue', dialogueId: beatContract.fallbackScriptId });
+      }
+      actions.push({ type: 'closeConversation' });
+
+      turn = {
+        utterance: 'Let us continue this through the scripted briefing.',
+        emotion: 'neutral',
+        intent: 'fallback',
+        actions,
+        diagnostics,
+      };
+      sessions[beatSessionKey] = {
+        npcId: request.npcId,
+        activeBeatId: beatContract.id,
+        questId: beatContract.questId,
+        objectiveId: beatContract.objectiveId,
+        coveredFacts: beatExistingSession?.coveredFacts ?? [],
+        uncoveredFacts: beatExistingSession?.uncoveredFacts ?? [],
+        lastResolvedMode: turn.diagnostics?.mode,
+        lastResolvedModeReason: turn.diagnostics?.modeReason,
+        turnCount: nextBeatTurnCount,
+        updatedAt: now,
+      };
+    } else if (localProvider) {
       try {
         const generatedFromProvider = await localProvider.generateStructured({
           npcId: request.npcId,
           npcName: request.npcName ?? 'Friend',
           playerMessage: message,
-          npcProfile: request.npcProfile,
-          globalSafetyBounds: request.globalSafetyBounds,
+          npcProfile,
+          globalSafetyBounds: resolvedPolicy.globalSafetyBounds,
           context: runtimeContext,
         });
         const {
@@ -1358,7 +1471,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         diagnostics,
       };
     }
-    if (beatContract) {
+    if (beatContract && !turnBudgetFallback) {
       const enriched = enrichTurnWithBeatEvidence({
         turn,
         contract: beatContract,
@@ -1366,6 +1479,58 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         priorCoveredFacts: beatExistingSession?.coveredFacts ?? [],
       });
       turn = enriched.turn;
+      const evaluation = evaluateSugarAgentBeatCompletion(
+        beatContract,
+        enriched.beatEvidence,
+        flagSnapshot,
+      );
+      turn.diagnostics = {
+        ...(turn.diagnostics ?? {}),
+        validation: mergeValidationBoundary(turn.diagnostics?.validation, {
+          progressionGateEvaluated: true,
+        }),
+        beatEvaluator: {
+          status: evaluation.passed ? 'passed' : 'failed',
+          beatId: beatContract.id,
+          questId: beatContract.questId,
+          objectiveId: beatContract.objectiveId,
+          coveragePassed: evaluation.coveragePassed,
+          rulePassed: evaluation.rulePassed,
+          beatIdMatched: evaluation.beatIdMatched,
+          forbiddenPassed: evaluation.forbiddenPassed,
+          confidencePassed: evaluation.confidencePassed,
+          missingRequiredFacts: evaluation.missingRequiredFacts,
+          forbiddenFactMentions: evaluation.forbiddenFactMentions,
+          confidence: evaluation.confidence,
+          completionSignal: evaluation.completionSignal,
+          reason: evaluation.passed
+            ? 'completion-accepted'
+            : (!evaluation.beatIdMatched
+              ? 'beat-id-mismatch'
+              : (!evaluation.coveragePassed
+                ? 'required-facts-not-covered'
+                : (!evaluation.forbiddenPassed
+                  ? 'forbidden-fact-mentioned'
+                  : (!evaluation.rulePassed
+                    ? 'completion-rule-not-satisfied'
+                    : 'low-confidence-evidence')))),
+        },
+        timestampMs: now,
+      };
+      if (
+        evaluation.passed
+        && beatContract.objectiveId
+        && isObjectiveActiveInQuestSnapshot(activeQuests, beatContract.questId, beatContract.objectiveId)
+      ) {
+        turn.actions = [
+          ...(turn.actions ?? []),
+          {
+            type: 'completeObjective',
+            questId: beatContract.questId,
+            objectiveId: beatContract.objectiveId,
+          },
+        ];
+      }
       sessions[beatSessionKey] = {
         npcId: request.npcId,
         activeBeatId: beatContract.id,
@@ -1375,17 +1540,21 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         uncoveredFacts: enriched.beatEvidence.uncoveredFacts,
         lastResolvedMode: turn.diagnostics?.mode,
         lastResolvedModeReason: turn.diagnostics?.modeReason,
-        turnCount: request.beatTurnCount ?? ((beatExistingSession?.turnCount ?? 0) + 1),
+        turnCount: nextBeatTurnCount ?? nextTurnCount,
         updatedAt: now,
       };
-    } else {
+    } else if (!beatContract) {
       sessions[beatSessionKey] = {
         npcId: request.npcId,
         lastResolvedMode: turn.diagnostics?.mode,
         lastResolvedModeReason: turn.diagnostics?.modeReason,
-        turnCount: (modeSession?.turnCount ?? 0) + 1,
+        turnCount: nextTurnCount,
         updatedAt: now,
       };
+    }
+
+    if (turn.diagnostics) {
+      recordLastTurnDiagnostics(turn.diagnostics);
     }
 
     pushSummary(npc, `Player: ${message}`, 0.35, now);
@@ -1421,7 +1590,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const provider = new LocalLLMProvider({
       runtime: runtimeBridge,
       maxAttempts: 3,
-      defaultRuntimeMode,
+      defaultRuntimeMode: resolvedRuntimeMode,
     });
 
     try {

@@ -40,14 +40,15 @@ interface EnginePlugin {
 }
 ```
 
-`PluginAgentTurnRequest` includes optional beat context:
+`PluginAgentTurnRequest` includes generic host context:
 
-- `beatContract?: { id, questId, npcId, objective, requiredFacts[], completionRule, ... }`
-- `beatTurnCount?: number`
+- `context?.questSnapshot?: [{ questId, currentStageId, objectives[] }]`
+- `context?.flagSnapshot?: Record<string, unknown>`
 
 `PluginAgentTurnResult` can include:
 
 - `beatEvidence?: { beatId?, coveredFacts[], uncoveredFacts[], completionSignal, confidence }`
+- `actions?: PluginIntent[]`
 
 ### PluginContext
 
@@ -73,6 +74,8 @@ Engine-supported intent types:
 - `emitEvent`
 - `moveNpc`
 - `triggerObjective`
+- `completeObjective`
+- `closeConversation`
 
 Plugins should use intents rather than mutating game state directly.
 
@@ -91,8 +94,8 @@ Plugins should use intents rather than mutating game state directly.
 Errors in one plugin are isolated and do not stop core runtime.
 
 `PluginManager` also routes optional in-game agent conversation turns through
-`runAgentTurn(...)` for plugins that implement it, including optional beat context
-provided by the engine host.
+`runAgentTurn(...)` for plugins that implement it, passing generic host snapshots
+instead of plugin-specific beat-contract internals.
 
 ### PluginSystem (ECS)
 

@@ -120,7 +120,7 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     () => game.engine.getForcedLOD()
   );
   const updateAgentDebugInfo = () => {
-    debugHUD.setCustomInfo(game.getSugarAgentRuntimeDebugInfo());
+    debugHUD.setCustomInfo(game.getAgentRuntimeDebugInfo());
   };
   updateAgentDebugInfo();
   const debugInfoInterval = window.setInterval(updateAgentDebugInfo, 500);

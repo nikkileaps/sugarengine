@@ -514,20 +514,48 @@ function resolveConfiguredLlamaBin(args) {
 
 function createMockRuntime() {
   let loaded = false;
-  async function generateJson(request) {
-    if (!loaded) {
-      throw new Error('Model must be loaded before generateStructured');
-    }
-    return {
-      jsonText: JSON.stringify({
+
+  function buildMockReplyParts(requestInput) {
+    const input = isRecord(requestInput) ? requestInput : {};
+    const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
+    const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
+    const queryType = normalizeOptionalString(input.turnContext?.queryType) ?? 'conversation';
+    const supportSlots = Array.isArray(input.supportSlots)
+      ? input.supportSlots.filter((entry) => isRecord(entry) && typeof entry.slotId === 'string' && typeof entry.snippet === 'string')
+      : [];
+
+    if (isKnowledgeSeekingQueryType(queryType)) {
+      if (supportSlots.length > 0) {
+        const selectedSupport = supportSlots[0];
+        return {
+          parts: [
+            {
+              kind: 'grounded',
+              text: sanitizePromptText(selectedSupport.snippet),
+              support: [selectedSupport.slotId],
+            },
+          ],
+          emotion: queryType === 'self_query' ? 'warm' : 'grounded',
+          intent: 'answer',
+          proposedIntents: [],
+          beatEvidence: {
+            coveredFacts: [],
+            uncoveredFacts: [],
+            completionSignal: 'none',
+            confidence: 0,
+          },
+        };
+      }
+
+      return {
         parts: [
           {
-            kind: 'social',
-            text: `I heard you say: "${request?.input?.playerMessage}".`,
+            kind: 'uncertain',
+            text: createGroundedUncertaintyReply(queryType).utterance,
           },
         ],
-        emotion: 'warm',
-        intent: 'conversation',
+        emotion: 'uncertain',
+        intent: 'uncertain',
         proposedIntents: [],
         beatEvidence: {
           coveredFacts: [],
@@ -535,7 +563,36 @@ function createMockRuntime() {
           completionSignal: 'none',
           confidence: 0,
         },
-      }),
+      };
+    }
+
+    return {
+      parts: [
+        {
+          kind: 'social',
+          text: playerMessage
+            ? `I heard you say: "${playerMessage}".`
+            : `Hello, I am ${npcName}.`,
+        },
+      ],
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      beatEvidence: {
+        coveredFacts: [],
+        uncoveredFacts: [],
+        completionSignal: 'none',
+        confidence: 0,
+      },
+    };
+  }
+
+  async function generateJson(request) {
+    if (!loaded) {
+      throw new Error('Model must be loaded before generateStructured');
+    }
+    return {
+      jsonText: JSON.stringify(buildMockReplyParts(request?.input ?? request)),
     };
   }
   return {

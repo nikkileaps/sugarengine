@@ -236,16 +236,16 @@ Current implementation in this repo now delivers:
      - auto-close panel behavior when `initiative.action === "close"` after rendering final NPC close utterance.
    - SugarAgent plugin now provides deterministic turn handling for in-game path (`runAgentTurn`) while preserving plugin state persistence.
 5. Phase 10D quest/beat contract binding in live runtime:
-   - New engine helper module for deterministic contract parsing/selection/evaluation:
-     - `src/engine/core/agentBeatRuntime.ts`
-   - Runtime selection of active beat contract by NPC + active quest context:
-     - `Game.submitAgentConversationTurn(...)`
+   - Runtime contract selection/evaluation now lives inside SugarAgent:
+     - `src/plugins/sugaragent/authoring/runtime-resolution.ts`
+     - `src/plugins/sugaragent/session/core/beat-runtime.ts`
+   - `Game.submitAgentConversationTurn(...)` now passes only generic host quest/flag snapshots.
    - Deterministic guardrails:
-     - `maxTurns` overflow routes to scripted fallback (`fallbackScriptId`) and closes agent chat
-     - engine-owned completion checks evaluate plugin `beatEvidence` and only then complete quest objective (`objectiveId`)
+     - `maxTurns` overflow routes to scripted fallback (`fallbackScriptId`) and closes agent chat via generic host actions
+     - SugarAgent evaluates `beatEvidence` internally and returns generic host actions such as `completeObjective`
    - Plugin turn contract extension:
-     - request includes optional `beatContract`/`beatTurnCount`
-     - response includes optional `beatEvidence`
+     - request includes generic host context (`questSnapshot`, `flagSnapshot`)
+     - response includes optional `beatEvidence` plus generic host `actions`
    - SugarAgent plugin deterministic beat-evidence generation wired in:
      - `src/plugins/sugaragent/plugin.ts`
 6. Phase 10E save/load continuity hardening:

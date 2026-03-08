@@ -1,16 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { ensureSugarAgentToolsBuilt, sugarAgentToolPath } from '../test-utils/tools-bin';
-
-const LORE_INGEST_TOOL_PATH = sugarAgentToolPath('lore-ingest');
-const SIM_TOOL_PATH = sugarAgentToolPath('sim');
-
-beforeAll(() => {
-  ensureSugarAgentToolsBuilt();
-});
+import { describe, expect, it } from 'vitest';
+import { ingestLoreDirectory, writeLoreArtifacts } from './lore-lib';
+import { createSugarAgentSession } from '../session/runtime';
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -51,24 +44,11 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
     const outputDir = createTempDir('sugaragent-lore-output-');
     writeLorePage(sourceDir);
 
-    const output = execFileSync(
-      'node',
-      [
-        LORE_INGEST_TOOL_PATH,
-        '--source',
-        sourceDir,
-        '--commit',
-        'abc123',
-        '--output',
-        outputDir,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    );
-
-    expect(output).toContain('chunks=');
+    const artifacts = ingestLoreDirectory({
+      sourceDir,
+      commit: 'abc123',
+    });
+    writeLoreArtifacts(outputDir, artifacts);
 
     const manifestPath = path.join(outputDir, 'manifest.json');
     const chunksPath = path.join(outputDir, 'chunks.json');
@@ -127,26 +107,19 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
       'utf8',
     );
 
-    const output = execFileSync(
-      'node',
-      [
-        LORE_INGEST_TOOL_PATH,
-        '--lock',
-        lockPath,
-        '--output',
-        outputDir,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    );
-
-    expect(output).toContain('lock=');
-    expect(output).toContain('(loaded)');
-    expect(output).toContain('repo=git@github.com:example/game-lore-wiki.git');
-    expect(output).toContain('commit=lock-commit-789');
-    expect(output).toContain('ref=refs/tags/v0.4.0');
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
+      source: string;
+      commit: string;
+      repo: string;
+      ref: string;
+    };
+    const artifacts = ingestLoreDirectory({
+      sourceDir: lock.source,
+      commit: lock.commit,
+      repo: lock.repo,
+      ref: lock.ref,
+    });
+    writeLoreArtifacts(outputDir, artifacts);
 
     const manifest = JSON.parse(fs.readFileSync(path.join(outputDir, 'manifest.json'), 'utf8')) as {
       source: { commit: string; repo: string; ref?: string };
@@ -161,22 +134,10 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
     const outputDir = createTempDir('sugaragent-lore-output-');
     writeLorePage(sourceDir);
 
-    execFileSync(
-      'node',
-      [
-        LORE_INGEST_TOOL_PATH,
-        '--source',
-        sourceDir,
-        '--commit',
-        'phase5-a',
-        '--output',
-        outputDir,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    );
+    writeLoreArtifacts(outputDir, ingestLoreDirectory({
+      sourceDir,
+      commit: 'phase5-a',
+    }));
     const baselineFacts = JSON.parse(fs.readFileSync(path.join(outputDir, 'facts.json'), 'utf8')) as Array<{
       factId: string;
       statement: string;
@@ -190,22 +151,15 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
       foundingLine: 'Valle Fresca was founded by Mayor Alba after the long rains.   ',
       festivalLine: 'The town hosts a spring lantern festival each year.',
     });
-    execFileSync(
-      'node',
-      [
-        LORE_INGEST_TOOL_PATH,
-        '--source',
-        sourceDir,
-        '--commit',
-        'phase5-b',
-        '--output',
-        outputDir,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
+    writeLoreArtifacts(outputDir, ingestLoreDirectory({
+      sourceDir,
+      commit: 'phase5-b',
+      previousArtifacts: {
+        manifest: JSON.parse(fs.readFileSync(path.join(outputDir, 'manifest.json'), 'utf8')),
+        chunks: JSON.parse(fs.readFileSync(path.join(outputDir, 'chunks.json'), 'utf8')),
+        facts: JSON.parse(fs.readFileSync(path.join(outputDir, 'facts.json'), 'utf8')),
       },
-    );
+    }));
     const nonSemanticFacts = JSON.parse(fs.readFileSync(path.join(outputDir, 'facts.json'), 'utf8')) as Array<{
       factId: string;
       statement: string;
@@ -220,22 +174,15 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
       foundingLine: 'Valle Fresca was founded by Mayor Alba after the ash storms.',
       festivalLine: 'The town hosts a spring lantern festival each year.',
     });
-    execFileSync(
-      'node',
-      [
-        LORE_INGEST_TOOL_PATH,
-        '--source',
-        sourceDir,
-        '--commit',
-        'phase5-c',
-        '--output',
-        outputDir,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
+    writeLoreArtifacts(outputDir, ingestLoreDirectory({
+      sourceDir,
+      commit: 'phase5-c',
+      previousArtifacts: {
+        manifest: JSON.parse(fs.readFileSync(path.join(outputDir, 'manifest.json'), 'utf8')),
+        chunks: JSON.parse(fs.readFileSync(path.join(outputDir, 'chunks.json'), 'utf8')),
+        facts: JSON.parse(fs.readFileSync(path.join(outputDir, 'facts.json'), 'utf8')),
       },
-    );
+    }));
     const semanticFacts = JSON.parse(fs.readFileSync(path.join(outputDir, 'facts.json'), 'utf8')) as Array<{
       factId: string;
       statement: string;
@@ -253,53 +200,33 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
     expect((migrations.mappings ?? []).some((entry) => entry.oldFactId === baselineFactId && entry.newFactId === semanticFact?.factId)).toBe(true);
   });
 
-  it('uses ingested lore for citation-backed local sim answers', () => {
+  it('uses ingested lore for citation-backed local session answers', async () => {
     const sourceDir = createTempDir('sugaragent-lore-source-');
     const outputDir = createTempDir('sugaragent-lore-output-');
     writeLorePage(sourceDir);
 
-    execFileSync(
-      'node',
-      [
-        LORE_INGEST_TOOL_PATH,
-        '--source',
-        sourceDir,
-        '--commit',
-        'def456',
-        '--output',
-        outputDir,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    );
+    writeLoreArtifacts(outputDir, ingestLoreDirectory({
+      sourceDir,
+      commit: 'def456',
+    }));
 
-    const simOutput = execFileSync(
-      'node',
-      [
-        SIM_TOOL_PATH,
-        '--npc',
-        'librarian',
-        '--provider',
-        'local',
-        '--runtime',
-        'mock',
-        '--lore-dir',
-        outputDir,
-        '--ask',
-        'Who founded this town?',
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: 'utf8',
-      },
-    );
+    const session = await createSugarAgentSession({
+      npc: 'librarian',
+      provider: 'local',
+      runtime: 'mock',
+      loreDir: outputDir,
+      useLore: true,
+    });
+    const result = await session.runTurn('Who founded this town?', {
+      npcName: 'Librarian',
+    });
 
-    expect(simOutput).toContain('lore loaded:');
-    expect(simOutput).toContain('citations=');
-    expect(simOutput).not.toContain('From the archives:');
-    expect(simOutput).toContain('founded by Mayor Alba');
-    expect(simOutput).toContain('@def456');
+    expect(session.startup.lore.loaded).toBe(true);
+    expect(session.startup.lore.chunkCount).toBeGreaterThan(0);
+    expect(Array.isArray(result.output.citations)).toBe(true);
+    expect(result.output.citations.some((citation) => citation.sourceId.startsWith('fact.'))).toBe(true);
+    expect(result.output.citations.some((citation) => (citation.snippet ?? '').includes('Mayor Alba'))).toBe(true);
+    expect(result.output.utterance).not.toContain('From the archives:');
+    expect(result.output.utterance).toContain('Mayor Alba');
   });
 });

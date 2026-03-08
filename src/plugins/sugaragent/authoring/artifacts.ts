@@ -33,11 +33,15 @@ export interface SugarAgentPackProject {
   plugins?: Array<string | {
     id: string;
     enabled?: boolean;
+    runtimeMode?: 'llama' | 'auto' | 'mock';
+    runtime?: 'llama' | 'auto' | 'mock'; // Legacy alias accepted for backward compatibility.
     globalSafetyBounds?: string[];
     safetyBounds?: string[]; // Legacy alias accepted for backward compatibility.
   }>;
   sugaragent?: {
     enabled?: boolean;
+    runtimeMode?: 'llama' | 'auto' | 'mock';
+    runtime?: 'llama' | 'auto' | 'mock'; // Legacy alias accepted for backward compatibility.
     globalSafetyBounds?: string[];
     safetyBounds?: string[]; // Legacy alias accepted for backward compatibility.
   };
@@ -98,6 +102,7 @@ export interface SugarAgentAuthoringBundleV1 {
     name?: string;
   };
   policy: {
+    runtimeMode?: 'llama' | 'auto' | 'mock';
     globalSafetyBounds: string[];
   };
   profiles: SugarAgentPackedProfile[];
@@ -159,6 +164,25 @@ function extractGlobalSafetyBounds(project: SugarAgentPackProject): string[] {
   }
 
   return Array.from(new Set(values));
+}
+
+function normalizeRuntimeMode(value: unknown): 'llama' | 'auto' | 'mock' | undefined {
+  return value === 'llama' || value === 'auto' || value === 'mock'
+    ? value
+    : undefined;
+}
+
+function extractRuntimeMode(project: SugarAgentPackProject): 'llama' | 'auto' | 'mock' | undefined {
+  let runtimeMode = normalizeRuntimeMode(project.sugaragent?.runtimeMode ?? project.sugaragent?.runtime);
+
+  if (Array.isArray(project.plugins)) {
+    for (const plugin of project.plugins) {
+      if (!isRecord(plugin) || plugin.id !== 'sugaragent') continue;
+      runtimeMode = normalizeRuntimeMode(plugin.runtimeMode ?? plugin.runtime) ?? runtimeMode;
+    }
+  }
+
+  return runtimeMode;
 }
 
 function isValidCompletionRule(value: unknown): value is SugarAgentCompletionRule {
@@ -282,6 +306,7 @@ export function parseSugarAgentAuthoringBundle(raw: unknown): SugarAgentAuthorin
       name: toNonEmptyString(source.name),
     },
     policy: {
+      runtimeMode: normalizeRuntimeMode(policy.runtimeMode ?? policy.runtime),
       globalSafetyBounds: normalizeStringArray(policy.globalSafetyBounds ?? policy.safetyBounds),
     },
     profiles: uniqueProfiles,
@@ -467,6 +492,7 @@ export function buildSugarAgentAuthoringBundle(project: SugarAgentPackProject): 
   }
 
   const globalSafetyBounds = extractGlobalSafetyBounds(project);
+  const runtimeMode = extractRuntimeMode(project);
 
   const bundle: SugarAgentAuthoringBundleV1 = {
     schemaVersion: 1,
@@ -476,6 +502,7 @@ export function buildSugarAgentAuthoringBundle(project: SugarAgentPackProject): 
       name: toNonEmptyString(project.meta?.name),
     },
     policy: {
+      runtimeMode,
       globalSafetyBounds,
     },
     profiles,

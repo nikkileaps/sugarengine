@@ -15,7 +15,20 @@ export type PluginIntent =
   | { type: 'setFlag'; flag: string; value: unknown }
   | { type: 'emitEvent'; eventName: string; data?: unknown }
   | { type: 'moveNpc'; npcId: string; target: { x: number; y: number; z: number } }
-  | { type: 'triggerObjective'; objectiveType: ObjectiveType; targetId: string };
+  | { type: 'triggerObjective'; objectiveType: ObjectiveType; targetId: string }
+  | { type: 'completeObjective'; questId: string; objectiveId: string }
+  | { type: 'closeConversation' };
+
+export interface PluginQuestObjectiveSnapshot {
+  objectiveId: string;
+  state: 'active' | 'completed' | 'inactive';
+}
+
+export interface PluginQuestSnapshot {
+  questId: string;
+  currentStageId: string;
+  objectives: PluginQuestObjectiveSnapshot[];
+}
 
 export interface PluginIntentResult {
   success: boolean;
@@ -26,10 +39,6 @@ export interface PluginAgentTurnRequest {
   npcId: string;
   npcName?: string;
   playerMessage: string;
-  beatContract?: PluginAgentBeatContract;
-  beatTurnCount?: number;
-  npcProfile?: PluginAgentProfile;
-  globalSafetyBounds?: string[];
   context?: PluginAgentContext;
 }
 
@@ -47,11 +56,10 @@ export interface PluginAgentContext {
   gameId?: string;
   regionPath?: string;
   episodeId?: string;
-  runtimeMode?: 'llama' | 'auto' | 'mock';
   interactionMode?: 'scripted' | 'agent' | 'hybrid';
   interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
-  isFirstMeeting?: boolean;
-  turnIndexWithNpc?: number;
+  questSnapshot?: PluginQuestSnapshot[];
+  flagSnapshot?: Record<string, unknown>;
   topicCoverage?: {
     activeTopic?: string;
     activeTopicNovelty?: number;
@@ -224,6 +232,7 @@ export interface PluginAgentTurnResult {
   intent?: string;
   citations?: Array<{ sourceId: string; snippet?: string }>;
   beatEvidence?: PluginAgentBeatEvidence;
+  actions?: PluginIntent[];
   diagnostics?: PluginAgentTurnDiagnostics;
 }
 

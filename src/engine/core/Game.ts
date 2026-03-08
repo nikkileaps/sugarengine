@@ -25,7 +25,6 @@ import type { ItemView } from '../inventory/types';
 import type { InspectionData } from '../inspection/types';
 import type {
   EnginePlugin,
-  PluginAgentProfile,
   PluginAgentTurnDiagnostics,
   PluginAgentTurnResult,
   PluginEvent,
@@ -33,13 +32,6 @@ import type {
   PluginIntentResult,
   PluginInteractionResolution,
 } from '../plugins';
-import {
-  evaluateAgentBeatCompletion,
-  parseRuntimeAgentBeatContracts,
-  selectActiveAgentBeatContract,
-  shouldFallbackToScriptedForBeat,
-} from './agentBeatRuntime';
-import type { RuntimeAgentBeatContract } from './agentBeatRuntime';
 
 export interface TitleScreenConfig {
   /** Camera position for title screen (world coordinates) */
@@ -91,7 +83,6 @@ export interface GameEventHandlers {
 
 type NPCInteractionMode = 'scripted' | 'agent' | 'hybrid';
 type AgentInteractionPolicy = 'scripted-first' | 'agent-first' | 'fallback';
-type SugarAgentRuntimeMode = 'llama' | 'auto' | 'mock';
 
 function normalizeNPCInteractionMode(raw: unknown): NPCInteractionMode {
   if (raw === 'agent' || raw === 'hybrid') {
@@ -100,51 +91,8 @@ function normalizeNPCInteractionMode(raw: unknown): NPCInteractionMode {
   return 'scripted';
 }
 
-function normalizeSugarAgentRuntimeMode(raw: unknown): SugarAgentRuntimeMode {
-  if (typeof raw === 'string') {
-    const normalized = raw.trim().toLowerCase();
-    if (normalized === 'auto' || normalized === 'mock' || normalized === 'llama') {
-      return normalized;
-    }
-  }
-  return 'llama';
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-    .filter((entry) => entry.length > 0);
-}
-
-function normalizeAgentProfile(value: unknown): PluginAgentProfile | undefined {
-  if (!isRecord(value)) return undefined;
-  const persona = typeof value.persona === 'string' && value.persona.trim().length > 0
-    ? value.persona.trim()
-    : undefined;
-  const tone = typeof value.tone === 'string' && value.tone.trim().length > 0
-    ? value.tone.trim()
-    : undefined;
-  const selfEntityId = typeof value.selfEntityId === 'string' && value.selfEntityId.trim().length > 0
-    ? value.selfEntityId.trim()
-    : undefined;
-  const constraints = normalizeStringArray(value.constraints ?? value.safetyBounds);
-  const loreScopes = normalizeStringArray(value.loreScopes);
-  const selfLoreScopes = normalizeStringArray(value.selfLoreScopes);
-  const relatedLoreScopes = normalizeStringArray(value.relatedLoreScopes);
-  const profile: PluginAgentProfile = {};
-  if (persona) profile.persona = persona;
-  if (tone) profile.tone = tone;
-  if (selfEntityId) profile.selfEntityId = selfEntityId;
-  if (constraints.length > 0) profile.constraints = constraints;
-  if (loreScopes.length > 0) profile.loreScopes = loreScopes;
-  if (selfLoreScopes.length > 0) profile.selfLoreScopes = selfLoreScopes;
-  if (relatedLoreScopes.length > 0) profile.relatedLoreScopes = relatedLoreScopes;
-  return Object.keys(profile).length > 0 ? profile : undefined;
 }
 
 /**
@@ -174,14 +122,10 @@ export class Game {
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
   private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
-  private npcAgentProfiles: Map<string, PluginAgentProfile> = new Map();
-  private sugarAgentGlobalSafetyBounds: string[] = [];
-  private sugarAgentRuntimeMode: SugarAgentRuntimeMode = 'llama';
   private fadeOverlay: FadeOverlay;
   private pluginManager: PluginManager | null = null;
-  private agentBeatContractsByNpc = new Map<string, RuntimeAgentBeatContract[]>();
   private contentBasePath: string;
-  private lastSugarAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
+  private lastAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
 
   // World state (ADR-018)
   readonly flags: FlagsManager;
@@ -365,35 +309,6 @@ export class Game {
       spells?: unknown[];
     };
 
-    this.agentBeatContractsByNpc = parseRuntimeAgentBeatContracts(projectData);
-    this.sugarAgentGlobalSafetyBounds = [];
-    this.sugarAgentRuntimeMode = 'llama';
-
-    if (isRecord(projectData) && isRecord(projectData.sugaragent)) {
-      this.sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
-        projectData.sugaragent.runtimeMode ?? projectData.sugaragent.runtime,
-      );
-      const topLevelBounds = normalizeStringArray(
-        projectData.sugaragent.globalSafetyBounds ?? projectData.sugaragent.safetyBounds,
-      );
-      if (topLevelBounds.length > 0) {
-        this.sugarAgentGlobalSafetyBounds = topLevelBounds;
-      }
-    }
-
-    if (Array.isArray(project.plugins)) {
-      for (const plugin of project.plugins) {
-        if (!isRecord(plugin) || plugin.id !== 'sugaragent') continue;
-        this.sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
-          plugin.runtimeMode ?? plugin.runtime,
-        );
-        const bounds = normalizeStringArray(plugin.globalSafetyBounds ?? plugin.safetyBounds);
-        if (bounds.length > 0) {
-          this.sugarAgentGlobalSafetyBounds = bounds;
-        }
-      }
-    }
-
     // Set player model if specified in project data
     if (project.playerModel) {
       this.engine.setPlayerModel(project.playerModel);
@@ -439,17 +354,12 @@ export class Game {
 
     // Register NPCs and optional interaction routing mode.
     this.npcInteractionModes.clear();
-    this.npcAgentProfiles.clear();
     if (project.npcs) {
       for (const npc of project.npcs) {
         this.npcInteractionModes.set(
           npc.id,
           normalizeNPCInteractionMode(npc.interactionMode),
         );
-        const profile = normalizeAgentProfile(npc.agentProfile);
-        if (profile) {
-          this.npcAgentProfiles.set(npc.id, profile);
-        }
         this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode, npc.model, npc.modelHeight, npc.animations);
       }
     }
@@ -542,20 +452,20 @@ export class Game {
     return this.engine.getCurrentRegionInfo();
   }
 
-  getSugarAgentRuntimeDebugInfo(): string | null {
+  getAgentRuntimeDebugInfo(pluginId = 'sugaragent'): string | null {
     if (!this.pluginManager) return null;
 
     const pluginState = this.pluginManager.serializeState();
-    const sugaragent = pluginState.sugaragent;
-    if (!isRecord(sugaragent) || !isRecord(sugaragent.runtime)) return null;
+    const plugin = pluginState[pluginId];
+    if (!isRecord(plugin) || !isRecord(plugin.runtime)) return null;
 
-    const provider = sugaragent.runtime.provider === 'local' ? 'local' : 'deterministic';
-    const healthy = sugaragent.runtime.healthy === true;
-    const outcome = typeof sugaragent.runtime.lastOutcome === 'string'
-      ? sugaragent.runtime.lastOutcome
+    const provider = plugin.runtime.provider === 'local' ? 'local' : 'deterministic';
+    const healthy = plugin.runtime.healthy === true;
+    const outcome = typeof plugin.runtime.lastOutcome === 'string'
+      ? plugin.runtime.lastOutcome
       : undefined;
-    const detail = typeof sugaragent.runtime.detail === 'string'
-      ? sugaragent.runtime.detail
+    const detail = typeof plugin.runtime.detail === 'string'
+      ? plugin.runtime.detail
       : undefined;
 
     const status = healthy ? 'ok' : 'fallback';
@@ -566,10 +476,10 @@ export class Game {
       detail ? `detail=${detail}` : undefined,
     ].filter((entry): entry is string => typeof entry === 'string');
 
-    const runtimeDiagnostics = isRecord(sugaragent.runtime.lastTurnDiagnostics)
-      ? sugaragent.runtime.lastTurnDiagnostics as PluginAgentTurnDiagnostics
+    const runtimeDiagnostics = isRecord(plugin.runtime.lastTurnDiagnostics)
+      ? plugin.runtime.lastTurnDiagnostics as PluginAgentTurnDiagnostics
       : null;
-    const diagnostics = this.lastSugarAgentTurnDiagnostics ?? runtimeDiagnostics;
+    const diagnostics = this.lastAgentTurnDiagnostics ?? runtimeDiagnostics;
     if (diagnostics) {
       const evidenceFactsUsed = diagnostics.evidenceBudget?.usage?.facts;
       const evidenceFactsBudget = diagnostics.evidenceBudget?.budget?.facts;
@@ -662,172 +572,52 @@ export class Game {
       };
     }
 
-    const activeBeatContract = selectActiveAgentBeatContract({
-      npcId: active.npcId,
-      activeQuests: this.quests
-        .getActiveQuests()
-        .map((quest) => ({ questId: quest.questId, currentStageId: quest.currentStageId })),
-      contractsByNpc: this.agentBeatContractsByNpc,
-      getObjectiveState: (questId, objectiveId) => this.quests.getObjectiveState(questId, objectiveId),
-    });
-
-    const beatSessionKey = activeBeatContract
-      ? `${active.npcId}:${activeBeatContract.id}`
-      : null;
-    const nextBeatTurnCount = beatSessionKey && activeBeatContract
-      ? this.getPersistedSugarAgentBeatTurnCount(active.npcId, activeBeatContract.id) + 1
-      : undefined;
-    const persistedConversationTurnCount = this.getPersistedSugarAgentConversationTurnCount(active.npcId);
-    const nextConversationTurnIndex = persistedConversationTurnCount + 1;
-
-    if (
-      activeBeatContract
-      && nextBeatTurnCount !== undefined
-      && shouldFallbackToScriptedForBeat(activeBeatContract, nextBeatTurnCount)
-    ) {
-      const now = Date.now();
-      this.lastSugarAgentTurnDiagnostics = {
-        validation: mergeValidationBoundary(undefined, {
-          progressionGateEvaluated: true,
-        }),
-        beatEvaluator: {
-          status: 'failed',
-          beatId: activeBeatContract.id,
-          questId: activeBeatContract.questId,
-          objectiveId: activeBeatContract.objectiveId,
-          coveragePassed: false,
-          rulePassed: false,
-          beatIdMatched: false,
-          forbiddenPassed: true,
-          confidencePassed: false,
-          confidence: 0,
-          completionSignal: 'none',
-          reason: 'turn-budget-exhausted-fallback-routed',
-        },
-        timestampMs: now,
-      };
-      if (activeBeatContract.fallbackScriptId) {
-        this.dialogue.start(activeBeatContract.fallbackScriptId);
-      }
-      this.closeAgentConversation();
-      this.emitPluginEvent({
-        type: 'interactionHandled',
-        npcId: active.npcId,
-        source: 'plugin',
-        detail: 'agent-turn-beat-fallback',
-      });
-      return {
-        utterance: 'Let us continue this through the scripted briefing.',
-        emotion: 'neutral',
-        intent: 'fallback',
-      };
-    }
-
     const result = await this.pluginManager.runAgentTurn({
       npcId: active.npcId,
       npcName: active.npcName,
       playerMessage: message,
-      beatContract: activeBeatContract ?? undefined,
-      beatTurnCount: nextBeatTurnCount,
-      npcProfile: this.npcAgentProfiles.get(active.npcId),
-      globalSafetyBounds: this.sugarAgentGlobalSafetyBounds,
       context: {
         gameId: this.config.gameId,
         regionPath: this.engine.getCurrentRegion(),
         episodeId: this.config.currentEpisode,
-        runtimeMode: this.sugarAgentRuntimeMode,
         interactionMode: this.getNpcInteractionMode(active.npcId),
         interactionPolicy: this.getNpcInteractionPolicy(active.npcId),
-        isFirstMeeting: persistedConversationTurnCount === 0,
-        turnIndexWithNpc: nextConversationTurnIndex,
+        questSnapshot: this.buildPluginQuestSnapshot(),
+        flagSnapshot: this.flags.serializeFlags(),
       },
     });
 
     if (result) {
       const diagnostics: PluginAgentTurnDiagnostics = {
         ...(result.diagnostics ?? {}),
+        validation: mergeValidationBoundary(result.diagnostics?.validation, {
+          npcOutputValidated: result.diagnostics?.validation?.npcOutputValidated !== false,
+        }),
       };
-      diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
-        npcOutputValidated: diagnostics.validation?.npcOutputValidated !== false,
-      });
       if (!diagnostics.beatEvaluator) {
         diagnostics.beatEvaluator = {
           status: 'not_applicable',
         };
       }
 
-      if (activeBeatContract && result.beatEvidence) {
-        const evaluation = evaluateAgentBeatCompletion(
-          activeBeatContract,
-          result.beatEvidence,
-          (flagName) => this.flags.get(flagName),
-        );
-
-        diagnostics.beatEvaluator = {
-          status: evaluation.passed ? 'passed' : 'failed',
-          beatId: activeBeatContract.id,
-          questId: activeBeatContract.questId,
-          objectiveId: activeBeatContract.objectiveId,
-          coveragePassed: evaluation.coveragePassed,
-          rulePassed: evaluation.rulePassed,
-          beatIdMatched: evaluation.beatIdMatched,
-          forbiddenPassed: evaluation.forbiddenPassed,
-          confidencePassed: evaluation.confidencePassed,
-          missingRequiredFacts: evaluation.missingRequiredFacts,
-          forbiddenFactMentions: evaluation.forbiddenFactMentions,
-          confidence: evaluation.confidence,
-          completionSignal: evaluation.completionSignal,
-          reason: evaluation.passed
-            ? 'completion-accepted'
-            : (!evaluation.beatIdMatched
-              ? 'beat-id-mismatch'
-              : (!evaluation.coveragePassed
-                ? 'required-facts-not-covered'
-                : (!evaluation.forbiddenPassed
-                  ? 'forbidden-fact-mentioned'
-                  : (!evaluation.rulePassed
-                    ? 'completion-rule-not-satisfied'
-                    : 'low-confidence-evidence')))),
-        };
-        diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
-          progressionGateEvaluated: true,
-        });
-        diagnostics.timestampMs = Date.now();
-
-        if (evaluation.passed && activeBeatContract.objectiveId) {
-          const objectiveState = this.quests.getObjectiveState(
-            activeBeatContract.questId,
-            activeBeatContract.objectiveId,
-          );
-          if (objectiveState === 'active') {
-            this.quests.completeObjective(
-              activeBeatContract.questId,
-              activeBeatContract.objectiveId,
-            );
-          }
+      const actions = Array.isArray(result.actions) ? result.actions : [];
+      for (const action of actions) {
+        const intentResult = await this.executePluginIntent(action);
+        if (!intentResult.success) {
+          console.warn(`[Game] Plugin action rejected for NPC "${active.npcId}": ${intentResult.error}`);
+          diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
+            npcOutputValidated: diagnostics.validation?.npcOutputValidated !== false,
+            progressionGateEvaluated: diagnostics.validation?.progressionGateEvaluated === true,
+          });
+          diagnostics.validation.errors = [
+            ...(diagnostics.validation.errors ?? []),
+            intentResult.error ?? `host-action-failed:${action.type}`,
+          ];
+          diagnostics.timestampMs = Date.now();
         }
-      } else if (activeBeatContract && !result.beatEvidence) {
-        diagnostics.beatEvaluator = {
-          status: 'failed',
-          beatId: activeBeatContract.id,
-          questId: activeBeatContract.questId,
-          objectiveId: activeBeatContract.objectiveId,
-          coveragePassed: false,
-          rulePassed: false,
-          beatIdMatched: false,
-          forbiddenPassed: true,
-          confidencePassed: false,
-          confidence: 0,
-          completionSignal: 'none',
-          reason: 'missing-beat-evidence',
-        };
-        diagnostics.validation = mergeValidationBoundary(diagnostics.validation, {
-          progressionGateEvaluated: true,
-        });
-        diagnostics.timestampMs = Date.now();
       }
 
-      this.lastSugarAgentTurnDiagnostics = diagnostics;
+      this.lastAgentTurnDiagnostics = diagnostics;
       this.emitPluginEvent({
         type: 'interactionHandled',
         npcId: active.npcId,
@@ -845,52 +635,6 @@ export class Game {
       emotion: 'neutral',
       intent: 'fallback',
     };
-  }
-
-  private getPersistedSugarAgentConversationTurnCount(npcId: string): number {
-    if (!this.pluginManager) return 0;
-
-    const pluginState = this.pluginManager.serializeState();
-    const sugaragent = pluginState.sugaragent;
-    if (!isRecord(sugaragent) || !isRecord(sugaragent.dialogueSessions)) {
-      return 0;
-    }
-
-    const session = sugaragent.dialogueSessions[npcId];
-    if (!isRecord(session) || typeof session.turnCount !== 'number' || !Number.isFinite(session.turnCount)) {
-      return 0;
-    }
-
-    return Math.max(0, Math.floor(session.turnCount));
-  }
-
-  private getPersistedSugarAgentBeatTurnCount(npcId: string, beatId: string): number {
-    if (!this.pluginManager) return 0;
-
-    const pluginState = this.pluginManager.serializeState();
-    const sugaragent = pluginState.sugaragent;
-    if (!isRecord(sugaragent) || !isRecord(sugaragent.dialogueSessions)) {
-      return 0;
-    }
-
-    const sessions = sugaragent.dialogueSessions;
-    const sessionKey = `${npcId}:${beatId}`;
-    const exactSession = sessions[sessionKey];
-    if (isRecord(exactSession) && typeof exactSession.turnCount === 'number' && Number.isFinite(exactSession.turnCount)) {
-      return Math.max(0, Math.floor(exactSession.turnCount));
-    }
-
-    const npcSession = sessions[npcId];
-    if (
-      !isRecord(npcSession)
-      || npcSession.activeBeatId !== beatId
-      || typeof npcSession.turnCount !== 'number'
-      || !Number.isFinite(npcSession.turnCount)
-    ) {
-      return 0;
-    }
-
-    return Math.max(0, Math.floor(npcSession.turnCount));
   }
 
   private startAgentConversation(session: { npcId: string; npcName?: string }): void {
@@ -911,6 +655,26 @@ export class Game {
     if (mode === 'hybrid') return 'scripted-first';
     if (mode === 'agent') return 'agent-first';
     return 'fallback';
+  }
+
+  private buildPluginQuestSnapshot(): Array<{
+    questId: string;
+    currentStageId: string;
+    objectives: Array<{
+      objectiveId: string;
+      state: 'active' | 'completed' | 'inactive';
+    }>;
+  }> {
+    return this.quests.getActiveQuests().map((quest) => ({
+      questId: quest.questId,
+      currentStageId: quest.currentStageId,
+      objectives: Array.from(quest.objectiveProgress.values()).map((objective) => ({
+        objectiveId: objective.id,
+        state: objective.completed
+          ? 'completed'
+          : (this.quests.isObjectiveActive(quest.questId, objective.id) ? 'active' : 'inactive'),
+      })),
+    }));
   }
 
   /**
@@ -1936,6 +1700,14 @@ export class Game {
 
         case 'triggerObjective':
           this.quests.triggerObjective(intent.objectiveType, intent.targetId);
+          return { success: true };
+
+        case 'completeObjective':
+          this.quests.completeObjective(intent.questId, intent.objectiveId);
+          return { success: true };
+
+        case 'closeConversation':
+          this.closeAgentConversation();
           return { success: true };
 
         default:

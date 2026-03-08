@@ -25,6 +25,8 @@ export type {
   PluginAgentBeatEvaluationStatus,
   PluginAgentTurnDiagnostics,
   PluginAgentProfile,
+  PluginQuestObjectiveSnapshot,
+  PluginQuestSnapshot,
   PluginAgentTurnRequest,
   PluginAgentTurnResult,
   PluginInteractionResolution,
