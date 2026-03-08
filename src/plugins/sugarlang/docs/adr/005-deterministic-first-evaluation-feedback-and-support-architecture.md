@@ -48,8 +48,9 @@ The core decisions are:
 
 Examples:
 
-- choice and blank fill -> exact or accepted-set evaluators
-- word bank and phrase assembly -> token-order evaluators
+- chip composition -> exact, accepted-sequence, or accepted-token-set evaluators
+- blank fill with word bank -> slot-by-slot evaluators with accepted candidates and optional distractors
+- repair responses -> exact or accepted-template evaluators
 - constrained short text -> intent-plus-slot evaluators
 - open text -> broader semantic evaluators, optionally AI-assisted
 
@@ -69,9 +70,11 @@ Typical evaluator types may include:
 - exact match
 - accepted answer set
 - token multiset or sequence check
+- per-slot fill validation
 - slot fulfillment
 - morphology or agreement checks
 - intent family match under a bounded grammar
+- bounded clarification-template checks
 
 ### 3. Quest Progression and Language Evaluation Must Stay Distinct
 
@@ -95,6 +98,7 @@ The system should support:
 - simplify
 - recast
 - optional explicit explanation
+- degradation from harder response modes to stronger scaffolds such as repair responses, word-bank blank fill, or insert chips
 
 These should be chosen by pedagogy policy, not hard-wired to the evaluator result.
 

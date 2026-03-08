@@ -134,13 +134,52 @@ export interface GroundingMap {
 
 import type { ResponseContractMode } from '../../engine/conversation/types';
 
+// ---------------------------------------------------------------------------
+// Repair Options
+// ---------------------------------------------------------------------------
+
+/** A single authored repair option available on a turn. */
+export interface RepairOption {
+  /** Unique id for this repair option within the turn. */
+  repairId: string;
+  /** Player-facing label shown as a tappable repair response. */
+  label: string;
+  /**
+   * Repair type. Determines behavior:
+   * - 'fixed': player taps, NPC replies with the authored repairReply.
+   * - 'clarification_template': player taps a target-language word to
+   *   prefill the blank (e.g. "¿Qué significa '__' en inglés?").
+   */
+  type: 'fixed' | 'clarification_template';
+  /** Authored NPC reply when this repair is used. */
+  repairReply: string;
+  /** Optional grounding action triggered by this repair. */
+  groundingAction?: {
+    type: 'highlight' | 'camera_focus' | 'point';
+    worldObjectId: string;
+  };
+  /** Optional response-contract override after this repair fires. */
+  responseContractOverride?: {
+    mode: ResponseContractMode;
+    choices?: string[];
+    wordBank?: string[];
+    hintText?: string;
+  };
+}
+
 /** A single NPC turn in a scene language pack. */
 export interface SceneTurn {
   turnId: string;
-  /** NPC utterance in the target language. */
+  /** Canonical full target-language utterance (for pedagogy, analytics, replay). */
   targetText: string;
-  /** NPC utterance in the support language. */
-  supportText: string;
+  /**
+   * The actual first line shown to the player. May be mixed-language at
+   * low bands (e.g. "Do you see la maleta roja?"). If omitted the
+   * provider renders targetText.
+   */
+  initialDelivery?: string;
+  /** Optional full support-language paraphrase / fallback helper text. No longer the primary low-band surface. */
+  supportText?: string;
   /** Active teaching concepts for this turn. */
   teachingConcepts: string[];
   /** Response contract mode for the player's reply. */
@@ -150,13 +189,19 @@ export interface SceneTurn {
     choices?: string[];
     blanks?: Array<{ id: string; acceptedAnswers: string[] }>;
     wordBank?: string[];
+    /** Chips for chip_composition mode. */
+    chips?: string[];
     maxLength?: number;
     hintText?: string;
   };
+  /** Authored per-turn repair options (repair responses shown alongside the primary response mode). */
+  repairOptions?: RepairOption[];
   /** Expected correct answers for deterministic evaluation. */
   evaluation?: {
     /** Accepted answers (case-insensitive). Used by B0/B1 modes. */
     acceptedAnswers?: string[];
+    /** Accepted composed outputs for chip_composition evaluation. */
+    acceptedCompositions?: string[];
     /** For object selection: accepted object IDs. */
     acceptedObjectIds?: string[];
     /** For yes/no: expected answer. */

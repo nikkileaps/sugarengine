@@ -2,9 +2,9 @@
 
 ## Summary
 
-This use case defines the first version of the quest where the player types a short response, but the response is still tightly bounded by the scene.
+This use case defines the first version of the quest where typing becomes primary, but the scene still stays bounded and strongly supported.
 
-The goal is to support typed production while keeping evaluation deterministic enough for production use without an LLM.
+The player should feel like they are genuinely speaking in the game, not filling out a worksheet.
 
 ## Persona
 
@@ -16,12 +16,14 @@ She can:
 - understand straightforward instructions
 - produce short present-tense sentences
 
-She still needs the task to be narrow and predictable.
+She still benefits from a narrow task and visible structure.
 
 ## Placement Outcome
 
 Initial placement sets something like:
 
+- `targetLanguage = Spanish`
+- `supportLanguage = English`
 - `comprehensionBand = 2`
 - `productionBand = 2`
 - `vocabularyBand = 2`
@@ -29,162 +31,149 @@ Initial placement sets something like:
 - `repairBand = 1`
 - `confidence = medium`
 
-Derived reporting label may be `A2 / low B1`.
-
 ## User Story
 
-As a learner who can type simple Spanish, I want the game to let me ask short questions and answer directly, while still telling me clearly what kind of response is expected.
+As a learner who can type simple Spanish, I want the game to let me answer and ask short questions in the target language while still giving me repair and fallback support when I need it.
 
 ## Product Goal
 
-Introduce short typed responses without collapsing into open conversation.
+Introduce typed production without collapsing into open conversation or full translation scaffolding.
 
 ## What the Player Sees
 
-The station clerk says:
+The clerk says:
 
-`Perdí mi maleta. Es negra. ¿Puedes ayudarme?`
+`Perdí mi maleta negra. ¿Puedes ayudarme?`
 
-Below the line, Elena sees optional scene keywords:
+Unlike `UC-001` and `UC-002`, the first line is now mostly target language by default.
 
-- `maleta = suitcase`
-- `negra = black`
-- `puerta = door`
+Elena gets a short text box.
 
-If she taps one of those keywords, the related object or region in the scene highlights briefly.
+Typing is primary now.
 
-Elena is offered a short response prompt:
+She also sees a visible support chip tray beneath the box:
 
-`Escribe una frase corta para responder.`
+- insert chips:
+  - `¿Dónde está`
+  - `la maleta`
+  - `negra`
+- fallback repair responses:
+  - `No entiendo`
+  - `¿Qué significa "__" en inglés?`
 
-Support text beneath the prompt says:
+She can type directly, use the insert chips to add key words or chunks, or combine both.
 
-`Type one short Spanish sentence.`
+For the clarification response, Elena can tap `perdí` to prefill the blank, or type the unclear word if the scene allows it.
 
-Example valid responses:
-
-- `Sí, te ayudo.`
-- `¿Dónde está la maleta?`
-
-If she asks where it is, the clerk answers:
+If she types `¿Dónde está la maleta negra?`, the clerk replies:
 
 `Está cerca de la puerta.`
 
-The nearby door region briefly pulses when that line appears.
+The nearby door region pulses briefly.
 
-The game then asks Elena to report back with a short typed response after she finds it:
+If Elena types something off-track or says she does not understand, the scene repairs with a shorter mixed-language line or a stronger suggestion.
 
-`Escribe una frase corta: la maleta + estar + aquí/allí`
+Example repair:
 
-This still allows typing, but the response contract is constrained to one short idea.
+`I lost mi maleta negra. Está cerca de la puerta.`
+
+Elena then finds and picks up the black suitcase.
+
+When she returns, she types or selects a short final report such as:
+
+- `Aquí está la maleta negra.`
 
 ## Interaction Model
 
 - NPC delivery mode: scripted provider only
-- player response mode: short constrained text
-- support-language policy: medium support-language use in prompts, hints, and glossary chips
+- player response mode: short constrained text with visible insert chips, pickup, short report
+- fallback repair responses: `No entiendo` and a clarification response template
+- support-language policy: moderate and mostly repair-driven
 - grounding intensity: medium-high
 - support level: medium
-- free-form text: limited to one sentence
+- free-form text: limited to one short idea at a time
 - `sugaragent`: not required
 
 ## Evaluation Model
 
-Evaluation should remain deterministic enough to avoid LLM dependency.
+Evaluation remains deterministic enough for production without an LLM.
 
-That means the authored scene must declare:
+The scene should define:
 
-- acceptable intent classes
-- required lexical slots
-- optional morphology tolerances
-
-Examples:
-
-- `Sí, te ayudo.` counts as `offer_help`
-- `¿Dónde está la maleta?` counts as `ask_location`
-- `La maleta está aquí.` counts as `report_location`
-
-Minor mistakes may still count if the communicative goal is achieved.
+- accepted intent families
+- required semantic slots
+- tolerances for orthography and small form errors
 
 Example:
 
-- `Donde esta la maleta` should still count as a successful location question
+- `Sí, te ayudo.` counts as `offer_help`
+- `¿Dónde está la maleta negra?` counts as `ask_location`
+- `Aquí está la maleta negra.` counts as `report_success`
+
+Minor mistakes may still count if the communicative goal is clear.
 
 ## Success Criteria
 
 The experience is successful if:
 
 - Elena types at least one original sentence
-- the system evaluates her answer without LLM grading
-- the quest advances on communicative success, not perfect orthography
-- evidence records the difference between intent success and language-form weakness
+- the game can still rescue her with repair and support chips if needed
+- the quest advances on communicative success, not perfect form
+- `maleta negra` stays tied to the object, pickup, and return
 
 ## Engineering Acceptance Notes
 
-- The response contract must support a max-length constrained text input.
-- The evaluation layer must support intent-plus-slot matching.
-- The system must distinguish:
-  - task success
-  - vocabulary success
-  - grammar quality
-- support-language scaffold usage
-- grounding aid usage
-- A misspelled but clearly interpretable question should not hard-fail the quest.
+- The response contract must support constrained text with optional visible insert chips plus explicit fallback repair responses.
+- Evaluation must support intent-plus-slot matching with normalization.
+- A typed failure should be able to degrade into stronger chip-based support without breaking immersion.
+- Evidence should distinguish:
+  - typed success
+  - success after repair
+  - success after visible suggestion use
+  - task success versus language-form quality
 
 ## Designer Setup in SugarEngine
 
 ### Existing UI: Base Quest Skeleton
 
-1. Reuse the existing quest structure from UC-001 and UC-002.
-2. Keep the same luggage target and quest completion path.
-3. In the dialogue tree, keep the clerk lines authored as regular dialogue nodes.
-4. Use the existing quest objective sequence:
+1. Reuse the existing quest structure from `UC-001` and `UC-002`.
+2. Keep the same target luggage pickup and return path.
+3. Keep the same quest objective order:
    - talk
-   - inspect/retrieve
+   - collect
    - talk
 
 ### Proposed Sugarlang UI: Band-Specific Authoring
 
-1. Add a `constrained conversation` learner-band row in the `Learner Band Matrix`.
-2. In the `Support-Language Policy Editor`, set:
-   - prompt copy in the support language
-   - optional glossary chips for target-language scene keywords
-   - no full-sentence translation by default
-3. In the `Grounding Map Editor`, bind:
+1. Author the `B2 Constrained Exchange` row in the `Learner Band Matrix`.
+2. In the `Repair and Support Policy Editor`, set:
+   - no default translated subtitle
+   - support-language repair on confusion or failure
+   - visible fallback repair responses
+3. In the `Response Scaffold Editor`, configure:
+   - short constrained text as primary
+   - insert chips as visible support
+   - fallback repair responses including `No entiendo` and `¿Qué significa "__" en inglés?`
+   - pickup interaction
+   - short return report
+4. In the `Grounding Map Editor`, bind:
    - `maleta` to the luggage object class
    - `negra` to the black luggage attribute
    - `puerta` to the nearby door region
-4. In the `Response Contract Editor`, set:
-   - turn 1 response mode: short constrained text
-   - turn 2 response mode: short constrained report
-5. In the `Evaluation Rules Editor`, define accepted intent classes:
-   - `offer_help`
-   - `ask_location`
-   - `report_location`
-6. Define slot requirements:
-   - `maleta`
-   - location term such as `aquí`, `allí`, or authored equivalents
-7. Define tolerances:
-   - allow missing accent marks
-   - allow punctuation omission
-   - do not require perfect morphology for quest success
-8. In `Support and Feedback`, enable:
-   - hint on request
-   - optional recast after successful but imperfect input
-9. In `Placement Preview`, test that the scene stays constrained and does not become free-form chat.
+5. In the `Grounded Quest Binding Editor`, bind the black suitcase through pickup and return.
+6. In the `Evaluation Rules Editor`, author accepted intent families, slot requirements, and tolerances.
+7. In `Placement Preview`, verify that typing is primary but help is still readily available.
 
 ### AI-Assisted Authoring Path
 
 Expected workflow:
 
-1. Keep the English scene and quest semantics as the source content.
+1. Keep the English-authored quest as the source content.
 2. Ask the AI assistant:
-   - `generate the constrained conversation Spanish Sugarlang draft for the Find the Luggage clerk interaction with support-language glossary chips and grounding for maleta, negra, and puerta`
-3. Let the assistant write the support-language policy, grounding map, constrained text response contract, accepted intent families, and deterministic slot-based evaluation rules.
-4. Review or refine the result in chat or in the editor.
+   - `generate the B2 Spanish Sugarlang draft for Find the Luggage with constrained text, visible insert chips, fallback repair responses for No entiendo and ¿Qué significa "__" en inglés?, let the clarification response prefill from perdí, and a stable maleta negra pickup and return loop`
+3. Let the assistant write the response contract, grounding, grounded binding, repair variants, and deterministic evaluation rules.
+4. Review or refine in chat or in the editor.
 
 ## Why This Use Case Matters
 
-This is the first point where players feel like they are genuinely "speaking" in the game.
-
-Architecturally, it is also the proof point that `sugarlang` can support typed language production without depending on `sugaragent` or an LLM judge.
+This is the first band where the player really feels like they are speaking in the game while still staying inside a deterministic product contract.

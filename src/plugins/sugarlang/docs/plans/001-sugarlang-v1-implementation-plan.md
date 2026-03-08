@@ -1,5 +1,11 @@
 # Sugarlang V1 Phased Implementation Plan
 
+> Status: Superseded as the forward plan after the immersive pivot.
+>
+> This document is retained as the historical pre-pivot plan that guided the original Sugarlang Phase 1 and Phase 2 implementation work.
+>
+> Use `/Users/nikki/projects/sugarengine/src/plugins/sugarlang/docs/plans/000-sugarlang-immersive-pivot-memo.md` for the pivot rationale and `/Users/nikki/projects/sugarengine/src/plugins/sugarlang/docs/plans/002-sugarlang-immersive-pivot-rework-plan.md` for the current canonical forward plan.
+
 ## Related Docs
 
 ### Product

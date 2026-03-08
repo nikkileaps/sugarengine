@@ -75,7 +75,10 @@ function turnToResponseContract(turn: SceneTurn): ResponseContract {
   if (turn.responseData?.blanks) {
     contract.blanks = turn.responseData.blanks;
   }
-  if (turn.responseData?.wordBank) {
+  // For chip_composition, use chips as the wordBank in the contract
+  if (turn.responseMode === 'chip_composition' && turn.responseData?.chips) {
+    contract.wordBank = turn.responseData.chips;
+  } else if (turn.responseData?.wordBank) {
     contract.wordBank = turn.responseData.wordBank;
   }
   if (turn.responseData?.maxLength) {
@@ -267,6 +270,37 @@ function handleRecoveryChoice(
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract target-language words from a turn's teaching concepts that appear
+ * in the rendered utterance. Used for tap-to-prefill clarification.
+ */
+function extractTappableWords(turn: SceneTurn): string[] {
+  const text = turn.initialDelivery ?? turn.targetText;
+  const words: string[] = [];
+  // Use the chips or word bank as the source of tappable words at low bands
+  const candidates = turn.responseData?.chips ?? turn.responseData?.wordBank ?? [];
+  for (const word of candidates) {
+    if (text.toLowerCase().includes(word.toLowerCase())) {
+      words.push(word);
+    }
+  }
+  // If no candidates found from response data, try extracting from targetText
+  if (words.length === 0) {
+    const targetWords = turn.targetText.split(/\s+/);
+    for (const w of targetWords) {
+      const clean = w.replace(/[¿?¡!.,]/g, '');
+      if (clean.length > 2 && text.toLowerCase().includes(clean.toLowerCase())) {
+        words.push(clean);
+      }
+    }
+  }
+  return words;
+}
+
+// ---------------------------------------------------------------------------
 // Provider factory
 // ---------------------------------------------------------------------------
 
@@ -393,6 +427,65 @@ export function createSugarlangScriptedProvider(
       }
     }
 
+    // --- Handle repair response (player tapped a repair option) ---
+    else if (playerInput?.text?.startsWith('repair:') && state.turnCursor > 0) {
+      const previousTurn = state.turns[state.turnCursor - 1];
+      if (previousTurn?.repairOptions) {
+        const parts = playerInput.text.substring(7).split(':');
+        const repairId = parts[0]!;
+        const prefillWord = parts[1];
+        const repairOpt = previousTurn.repairOptions.find((r) => r.repairId === repairId);
+        if (repairOpt) {
+          // Build the NPC repair reply
+          let repairReply = repairOpt.repairReply;
+          if (repairOpt.type === 'clarification_template' && prefillWord) {
+            repairReply = repairReply.replace('__', prefillWord);
+          }
+          const responseContract = turnToResponseContract(previousTurn);
+          // If the repair option has a response contract override, use it
+          if (repairOpt.responseContractOverride) {
+            responseContract.mode = repairOpt.responseContractOverride.mode;
+            if (repairOpt.responseContractOverride.choices) responseContract.choices = repairOpt.responseContractOverride.choices;
+            if (repairOpt.responseContractOverride.wordBank) responseContract.wordBank = repairOpt.responseContractOverride.wordBank;
+            if (repairOpt.responseContractOverride.hintText) responseContract.hintText = repairOpt.responseContractOverride.hintText;
+          }
+
+          // Record repair usage in evidence
+          if (state.lastTurnEvidence) {
+            state.lastTurnEvidence.supportRequested = true;
+          }
+
+          setProviderState(session, state);
+          return {
+            utterance: repairReply,
+            speakerId: previousTurn.speakerId,
+            speakerName: previousTurn.speakerName,
+            emotion: 'helpful',
+            responseContract,
+            groundingMetadata: repairOpt.groundingAction
+              ? {
+                  references: [{
+                    conceptId: repairOpt.repairId,
+                    targetForm: prefillWord ?? '',
+                    worldObjectId: repairOpt.groundingAction.worldObjectId,
+                    highlightAction: repairOpt.groundingAction.type === 'point' ? 'highlight' : repairOpt.groundingAction.type,
+                  }],
+                }
+              : undefined,
+            diagnostics: {
+              supportText: previousTurn.supportText,
+              targetText: previousTurn.targetText,
+              turnId: previousTurn.turnId,
+              teachingConcepts: previousTurn.teachingConcepts,
+              repairOptions: previousTurn.repairOptions,
+              tappableWords: extractTappableWords(previousTurn),
+              repairUsed: repairId,
+            },
+          };
+        }
+      }
+    }
+
     // --- Evaluate previous turn's response if player input is provided ---
     else if (playerInput && state.turnCursor > 0) {
       const previousTurn = state.turns[state.turnCursor - 1];
@@ -476,8 +569,16 @@ export function createSugarlangScriptedProvider(
 
     const responseContract = turnToResponseContract(currentTurn);
 
+    // Render initialDelivery if authored, otherwise fall back to targetText
+    const renderedUtterance = currentTurn.initialDelivery ?? currentTurn.targetText;
+
+    // Extract tappable target-language words for clarification prefill
+    const tappableWords = currentTurn.teachingConcepts.length > 0 && currentTurn.repairOptions?.some((r) => r.type === 'clarification_template')
+      ? extractTappableWords(currentTurn)
+      : undefined;
+
     return {
-      utterance: currentTurn.targetText,
+      utterance: renderedUtterance,
       speakerId: currentTurn.speakerId,
       speakerName: currentTurn.speakerName,
       emotion: currentTurn.emotion,
@@ -487,9 +588,12 @@ export function createSugarlangScriptedProvider(
         : undefined,
       diagnostics: {
         supportText: currentTurn.supportText,
+        targetText: currentTurn.targetText,
         turnId: currentTurn.turnId,
         teachingConcepts: currentTurn.teachingConcepts,
         lastTurnEvidence: state.lastTurnEvidence,
+        repairOptions: currentTurn.repairOptions,
+        tappableWords,
       },
     };
   }

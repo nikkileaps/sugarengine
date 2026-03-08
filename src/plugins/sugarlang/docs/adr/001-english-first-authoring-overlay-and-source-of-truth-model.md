@@ -22,6 +22,7 @@ The strategic architecture and product docs already assume:
 - the base game is authored as normal SugarEngine content
 - the language-learning layer is an overlay
 - AI assistance should be a first-class authoring path
+- scene language packs own the actual mixed-language lines and response frames seen by the learner
 
 This ADR defines the canonical authoring and persistence model that makes that workflow real.
 
@@ -61,7 +62,11 @@ Sugarlang should derive and store:
 
 - semantic learning scenarios
 - communicative tasks
+- stable scenario-level referents and any per-band concrete variant maps
 - learner-band variants
+- initial-delivery lines
+- repair variants
+- happy-path response frames
 - response contracts
 - deterministic evaluation rules
 - support and feedback policies
@@ -105,6 +110,7 @@ Intended split:
   - scene-to-scenario binding
   - semantic task definition
   - grounding maps
+  - grounded quest bindings with stable scenario referents and optional band-specific concrete variants
   - success model
 - `plugins/sugarlang/defaults/`
   - shared learner-band policies
@@ -112,7 +118,7 @@ Intended split:
 - `plugins/sugarlang/languages/<lang>/`
   - shared lexicon packs
   - grammar ladder packs
-  - scene language packs containing learner-band variants, response contracts, evaluation rules, and support settings
+  - scene language packs containing learner-band variants, initial-delivery lines, repair variants, happy-path response frames, response contracts, evaluation rules, and support settings
 - `plugins/sugarlang/generated/`
   - optional intermediate draft artifacts
 - `plugins/sugarlang/eval/`
@@ -131,6 +137,11 @@ Every Sugarlang overlay artifact should reference stable IDs from the game conte
 - `npcId`
 - `objectId`
 
+Overlay artifacts may also define stable Sugarlang-side identifiers such as:
+
+- `scenarioReferentId`
+- `bandVariantId`
+
 This is what allows AI-assisted generation, safe regeneration, and editor/chat parity.
 
 For the initial shipped product, the first complete language packs should be `en` and `es`, with player-facing support/target pairings of English support -> Spanish target and Spanish support -> English target.
@@ -143,7 +154,13 @@ The system should treat the following as equivalent intents:
 - asking an AI assistant in chat to generate the draft for a quest or scene
 - invoking a CLI or automation command to generate or refresh the draft
 
-All three should write the same underlying Sugarlang artifacts.
+All three should write the same underlying Sugarlang artifacts, including:
+
+- scenario records
+- grounding maps
+- grounded quest bindings
+- per-band mixed-language surface lines
+- response frames and response contracts
 
 ## Why This Supports the Product and Use Cases
 

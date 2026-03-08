@@ -68,6 +68,9 @@ export class ResponseModeUI {
       case 'single_blank':
         this.renderSingleBlank(contract);
         break;
+      case 'chip_composition':
+        this.renderChipComposition(contract.wordBank ?? []);
+        break;
       case 'phrase_assembly':
         this.renderPhraseAssembly(contract.wordBank ?? []);
         break;
@@ -156,6 +159,75 @@ export class ResponseModeUI {
       chipRow.appendChild(chip);
     }
     this.widgetArea.appendChild(chipRow);
+  }
+
+  private renderChipComposition(chips: string[]): void {
+    const compositionArea = document.createElement('div');
+    compositionArea.className = 'sl-composition-area';
+
+    // Display area for the composed response
+    const resultDisplay = document.createElement('div');
+    resultDisplay.className = 'sl-composition-result';
+    const selectedChips: string[] = [];
+
+    const updateDisplay = () => {
+      resultDisplay.textContent = selectedChips.join(' ') || '(tap words to build your response)';
+    };
+    updateDisplay();
+
+    compositionArea.appendChild(resultDisplay);
+
+    // Chip tray
+    const chipRow = document.createElement('div');
+    chipRow.className = 'sl-chip-row';
+
+    for (const chip of chips) {
+      const btn = document.createElement('button');
+      btn.className = 'sl-chip';
+      btn.textContent = chip;
+      btn.addEventListener('click', () => {
+        if (btn.classList.contains('sl-chip-used')) {
+          // Remove from composition
+          btn.classList.remove('sl-chip-used');
+          const idx = selectedChips.indexOf(chip);
+          if (idx >= 0) selectedChips.splice(idx, 1);
+        } else {
+          // Append to composition
+          btn.classList.add('sl-chip-used');
+          selectedChips.push(chip);
+        }
+        updateDisplay();
+      });
+      chipRow.appendChild(btn);
+    }
+    compositionArea.appendChild(chipRow);
+
+    // Action row: Clear + Submit
+    const actionRow = document.createElement('div');
+    actionRow.className = 'sl-composition-actions';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'sl-clear-btn';
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', () => {
+      selectedChips.length = 0;
+      chipRow.querySelectorAll('.sl-chip-used').forEach((el) => el.classList.remove('sl-chip-used'));
+      updateDisplay();
+    });
+    actionRow.appendChild(clearBtn);
+
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'sl-confirm-btn';
+    submitBtn.textContent = 'Submit';
+    submitBtn.addEventListener('click', () => {
+      if (selectedChips.length > 0) {
+        this.submit({ text: selectedChips.join(' ') });
+      }
+    });
+    actionRow.appendChild(submitBtn);
+
+    compositionArea.appendChild(actionRow);
+    this.widgetArea.appendChild(compositionArea);
   }
 
   private renderPhraseAssembly(tokens: string[]): void {
@@ -441,6 +513,47 @@ export class ResponseModeUI {
       .sl-chip:disabled {
         opacity: 0.4;
         cursor: default;
+      }
+
+      .sl-composition-area {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .sl-composition-result {
+        min-height: 36px;
+        padding: 8px 16px;
+        font-size: 15px;
+        color: #e8ddd0;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px dashed rgba(180, 160, 140, 0.3);
+        border-radius: 8px;
+        text-align: center;
+        min-width: 240px;
+        width: 100%;
+      }
+
+      .sl-composition-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+      }
+
+      .sl-clear-btn {
+        padding: 8px 18px;
+        font-size: 13px;
+        font-weight: 500;
+        border: 1px solid rgba(180, 160, 140, 0.3);
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(220, 210, 200, 0.7);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .sl-clear-btn:hover {
+        background: rgba(255, 255, 255, 0.08);
       }
 
       .sl-assembly-area {

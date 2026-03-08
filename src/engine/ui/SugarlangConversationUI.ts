@@ -16,6 +16,13 @@ import type { GlossaryChipData } from './SupportStrip';
 import { ResponseModeUI } from './ResponseModeUI';
 import type { ResponseModeResult } from './ResponseModeUI';
 
+/** Repair option data passed from the provider for UI rendering. */
+export interface RepairOptionView {
+  repairId: string;
+  label: string;
+  type: 'fixed' | 'clarification_template';
+}
+
 export interface SugarlangTurnView {
   utterance: string;
   speakerName?: string;
@@ -30,21 +37,28 @@ export interface SugarlangTurnView {
   };
   /** Glossary chip data for B2-B3 display. */
   glossaryChips?: GlossaryChipData[];
+  /** Authored repair options for this turn. */
+  repairOptions?: RepairOptionView[];
+  /** Tappable target-language words from the utterance for clarification prefill. */
+  tappableWords?: string[];
 }
 
 type SugarlangSubmitHandler = (input: PlayerInput) => void;
 type SugarlangCloseHandler = () => void;
+type RepairHandler = (repairId: string, prefillWord?: string) => void;
 
 export class SugarlangConversationUI {
   private container: HTMLDivElement;
   private panel: HTMLDivElement;
   private speakerEl: HTMLDivElement;
   private utteranceEl: HTMLDivElement;
+  private repairArea: HTMLDivElement;
   private supportStrip: SupportStrip;
   private feedbackEl: HTMLDivElement;
   private responseModeUI: ResponseModeUI;
   private submitHandler: SugarlangSubmitHandler | null = null;
   private closeHandler: SugarlangCloseHandler | null = null;
+  private repairHandler: RepairHandler | null = null;
   private visible = false;
 
   constructor(parent: HTMLElement) {
@@ -65,6 +79,11 @@ export class SugarlangConversationUI {
     this.utteranceEl = document.createElement('div');
     this.utteranceEl.className = 'sl-conversation-utterance';
     this.panel.appendChild(this.utteranceEl);
+
+    // Repair responses area (rendered between utterance and response widget)
+    this.repairArea = document.createElement('div');
+    this.repairArea.className = 'sl-repair-area';
+    this.panel.appendChild(this.repairArea);
 
     // Support strip (support language)
     this.supportStrip = new SupportStrip(this.panel);
@@ -98,6 +117,10 @@ export class SugarlangConversationUI {
     this.closeHandler = handler;
   }
 
+  setOnRepair(handler: RepairHandler): void {
+    this.repairHandler = handler;
+  }
+
   /**
    * Show the panel and display a turn.
    */
@@ -118,8 +141,19 @@ export class SugarlangConversationUI {
       this.speakerEl.style.display = 'none';
     }
 
-    // NPC utterance
-    this.utteranceEl.textContent = turn.utterance;
+    // NPC utterance — if tappable words exist, render them as interactive spans
+    this.utteranceEl.innerHTML = '';
+    if (turn.tappableWords && turn.tappableWords.length > 0 && turn.repairOptions?.some((r) => r.type === 'clarification_template')) {
+      this.renderTappableUtterance(turn.utterance, turn.tappableWords, turn.repairOptions);
+    } else {
+      this.utteranceEl.textContent = turn.utterance;
+    }
+
+    // Repair responses — rendered between utterance and response widget
+    this.repairArea.innerHTML = '';
+    if (turn.repairOptions && turn.repairOptions.length > 0) {
+      this.renderRepairOptions(turn.repairOptions);
+    }
 
     // Support strip — adaptive by band
     const showStrip = turn.bandPolicy ? turn.bandPolicy.showSupportStrip : true;
@@ -166,6 +200,7 @@ export class SugarlangConversationUI {
     this.visible = false;
     this.supportStrip.hide();
     this.responseModeUI.hide();
+    this.repairArea.innerHTML = '';
     this.feedbackEl.textContent = '';
     this.feedbackEl.style.display = 'none';
     this.utteranceEl.textContent = '';
@@ -174,6 +209,65 @@ export class SugarlangConversationUI {
 
   isVisible(): boolean {
     return this.visible;
+  }
+
+  private renderRepairOptions(options: RepairOptionView[]): void {
+    for (const opt of options) {
+      if (opt.type === 'clarification_template') continue; // rendered via tappable utterance
+      const btn = document.createElement('button');
+      btn.className = 'sl-repair-btn';
+      btn.textContent = opt.label;
+      btn.addEventListener('click', () => {
+        this.repairHandler?.(opt.repairId);
+      });
+      this.repairArea.appendChild(btn);
+    }
+    // Add clarification template button if present
+    const clarification = options.find((o) => o.type === 'clarification_template');
+    if (clarification) {
+      const btn = document.createElement('button');
+      btn.className = 'sl-repair-btn sl-repair-clarification';
+      btn.textContent = clarification.label;
+      btn.addEventListener('click', () => {
+        this.repairHandler?.(clarification.repairId);
+      });
+      this.repairArea.appendChild(btn);
+    }
+  }
+
+  private renderTappableUtterance(text: string, tappableWords: string[], repairOptions: RepairOptionView[]): void {
+    const clarification = repairOptions.find((o) => o.type === 'clarification_template');
+    if (!clarification) {
+      this.utteranceEl.textContent = text;
+      return;
+    }
+
+    // Split the utterance and wrap tappable target-language words as clickable spans
+    let remaining = text;
+    const fragment = document.createDocumentFragment();
+
+    for (const word of tappableWords) {
+      const idx = remaining.toLowerCase().indexOf(word.toLowerCase());
+      if (idx < 0) continue;
+      // Text before the word
+      if (idx > 0) {
+        fragment.appendChild(document.createTextNode(remaining.substring(0, idx)));
+      }
+      // The tappable word
+      const span = document.createElement('span');
+      span.className = 'sl-tappable-word';
+      span.textContent = remaining.substring(idx, idx + word.length);
+      span.addEventListener('click', () => {
+        this.repairHandler?.(clarification.repairId, word);
+      });
+      fragment.appendChild(span);
+      remaining = remaining.substring(idx + word.length);
+    }
+    // Remaining text
+    if (remaining) {
+      fragment.appendChild(document.createTextNode(remaining));
+    }
+    this.utteranceEl.appendChild(fragment);
   }
 
   private handleResponseSubmit(result: ResponseModeResult): void {
@@ -236,6 +330,43 @@ export class SugarlangConversationUI {
         line-height: 1.5;
         color: #f2e9dd;
         padding: 4px 0;
+      }
+
+      .sl-repair-area {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 4px 0;
+      }
+      .sl-repair-area:empty {
+        display: none;
+      }
+
+      .sl-repair-btn {
+        padding: 6px 14px;
+        font-size: 13px;
+        font-weight: 500;
+        border: 1px solid rgba(220, 180, 120, 0.35);
+        background: rgba(220, 180, 120, 0.08);
+        color: rgba(255, 220, 160, 0.9);
+        border-radius: 16px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .sl-repair-btn:hover {
+        background: rgba(220, 180, 120, 0.2);
+        border-color: rgba(220, 180, 120, 0.5);
+      }
+
+      .sl-tappable-word {
+        color: rgba(180, 220, 255, 0.95);
+        cursor: pointer;
+        border-bottom: 1px dashed rgba(180, 220, 255, 0.4);
+        transition: color 0.15s;
+      }
+      .sl-tappable-word:hover {
+        color: #fff;
+        border-bottom-color: rgba(180, 220, 255, 0.7);
       }
 
       .sl-conversation-feedback {

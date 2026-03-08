@@ -104,9 +104,13 @@ Whether the turn came from:
 the rest of the system should receive a normalized turn envelope with:
 
 - scene semantics
+- stable scenario referent and optional grounded band variant
 - rendered utterance payload
+- rendered surface classification such as initial delivery, repair, or happy-path response frame
 - response contract
+- response-frame or scaffold payload where applicable
 - host action proposals
+- support-language surface policy
 - diagnostics
 - provenance when available
 
@@ -122,8 +126,14 @@ The engine-mediated provider input bundle should be able to carry:
 - target language and support language
 - learner-band context and support dependence
 - support-language policy
+- mixed-language surface policy for initial delivery, repair, and response scaffolds
+- protected target-language teaching units that must remain visible
+- natural mixed-language rendering requirements
 - response-contract requirements
+- clarification-entry policy
+- word-bank or scaffold policy, including whether distractors are allowed
 - grounding scope and prioritized referents
+- stable scenario referent and optional grounded band variant
 - failure and recovery posture
 - trace identity and diagnostics context
 

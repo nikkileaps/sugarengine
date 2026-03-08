@@ -2,27 +2,20 @@
 
 ## Purpose
 
-This directory contains concrete product use cases for the `sugarlang` plugin.
+This directory defines the canonical product story for `sugarlang`.
 
-These documents are meant to be useful to:
+These docs should let product, design, engineering, and AI-assisted authoring all answer the same question:
 
-- product owners defining user-facing outcomes
-- engineers implementing runtime and editor capabilities
-- designers authoring content in SugarEngine
-- solo creators using AI assistance from chat, CLI, or editor workflows
+What are we actually building?
 
-Each use case describes the same quest, `"Find the Luggage"`, at a different learner placement level.
+The answer is not "a translation strip over a game."
 
-The point of the set is to show that:
+The answer is:
 
-- the narrative objective remains constant
-- the language rendering changes by learner state
-- the mix of target language and support language changes by learner state
-- the amount and style of scene grounding changes by learner state
-- the player response contract changes by learner state
-- evaluation strictness and feedback behavior change by learner state
-- `sugarlang` works with scripted dialogue alone
-- `sugaragent` is optional and only adds value where open conversation is actually worth it
+- an immersive language-learning game
+- where the player learns through quest context, grounded world meaning, and conversational repair
+- where mixed target/support language is used deliberately and fades as the learner grows
+- where `sugaragent` is optional, not required
 
 ## Source Documents
 
@@ -38,11 +31,16 @@ Historical research context:
 - [V1 Learner Band Matrix](./contracts/v1-learner-band-matrix.md)
 - [V1 Language Content Model](./contracts/v1-language-content-model.md)
 - [V1 Authoring Artifact Model](./contracts/v1-authoring-artifact-model.md)
+- [V1 Grounded Quest Binding Model](./contracts/v1-grounded-quest-binding-model.md)
 - [V1 Golden Slice: Find the Luggage](./contracts/v1-find-the-luggage-golden-slice.md)
+
+These concrete use cases are written primarily from the `English support -> Spanish target` perspective because that is the main learner-testing path.
+
+The same band and contract model must also support the opposite `Spanish support -> English target` pairing.
 
 ## Shared Quest Definition
 
-All five use cases are different player-facing realizations of the same quest:
+All five use cases are different learner-facing realizations of the same quest:
 
 - quest name: `Find the Luggage`
 - setting: a train station or port terminal
@@ -51,107 +49,265 @@ All five use cases are different player-facing realizations of the same quest:
   1. talk to the station clerk or traveler
   2. understand the luggage description
   3. identify or ask about the luggage location
-  4. retrieve or point out the correct luggage
-  5. return and confirm completion
+  4. locate and interact with the correct luggage in the world
+  5. pick it up or otherwise complete the authored recovery action
+  6. return and confirm completion
 
-What changes across use cases is not the quest logic.
+What changes across bands is not the quest truth.
 
 What changes is:
 
-- the rendered language complexity
-- the support-language policy
-- the grounding intensity and grounding affordances
-- the allowed input mode
-- the support affordances
-- the evaluation method
-- whether optional free-form conversation is enabled
+- how much mixed support language is present in the initial line, repair, and happy-path responses
+- which target-language words stay visible while support language carries the rest
+- how strongly the scene and UI ground meaning
+- how much productive language the player is asked for
+- when chips, hints, and fallback scaffolds appear
+- how strictly language form is evaluated versus communicative success
 
-## Two Core Learning Levers
+## What Makes Sugarlang Different
 
-The product docs should treat two things as first-class design levers, not as optional polish.
+Sugarlang should not model language learning as:
 
-### 1. Controlled Support-Language Mixing
+- show target sentence
+- show translation
+- ask worksheet-style question
 
-Sugarlang should not think in binary terms like:
+It should model language learning as:
 
-- target language only
-- translation on or off
+- hear or read something in the target language
+- try to understand through context
+- signal confusion when needed
+- receive repair through simpler phrasing, mixed support language, and grounded scene help
+- act in the world
+- re-encounter the same vocabulary in meaningful quest actions
 
-It should think in band-specific support-language policy.
+That is the core product difference.
 
-That policy can determine:
+## Working Terms
 
-- whether the NPC line is target-language-only or paired with support-language framing
-- whether key target words stay visible inside a mostly native-language prompt
-- whether glosses are inline, side-by-side, on tap, or hidden until requested
-- whether hints, recasts, and objective prompts use the support language
-- how quickly support-language scaffolding fades as the learner improves
+These docs use the following terms in a strict way:
 
-Early bands should often preserve a few high-value target-language items inside otherwise easier support text.
+- `chip`
+  - a selectable token or very short chunk
+  - used to compose a response or insert target-language material into a response
+- `word bank`
+  - a bounded pool of candidate words or short chunks used to fill one or more authored blanks
+  - may include plausible scene-grounded distractors, not just correct answers
+- `response`
+  - the utterance or action the player actually submits
+- `response mode`
+  - the way the response is produced, such as object selection, chip composition, word-bank blank fill, guided assembly, constrained text, open text, or a hybrid
+- `response scaffold`
+  - the UI support around the response mode, such as chips, word banks, blanks, hints, or insertion helpers
+- `repair response`
+  - a fallback response option available alongside the primary response mode
+  - may be a fixed response such as `No entiendo` or `Señálalo`
+  - may be a templated clarification response rendered in the target language, such as Spanish-target `¿Qué significa "__" en inglés?`
+  - the support-language name inside that utterance should also be localized to the target language, such as `inglés` or `español`
+  - in tap-only bands, the blank should be prefilled from the NPC line
+  - manual clarification entry should appear only once typed interaction is introduced
 
-Examples:
+Chips are not full responses.
 
-- `Find the maleta roja.`
-- `Tap the maleta roja.`
-- `Say where the maleta is.`
+## Four Core Product Levers
 
-### 2. Scene-Grounded Meaning
+### 1. Repair-Driven Immersion
 
-Sugarlang should aggressively bind language to visible, interactive, in-world meaning.
+Every band should support repair.
 
-That includes binding words and phrases to:
+The player should be able to signal things like:
 
-- world objects
-- visible attributes such as color, size, and material
-- spatial relations such as `near the door`
-- gestures, focus targets, and camera emphasis
-- quest-relevant actions such as inspect, pick up, point to, and return
+- `I don't understand.`
+- `Say it more simply.`
+- `What does that mean?`
+- `Point to it.`
+- `Use my language.`
 
-The point is not just to show translated text.
+The exact surface form changes by band, but the product principle stays the same:
 
-The point is to let the player learn that:
+- target language comes first when appropriate
+- repair is available when needed
+- repair is delivered in-world, not as a detached classroom explanation
 
-- `maleta` is this suitcase
-- `roja` is this visible red property
-- `junto a la puerta` describes this spatial relation in the scene
+### 2. Mastery-Aware Mixed Language
 
-That grounding should be strongest in beginner bands and become more implicit and naturalistic in advanced bands.
+Sugarlang should not default to full-line translation strips.
+
+Instead, it should mix the target language and support language according to what the learner is expected to know.
+
+If `maleta` is an active teaching item and `roja` is already being reinforced, but `ves` is still unknown, a repair can look more like:
+
+- `Do you see la maleta roja?`
+
+not:
+
+- `Find the red maleta.`
+
+The mixed-language policy should be:
+
+- token-aware
+- band-aware
+- mastery-aware
+- scene-aware
+- natural-sounding
+
+Mixed-language lines should sound like believable in-world helper utterances, not arbitrary token substitution.
+
+That means:
+
+- switch languages at natural clause or chunk boundaries when possible
+- preserve full target-language teaching units or noun phrases where they carry the learning goal
+- if a mixed line sounds unnatural, keep the line natural and move more support into the scaffold or repair instead of forcing the mix
+
+The progression should be explicit:
+
+- `B0`: the initial line and the happy-path response may be mostly support language with 1-3 active target items held in the target language
+- `B1`: the initial line is still mixed, but more target-language chunks carry through; the happy-path response may already be fully target language if that sounds more natural
+- `B2`: the initial line is mostly target language; support language moves into repair, helper prompts, or insert scaffolds
+- `B3`: target language is the default; mixed language appears only on failure or by request
+- `B4`: target language is effectively the whole experience unless the learner explicitly asks for help
+
+### 3. Grounded Quest Action
+
+Words should stay attached to real game referents and actions.
+
+If the player is learning `maleta`, that referent should remain stable across:
+
+- the NPC description
+- repair lines
+- chips and typed prompts
+- object highlights
+- inspect or pickup actions
+- inventory item labels
+- return or handoff steps
+
+The player should not just identify a word.
+
+The player should use that word while actually completing the quest.
+
+### 4. Lexical Recycling and Spaced Retrieval
+
+Sugarlang should deliberately re-introduce target vocabulary over time.
+
+That means:
+
+- the NPC uses the word
+- the repair line uses the word again
+- the chip sets and response scaffolds recycle the word
+- the object label or inventory label uses the word
+- the completion line uses the word again
+
+This is planned lexical recycling and spaced retrieval, not random repetition.
+
+The product should prefer response choices like:
+
+- `Sí, I see la maleta roja.`
+- `I don't see la maleta roja.`
+- `Here is la maleta.`
+
+over empty acknowledgements like:
+
+- `Sí`
+- `No`
+
+when the scene can support richer vocabulary reuse without overloading the learner.
 
 ## Progressive Bands Across Those Levers
 
-| Band | Support-language policy | Grounding strategy |
-| --- | --- | --- |
-| Absolute beginner | high support-language mix with protected target-language keywords | explicit object highlights, tap-to-inspect, visible vocabulary anchors |
-| Guided beginner | medium-high support-language mix with guided target-language production | persistent noun/color/location bindings and hint-driven highlighting |
-| Constrained conversation | medium support-language mix in prompts, hints, and glossary chips | scene-keyword chips tied to objects, regions, and attributes |
-| Intermediate | low support-language mix, mostly on request | natural scene interpretation with optional grounding reveal |
-| Near-fluent | minimal support-language use, mostly on demand | naturalistic world context with optional clarification tools |
+| Band | Core player experience | Support-language posture | Chip role | Grounding posture |
+| --- | --- | --- | --- | --- |
+| `B0 Anchored Recognition` | understand through context and build a heavily mixed response around a few active target words | heavy in the initial line, repair, and response scaffold | primary response mode | always-on highlights, pointing, object anchors |
+| `B1 Guided Response` | fill in short quest-relevant responses with narrower but still visible mixed delivery | still present in the initial line and scaffold, but reduced from `B0` | word-bank blank fill and guided assembly | persistent object, color, and location bindings |
+| `B2 Constrained Exchange` | type one short idea after a mostly target-language prompt, with visible structured help | moderate, mostly in repair and helper prompts | visible support scaffold, no longer the only path | object and region grounding still explicit |
+| `B3 Independent Task Dialogue` | handle a short exchange and ask for clarification | low by default, available on request or failure | fallback or on-request help after failed typing | reveal-based grounding tied to task needs |
+| `B4 Natural Interaction` | complete the task mostly through natural dialogue | minimal, mostly on demand | hidden behind help or repair affordances | world-first and naturalistic |
+
+## Product Rules for Chips and Other Scaffolds
+
+Chips stay in the product.
+
+What changes is their role.
+
+In these docs, chips are:
+
+- selectable tokens
+- very short chunks
+- used for chip composition or typed insertion help
+
+They are not the full response by themselves.
+They are not repair responses.
+Repair responses are a separate fallback surface that may appear alongside chips, not inside them.
+
+The V1 rule is:
+
+- `B0`: chip composition is the primary response mode
+- `B1`: word-bank blank fill and guided assembly become primary
+- `B2`: typing becomes primary, but chips may still appear as visible support scaffolds
+- `B3`: typing is primary; chip scaffolds appear after failure or when the player requests help
+- `B4`: chips are hidden by default and only surfaced as explicit fallback support
+
+This preserves the good part of the current MVP while making the progression feel more immersive.
+
+## Product Rules for Repair
+
+Repair should be authored as part of the conversation contract, not bolted on as generic help UI.
+
+Typical repair responses include:
+
+- repeat
+- simplify
+- support-language rephrase
+- point/highlight
+- glossary reveal for one item
+- repair responses such as `No entiendo` or `Señálalo`
+- clarification responses rendered in the target language, such as Spanish-target `¿Qué significa "__" en inglés?`
+- insert chips for key target-language words or short chunks
+
+The product should prefer repair that uses:
+
+- the world
+- the quest state
+- the active vocabulary
+
+before resorting to explicit explanation.
+
+## Product Rules for Grounding
+
+Grounding is not just a highlight effect.
+
+For V1, grounding should be able to bind language to:
+
+- world objects
+- visible attributes such as color, size, or material
+- regions and landmarks
+- quest actions such as inspect, pick up, point to, return, or give
+- inventory objects after pickup
+
+The grounded quest binding contract is defined in [V1 Grounded Quest Binding Model](./contracts/v1-grounded-quest-binding-model.md).
 
 ## Current Authoring Baseline in SugarEngine
 
-The current editor already gives designers a baseline workflow for the quest skeleton:
+The current editor already gives designers the base quest skeleton:
 
-- `Dialogues` tab for authored dialogue trees
-- `Quests` tab for quest stages and objectives
-- `NPCs` tab for default dialogue and interaction mode
-- `Regions` tab for placing NPCs, pickups, and inspectables
+- `Dialogues` for authored dialogue trees
+- `Quests` for quest stages and objectives
+- `NPCs` for default dialogue and interaction mode
+- `Regions` for placing NPCs, pickups, inspectables, and landmarks
 - `Episode Details` for main quest and start region
 
-Relevant current behavior and docs:
+Relevant current engine behavior:
 
 - quest-to-dialogue routing is documented in `docs/dev/quest-episode-integration.md`
-- the dialogue editor canvas and node inspector are documented in `docs/api/06-dialogue.md`
+- dialogue authoring behavior is documented in `docs/api/06-dialogue.md`
 
 ## English-First, AI-Assisted Authoring Model
 
-The intended Sugarlang workflow is not manual pedagogy authoring from a blank form.
+The creator workflow remains:
 
-The intended workflow is:
-
-1. author the game scene in English using normal SugarEngine quest/dialogue tools
-2. ask Sugarlang to generate the language-learning draft for that scene
+1. author the game in English using normal SugarEngine tools
+2. ask Sugarlang to generate the learning overlay
 3. review and refine the generated overlay
-4. preview the scene at different learner placements
+4. preview the same scene across learner bands and language pairs
 
 This generation step should be available from:
 
@@ -159,34 +315,29 @@ This generation step should be available from:
 - chat with an AI assistant
 - CLI or automation
 
-All three should operate on the same underlying Sugarlang files and contracts.
+All three should target the same Sugarlang files and contracts.
 
 ## Runtime Language Model
 
-For this product, the base game content is authored in English.
+The base game is authored in English.
 
-That is a fixed authoring assumption, not a runtime concern.
+That is not a runtime setting.
 
 The runtime only needs to model:
 
 - `target language`
-  - the language the player is intended to learn in a given run
+  - the language the player is learning
 - `support language`
-  - the language used for scaffolding, glosses, hints, or mixed-language prompts
+  - the learner's scaffold language, usually their strongest or native language
+  - used for scaffolding, repair, hints, and mixed-language prompts
 
-For the initial Sugarlang product, the recommended setup is:
+For the initial product:
 
 - supported target languages: English and Spanish
 - supported support languages: English and Spanish
-- player-facing V1 language pairs:
+- normal player-facing pairs:
   - `supportLanguage = English`, `targetLanguage = Spanish`
   - `supportLanguage = Spanish`, `targetLanguage = English`
-
-That gives two useful product benefits:
-
-- Spanish target with English support gives the core learner-facing flow you want to test
-- English target with Spanish support proves the model works in the other direction too
-- English target content still helps with creator-side evaluation of target-language accuracy and grading logic
 
 ## Source of Truth and Storage Model
 
@@ -198,6 +349,7 @@ At the product level, the important split is:
 
 - project-level plugin configuration
 - scenario-owned semantic and grounding data
+- scenario-owned grounded quest binding data
 - shared defaults
 - per-target-language learning packs
 - eval artifacts
@@ -209,132 +361,84 @@ It should not be the canonical source of authored Sugarlang content.
 
 ## Proposed Sugarlang Authoring Surfaces
 
-These use cases assume the following proposed authoring UI is added to SugarEngine.
-
-The exact field names and layouts are follow-on design work, but the product behaviors depend on these concepts existing somewhere in the shared Sugarlang authoring system, with the editor acting as one client of that system.
+These use cases assume the following Sugarlang authoring surfaces exist somewhere in the shared authoring system, with the editor acting as one client of that system.
 
 ### 0. Draft Generation Actions
 
 Purpose:
 
-- generate Sugarlang drafts from English-authored quest/dialogue content
-- regenerate only selected bands or languages
-- support the same actions from editor UI and chat/CLI
+- generate or regenerate Sugarlang drafts from English-authored content
+- support the same actions from editor, chat, and CLI
 
 ### 1. Sugarlang Scenario Panel
-
-Attached to a quest objective or dialogue node.
 
 Purpose:
 
 - bind the authored scene to a semantic learning scenario
-- declare the target communicative task
-- declare which world referents and attributes ground the language
-- declare which learner bands the scenario supports
+- declare the communicative task
+- declare scene-supported learner bands
 
 ### 2. Learner Band Matrix
 
 Purpose:
 
-- define how the same scene behaves at different learner placements
-- attach render variants, support-language policies, response contracts, and support levels by band
+- define how the same scene behaves at `B0` through `B4`
+- declare response posture, repair posture, support-language posture, and success expectations by band
 
-### 3. Response Contract Editor
-
-Purpose:
-
-- choose the player input mode for the turn
-- define allowed response shapes
-- define UI affordances such as choice chips, blanks, word banks, hints, repeat, or simplify
-
-### 4. Support-Language Policy Editor
+### 3. Repair and Support Policy Editor
 
 Purpose:
 
-- define how the target language and support language are mixed by band
-- decide whether support appears as inline glosses, dual-language prompts, sidecar hints, or on-demand translation
-- protect specific target-language tokens so the learner still sees and uses them
+- define what happens when the learner does not understand
+- choose allowed repair responses such as repeat, simplify, support-language rephrase, pointing, `No entiendo`, `Señálalo`, and target-language clarification templates such as Spanish-target `¿Qué significa "__" en inglés?`
+- decide when those repairs are primary, visible, on request, or failure-triggered
+
+### 4. Response Scaffold Editor
+
+Purpose:
+
+- choose primary response modes
+- choose fallback response modes
+- define chips, word banks, blanks, constrained text, insert helpers, and fallback repair responses
+- ensure response choices recycle active vocabulary where appropriate
 
 ### 5. Grounding Map Editor
 
 Purpose:
 
-- bind target-language words and phrases to world objects, regions, attributes, and actions
-- define what gets highlighted, focused, or revealed when a grounding aid is shown
-- let the same semantic scene drive both language presentation and world-context support
+- bind concepts to objects, attributes, landmarks, and regions
+- bind repair responses to highlights, pointing, inspect reveals, and camera focus
 
-### 6. Evaluation Rules Editor
-
-Purpose:
-
-- define deterministic success rules
-- define accepted answer sets, slot requirements, morphology checks, and intent checks
-- decide when minor language errors still count as communicative success
-
-### 7. Support and Feedback Panel
+### 6. Grounded Quest Binding Editor
 
 Purpose:
 
-- set whether the turn supports hint, recast, repetition, or optional translation
-- control how much corrective feedback is shown by band
+- bind the same referent across world object, pickup, inventory, return, and quest progression
+- ensure the learner-facing vocabulary remains attached to the real quest object throughout the loop
 
-### 8. Placement Preview Drawer
+### 7. Placement and Preview Panel
 
 Purpose:
 
-- preview the same quest at a selected learner placement
-- playtest the full band-specific experience before shipping
+- preview the same scene at different bands and language pairs
+- verify that chip use, repair behavior, and grounding intensity change correctly across progression
 
-## AI-Assisted Authoring Workflow
+## Product Litmus Test
 
-The expected creator workflow should allow commands like:
+If a beginner scene still feels like:
 
-- `generate the Sugarlang draft for quest find-the-luggage`
-- `generate only the beginner Spanish bands for the clerk intro scene`
-- `regenerate the evaluation rules for the luggage report step`
-- `make the beginner version use more English scaffolding but keep maleta and roja in Spanish`
-- `bind the luggage vocabulary to the visible red suitcase and door region`
+- a translated subtitle
+- a worksheet
+- a disconnected multiple-choice overlay
 
-Those commands should produce or update the same on-disk Sugarlang artifacts the editor would edit.
+then it is not yet Sugarlang in the form these docs describe.
 
-The creator can then:
+If it feels like:
 
-- review the files directly
-- refine them in chat
-- refine them in the editor
-- preview them in the game
+- an in-world interaction
+- with visible quest stakes
+- grounded referents
+- meaningful repair
+- and progressive vocabulary reuse
 
-## Use Case Catalog
-
-- [UC-001: Find the Luggage for an Absolute Beginner](./uc-001-find-the-luggage-absolute-beginner.md)
-- [UC-002: Find the Luggage for a Guided Beginner](./uc-002-find-the-luggage-guided-beginner.md)
-- [UC-003: Find the Luggage for a Constrained Conversational Learner](./uc-003-find-the-luggage-constrained-conversation.md)
-- [UC-004: Find the Luggage for an Independent Intermediate Learner](./uc-004-find-the-luggage-intermediate-clarification.md)
-- [UC-005: Find the Luggage for a Near-Fluent Player](./uc-005-find-the-luggage-near-fluent.md)
-
-## How to Read the Use Cases
-
-Each use case answers four questions:
-
-1. What learner was placed into this band?
-2. What exactly does the player see in the first quest?
-3. How is the player response evaluated?
-4. How would a designer or AI-assisted workflow author that experience in SugarEngine?
-
-## Design Intent Across the Set
-
-The set should make one architectural point unmistakably clear:
-
-`sugarlang` is not "LLM tutoring."
-
-It is an adaptive language-learning system that can:
-
-- use fully deterministic authored dialogue and deterministic evaluation
-- use constrained text input and strict rule-based checking
-- optionally delegate turn realization to `sugaragent` only when free-form interaction is justified
-- generate most of its overlay data from English-authored game content and then let the creator refine it
-- deliberately mix target language with support language when that makes comprehension and retention stronger
-- use rich in-world grounding so vocabulary and phrases are learned against visible meaning rather than floating text alone
-- support multiple target languages over the same authored English game structure
-
-That distinction is central to the plugin architecture and to the product strategy.
+then the product is on the right track.

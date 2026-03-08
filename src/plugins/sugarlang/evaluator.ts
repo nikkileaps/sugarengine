@@ -310,6 +310,46 @@ function evaluateTextInput(
 }
 
 // ---------------------------------------------------------------------------
+// Chip composition evaluator (B0)
+// ---------------------------------------------------------------------------
+
+function evaluateChipComposition(
+  input: PlayerInput,
+  turn: SceneTurn,
+): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
+  const accepted = turn.evaluation?.acceptedCompositions ?? turn.evaluation?.acceptedAnswers ?? [];
+  if (accepted.length === 0) {
+    return { correct: true, taskSuccess: true, formAccuracy: true };
+  }
+
+  const playerPhrase = input.text ?? '';
+  // Exact match (case-insensitive, accent-tolerant)
+  const matched = matchesAcceptedAnswer(playerPhrase, accepted);
+  if (matched) {
+    return { correct: true, taskSuccess: true, formAccuracy: true, matchedAnswer: matched };
+  }
+
+  // Token-set match: same words in any order counts as taskSuccess
+  let taskSuccess = false;
+  const playerTokens = new Set(normalize(playerPhrase).split(/\s+/).map(stripAccents));
+  for (const answer of accepted) {
+    const answerTokens = normalize(answer).split(/\s+/).map(stripAccents);
+    const hasAllTokens = answerTokens.every((t) => playerTokens.has(t));
+    if (hasAllTokens && playerTokens.size === answerTokens.length) {
+      taskSuccess = true;
+      break;
+    }
+  }
+
+  return {
+    correct: taskSuccess,
+    taskSuccess,
+    formAccuracy: false,
+    matchedAnswer: taskSuccess ? playerPhrase : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Main evaluator
 // ---------------------------------------------------------------------------
 
@@ -326,6 +366,7 @@ const MODE_EVALUATORS: Partial<
   object_selection: evaluateObjectSelection,
   single_blank: evaluateBlankFill,
   blank_fill: evaluateBlankFill,
+  chip_composition: evaluateChipComposition,
   phrase_assembly: evaluatePhraseAssembly,
   word_bank: evaluateBlankFill,
   short_text: evaluateTextInput,
@@ -410,6 +451,8 @@ function generateRecoveryFeedback(turn: SceneTurn, attemptCount: number): string
     case 'blank_fill':
     case 'word_bank':
       return turn.responseData?.hintText ?? 'Check the word bank for the right answer.';
+    case 'chip_composition':
+      return 'Try tapping the chips in a different order.';
     case 'phrase_assembly':
       return 'Try putting the words in a different order.';
     case 'short_text':

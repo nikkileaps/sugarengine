@@ -89,11 +89,14 @@ Why:
 Each turn should preserve structured evidence like:
 
 - target-language and support-language pair
+- stable scenario referent and optional grounded band variant
 - player input
 - expected task
 - achieved or not achieved
 - response mode
+- response-frame or scaffold type
 - support-language policy used
+- mixed-language surface policy used
 - support-language scaffolds shown or requested
 - grounding aids shown or used
 - grammar/vocabulary indicators

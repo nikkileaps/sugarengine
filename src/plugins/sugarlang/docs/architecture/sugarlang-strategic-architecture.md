@@ -40,6 +40,7 @@ This architecture builds on the product goals in [LANGUAGE_LEARNING_PRODUCT_ROAD
 12. The editor UI must not be the only authoring client; chat- and CLI-driven generation must operate on the same underlying files and contracts.
 13. Support-language policy and scene-grounding metadata must be first-class authoring and runtime concepts, not ad hoc UI text.
 14. The base game content is authored in English, while runtime language behavior is driven by target language and support language.
+15. Mixed-language initial delivery, repair, and happy-path response frames must be scene-authored/runtime-controlled and must not collapse into always-on translation strips or arbitrary token-spliced UI text.
 
 ## 3) Architecture Thesis
 
@@ -159,6 +160,7 @@ Examples:
 - semantic conversation intents
 - expected player response categories
 - slot/value requirements
+- stable scenario referents and optional band-specific concrete variants
 - visible referents and their relevant attributes
 - spatial relations that can be grounded in the scene
 - scene-level success criteria
@@ -188,6 +190,8 @@ That includes:
 - pedagogical policy selection
 - support-language policy selection
 - response-mode shaping
+- initial-delivery, repair, and happy-path response-frame shaping
+- natural mixed-language rendering policy
 - grounding-aware adaptation and hinting
 - adaptive rendering constraints
 - pedagogical validation
@@ -202,6 +206,8 @@ Engine-owned UI surfaces should render:
 
 - the NPC utterance
 - response affordances
+- response frames, word banks, and insert helpers where applicable
+- repair responses and clarification affordances
 - support affordances
 - correction/hint requests
 - typing constraints when applicable
@@ -217,6 +223,8 @@ That layer should support an English-first workflow:
 - the creator authors quests, dialogue, NPCs, and world setup as a normal game
 - `sugarlang` derives a semantic learning overlay from that authored structure
 - `sugarlang` derives candidate grounding maps from the authored scene objects, regions, and attributes
+- `sugarlang` defines stable scenario-level referents and optional per-band concrete variants for grounded quest scenes
+- `sugarlang` scene language packs own the actual initial-delivery lines, repair variants, and happy-path response frames by learner band
 - AI drafts most of the language-learning metadata and language-specific variants
 - the creator refines the draft in the editor, in chat, or through scripted tooling
 
@@ -294,6 +302,9 @@ Request-side structure should include, at minimum:
 - scene semantics
 - target language and support language
 - learner-band context
+- stable scenario referent and optional grounded band variant
+- mixed-language surface policy for initial delivery, repair, and response scaffolds
+- clarification-entry policy
 - provider input constraints
 - response contract
 - failure and recovery posture
@@ -305,8 +316,11 @@ Response-side structure should include, at minimum:
 - semantic act or intent identity
 - rendered utterance payload
 - support-language policy for the turn
+- rendered surface classification such as initial delivery, repair, or happy-path response frame
 - player response contract
+- response-frame or scaffold payload where applicable
 - host action proposals
+- grounded band variant and provenance when applicable
 - provenance/grounding metadata where applicable
 - diagnostics
 - room for middleware annotations
@@ -326,10 +340,14 @@ At the architectural level, that bundle should be able to express:
 - communicative task and scene semantics
 - target language and support language
 - learner-band context and placement state
-- support-language policy for the turn
+- support-language policy for the turn, including initial-delivery, repair, and response-scaffold posture
+- natural mixed-language rendering requirements
+- protected target-language teaching units that must remain visible
 - response-contract requirements
+- clarification-entry policy
+- word-bank or scaffold policy, including whether distractors are allowed
 - allowed complexity or vocabulary window
-- grounding scope and referent focus
+- grounding scope, stable scenario referent, and optional grounded band variant
 - feedback and failure-recovery posture
 - trace identity and diagnostics context
 
@@ -369,7 +387,9 @@ That avoids cross-plugin lock-in and keeps both plugins replaceable.
 - pedagogical policy selection
 - support-language policy selection
 - scripted adaptive language assets
+- mixed-language initial-delivery lines, repair variants, and happy-path response frames
 - scene-grounding maps and grounded vocabulary bindings
+- stable scenario-level referents plus per-band concrete grounded variants
 - response-mode shaping
 - hints, recasts, and support affordances
 - vocabulary/structure exposure tracking
@@ -401,7 +421,9 @@ In the scripted-only deployment profile:
 
 - the scripted provider resolves the current narrative turn
 - `sugarlang` middleware chooses the learner-appropriate rendering path
-- `sugarlang` chooses how much support language is shown and which target-language tokens remain visible
+- `sugarlang` chooses the band-appropriate initial-delivery line, repair line, and happy-path response frame
+- `sugarlang` chooses how much support language is shown and which target-language teaching units remain visible
+- `sugarlang` keeps mixed-language lines natural-sounding and may keep the submitted response fully target-language when that is the more believable in-world surface
 - `sugarlang` shapes the player response mode
 - `sugarlang` adds hints, repetition, optional translation, grounded highlights, or recast behavior
 - engine dialogue progression remains fully scripted and deterministic
@@ -567,6 +589,8 @@ The authoring data flow should look like this:
 1. Creator authors or updates English quest/dialogue content.
 2. Sugarlang scene extraction reads the authored structure and resolves stable references.
 3. Draft generation produces or updates Sugarlang scenario files, grounding maps, and per-language scene packs, and may suggest shared lexicon or grammar-pack updates.
+   - those scenario files should preserve stable scenario referents and any band-specific concrete variant map
+   - those scene packs should preserve the actual initial-delivery lines, repair variants, and happy-path response frames
 4. Validation checks references, response contracts, and evaluation rules.
 5. Creator reviews and refines in editor or via chat.
 6. Preview and eval operate on the same saved artifacts.
@@ -579,7 +603,7 @@ The authoring data flow should look like this:
 2. Engine opens a normalized conversation session.
 3. `sugarlang` middleware loads learner state and scene pedagogy context.
 4. Scripted provider resolves the next semantic turn from the authored dialogue graph.
-5. `sugarlang` selects or renders the appropriate utterance variant and response contract.
+5. `sugarlang` selects or renders the appropriate initial-delivery or repair variant, response frame, response contract, and grounded band variant.
 6. Engine renders the turn and allowed player-input mode.
 7. Player responds through the constrained or scripted interaction mode.
 8. `sugarlang` extracts turn evidence, updates learner state, records exposures, and emits learning analytics.
@@ -590,7 +614,7 @@ The authoring data flow should look like this:
 1. Player enters a conversation or turn configured for the `sugaragent` provider.
 2. Engine opens the normalized conversation session.
 3. `sugarlang` computes pedagogical policy from learner state, scene objective, and prior evidence.
-4. Engine passes the provider constraint bundle into the selected provider, including scene semantics, learner-band context, target/support language, response-contract requirements, grounding scope, and failure-recovery posture.
+4. Engine passes the provider constraint bundle into the selected provider, including scene semantics, learner-band context, target/support language, mixed-language posture, response-contract requirements, grounding scope, grounded variant focus, and failure-recovery posture.
 5. `sugaragent` produces the turn with its own lore, memory, and grounding systems.
 6. Engine validates proposed host actions and grounding outputs through generic host contracts.
 7. `sugarlang` evaluates pedagogical fit, attaches support affordances, and updates learner evidence.
@@ -615,7 +639,7 @@ The `sugarlang` runtime should follow one provider-independent loop:
 1. read current learner state
 2. read narrative/scene semantics
 3. derive pedagogical target for this turn
-4. derive response constraints and support level
+4. derive response constraints, support level, and the natural mixed-language surface for initial delivery, repair, and happy-path response scaffolds
 5. let the selected provider realize the turn
 6. evaluate the player outcome and provider output
 7. update learner state and reinforcement scheduling

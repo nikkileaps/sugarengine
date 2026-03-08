@@ -69,6 +69,10 @@ export function setupGameUI(game: Game, container: HTMLElement) {
     void game.submitSugarlangTurn(input);
   });
   sugarlangUI.setOnClose(() => game.closeSugarlangConversation());
+  sugarlangUI.setOnRepair((repairId, prefillWord) => {
+    // Repair responses are submitted as special text input with a repair: prefix
+    void game.submitSugarlangTurn({ text: `repair:${repairId}${prefillWord ? `:${prefillWord}` : ''}` });
+  });
   const isPreviewRuntime = window.location.pathname.includes('preview.html');
   if (isPreviewRuntime) {
     agentConversationUI.setOnReset(async (session) => {
@@ -141,19 +145,27 @@ export function setupGameUI(game: Game, container: HTMLElement) {
           }
         | undefined;
 
-      // Build glossary chips from word bank in the response contract
-      const glossaryChips: Array<{ targetWord: string; supportWord: string; conceptId?: string }> = [];
-      if (envelope.responseContract.wordBank) {
-        for (const word of envelope.responseContract.wordBank) {
-          glossaryChips.push({ targetWord: word, supportWord: word });
-        }
-      }
+      // Extract repair options and tappable words from provider diagnostics.
+      const diagnostics = envelope.providerDiagnostics as
+        | {
+            supportText?: string;
+            repairOptions?: Array<{
+              repairId: string;
+              label: string;
+              type: 'fixed' | 'clarification_template';
+            }>;
+            tappableWords?: string[];
+          }
+        | undefined;
+
+      // Use supportText from annotations first, then from diagnostics
+      const supportText = slAnnotations?.supportText ?? diagnostics?.supportText;
 
       sugarlangUI.showTurn({
         utterance: envelope.utterance,
         speakerName: envelope.speakerName,
         emotion: envelope.emotion,
-        supportText: slAnnotations?.supportText,
+        supportText,
         responseContract: envelope.responseContract,
         bandPolicy: slAnnotations?.resolvedBand
           ? {
@@ -162,7 +174,10 @@ export function setupGameUI(game: Game, container: HTMLElement) {
               bandId: slAnnotations.resolvedBand,
             }
           : undefined,
-        glossaryChips: glossaryChips.length > 0 ? glossaryChips : undefined,
+        // Glossary chips require real lexicon translations — not yet wired.
+        glossaryChips: undefined,
+        repairOptions: diagnostics?.repairOptions,
+        tappableWords: diagnostics?.tappableWords,
       });
     },
   });

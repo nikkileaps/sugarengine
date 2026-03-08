@@ -15,28 +15,66 @@ export const SCENE_PACK_EN: SceneLanguagePack = {
   supportLanguage: 'es',
   bands: [
     // -----------------------------------------------------------------------
-    // B0 — Anchored Recognition
+    // B0 — Anchored Recognition (immersive pivot)
     // -----------------------------------------------------------------------
     {
       bandId: 'B0',
       turns: [
+        // Turn 1: Recognition — NPC asks with mixed-language line, player chip-composes a response
         {
           turnId: 'b0-en-01',
           targetText: 'Do you see the red suitcase?',
-          supportText: 'Busca la <kw>suitcase</kw> roja.',
+          initialDelivery: '¿Ves the red suitcase?',
           teachingConcepts: ['object.suitcase', 'color.red'],
-          responseMode: 'yes_no',
-          evaluation: {
-            expectedYesNo: true,
+          responseMode: 'chip_composition',
+          responseData: {
+            chips: ['Yes', 'I see', 'the', 'red', 'suitcase'],
           },
+          evaluation: {
+            acceptedCompositions: [
+              'Yes I see the red suitcase',
+              'Yes the red suitcase',
+              'I see the red suitcase',
+              'the red suitcase',
+            ],
+          },
+          repairOptions: [
+            {
+              repairId: 'no-entiendo',
+              label: 'No entiendo',
+              type: 'fixed',
+              repairReply: 'Suitcase — es una maleta. The red suitcase — ¡la maleta roja!',
+              groundingAction: {
+                type: 'highlight',
+                worldObjectId: 'suitcase-red',
+              },
+            },
+            {
+              repairId: 'senalalo',
+              label: 'Señálalo',
+              type: 'fixed',
+              repairReply: 'Here — the red suitcase!',
+              groundingAction: {
+                type: 'point',
+                worldObjectId: 'suitcase-red',
+              },
+            },
+            {
+              repairId: 'que-significa',
+              label: '¿Qué significa "__"?',
+              type: 'clarification_template',
+              repairReply: '"__" — suitcase = maleta, red = rojo. The red suitcase!',
+            },
+          ],
           emotion: 'curious',
           speakerId: 'station-clerk',
           speakerName: 'Station Clerk',
         },
+        // Turn 2: Object selection — player taps the correct suitcase
         {
           turnId: 'b0-en-02',
           targetText: 'Good. Tap the red suitcase.',
-          supportText: 'Toca la <kw>suitcase</kw> <kw>red</kw>.',
+          initialDelivery: '¡Bien! Now tap the red suitcase.',
           teachingConcepts: ['object.suitcase', 'color.red'],
           responseMode: 'object_selection',
           responseData: {
@@ -45,25 +83,38 @@ export const SCENE_PACK_EN: SceneLanguagePack = {
           evaluation: {
             acceptedObjectIds: ['suitcase-red'],
           },
+          repairOptions: [
+            {
+              repairId: 'senalalo',
+              label: 'Señálalo',
+              type: 'fixed',
+              repairReply: 'The red suitcase — ¡ahí!',
+              groundingAction: {
+                type: 'point',
+                worldObjectId: 'suitcase-red',
+              },
+            },
+          ],
           emotion: 'encouraging',
           speakerId: 'station-clerk',
           speakerName: 'Station Clerk',
         },
+        // Turn 3: Completion — player chip-builds "Aquí está the red suitcase."
         {
           turnId: 'b0-en-03',
-          targetText: 'The ____ is red.',
-          supportText: 'La ____ es roja.',
-          teachingConcepts: ['object.suitcase'],
-          responseMode: 'single_blank',
+          targetText: 'Here is the red suitcase.',
+          initialDelivery: '¡Lo encontraste! Now say: here is the red suitcase.',
+          teachingConcepts: ['object.suitcase', 'color.red'],
+          responseMode: 'chip_composition',
           responseData: {
-            blanks: [{ id: 'blank1', acceptedAnswers: ['suitcase'] }],
-            wordBank: ['suitcase', 'door', 'table'],
-            hintText: 'The ____ is red.',
+            chips: ['Here', 'is', 'the', 'red', 'suitcase'],
           },
           evaluation: {
-            acceptedAnswers: ['suitcase'],
+            acceptedCompositions: [
+              'Here is the red suitcase',
+            ],
           },
-          emotion: 'neutral',
+          emotion: 'encouraging',
           speakerId: 'station-clerk',
           speakerName: 'Station Clerk',
         },
@@ -71,60 +122,101 @@ export const SCENE_PACK_EN: SceneLanguagePack = {
     },
 
     // -----------------------------------------------------------------------
-    // B1 — Guided Response
+    // B1 — Guided Response (immersive pivot)
     // -----------------------------------------------------------------------
     {
       bandId: 'B1',
       turns: [
+        // Turn 1: Blank fill — player fills in location word
         {
           turnId: 'b1-en-01',
-          targetText: 'I need the blue suitcase. Where is it?',
-          supportText: 'Necesitas la <kw>suitcase</kw> azul. ¿Dónde está?',
-          teachingConcepts: ['object.suitcase', 'color.blue', 'verb.is_located'],
+          targetText: 'I need the blue suitcase. Can you show me where it is?',
+          initialDelivery: 'Necesito the blue suitcase. ¿Puedes mostrarme where it is?',
+          teachingConcepts: ['object.suitcase', 'color.blue', 'location.there'],
           responseMode: 'single_blank',
           responseData: {
-            blanks: [{ id: 'blank1', acceptedAnswers: ['here', 'there'] }],
-            wordBank: ['here', 'there', 'big'],
-            hintText: 'The suitcase is _____.',
+            blanks: [{ id: 'blank1', acceptedAnswers: ['there', 'here'] }],
+            wordBank: ['there', 'here', 'near'],
+            hintText: 'The blue suitcase is ____.',
           },
           evaluation: {
-            acceptedAnswers: ['here', 'there'],
+            acceptedAnswers: ['there', 'here'],
           },
+          repairOptions: [
+            {
+              repairId: 'no-entiendo',
+              label: 'No entiendo',
+              type: 'fixed',
+              repairReply: 'The blue suitcase — la maleta azul. It\'s over there!',
+              groundingAction: {
+                type: 'highlight',
+                worldObjectId: 'suitcase-blue',
+              },
+            },
+            {
+              repairId: 'senalala',
+              label: 'Señálala',
+              type: 'fixed',
+              repairReply: 'The blue suitcase — ¡allí!',
+              groundingAction: {
+                type: 'point',
+                worldObjectId: 'suitcase-blue',
+              },
+            },
+            {
+              repairId: 'que-significa',
+              label: '¿Qué significa "__"?',
+              type: 'clarification_template',
+              repairReply: '"__" — blue = azul, suitcase = maleta, there = allí.',
+            },
+          ],
           emotion: 'concerned',
           speakerId: 'station-clerk',
           speakerName: 'Station Clerk',
         },
+        // Turn 2: Object selection — player taps the blue suitcase
         {
           turnId: 'b1-en-02',
-          targetText: 'Build a short phrase: "Here is the suitcase."',
-          supportText: 'Construye la frase: "Aquí está la <kw>suitcase</kw>."',
-          teachingConcepts: ['location.here', 'verb.is_located', 'object.suitcase'],
-          responseMode: 'phrase_assembly',
+          targetText: 'Show me the blue suitcase.',
+          initialDelivery: 'Muéstrame the blue suitcase.',
+          teachingConcepts: ['object.suitcase', 'color.blue'],
+          responseMode: 'object_selection',
           responseData: {
-            wordBank: ['Here', 'is', 'the', 'suitcase'],
+            hintText: 'Tap the blue suitcase in the scene.',
           },
           evaluation: {
-            acceptedAnswers: ['Here is the suitcase', 'here is the suitcase'],
+            acceptedObjectIds: ['suitcase-blue'],
           },
+          repairOptions: [
+            {
+              repairId: 'senalala',
+              label: 'Señálala',
+              type: 'fixed',
+              repairReply: 'The blue suitcase — the blue one, ¡ahí!',
+              groundingAction: {
+                type: 'point',
+                worldObjectId: 'suitcase-blue',
+              },
+            },
+          ],
           emotion: 'encouraging',
           speakerId: 'station-clerk',
           speakerName: 'Station Clerk',
         },
+        // Turn 3: Guided assembly — player builds "Here is the blue suitcase"
         {
           turnId: 'b1-en-03',
-          targetText: 'The blue suitcase ____ here.',
-          supportText: 'La <kw>suitcase</kw> azul ____ aquí.',
-          teachingConcepts: ['verb.is_located', 'color.blue'],
-          responseMode: 'single_blank',
+          targetText: 'Here is the blue suitcase.',
+          initialDelivery: '¡Genial! Now tell me: here is the blue suitcase.',
+          teachingConcepts: ['location.here', 'verb.is_located', 'object.suitcase', 'color.blue'],
+          responseMode: 'phrase_assembly',
           responseData: {
-            blanks: [{ id: 'blank1', acceptedAnswers: ['is'] }],
-            wordBank: ['is', 'are', 'has'],
-            hintText: 'The blue suitcase ____ here.',
+            wordBank: ['Here', 'is', 'the', 'blue', 'suitcase'],
           },
           evaluation: {
-            acceptedAnswers: ['is'],
+            acceptedAnswers: ['Here is the blue suitcase', 'here is the blue suitcase'],
           },
-          emotion: 'neutral',
+          emotion: 'encouraging',
           speakerId: 'station-clerk',
           speakerName: 'Station Clerk',
         },

@@ -2,17 +2,17 @@
 
 ## Summary
 
-This use case defines the `Find the Luggage` quest for a player placed at the earliest beginner level.
+This use case defines `Find the Luggage` for the earliest beginner band.
 
-This player should succeed through:
+The player should succeed through:
 
-- mixed native-language and target-language scaffolding
-- visual grounding
-- recognition
-- single-word comprehension
-- guided response selection
+- scene context
+- strong grounding
+- repair-driven mixed-language help
+- chip-built responses
+- a real quest action loop
 
-This use case must not depend on free-form text or `sugaragent`.
+This use case must not depend on free typing or `sugaragent`.
 
 ## Persona
 
@@ -21,16 +21,17 @@ This use case must not depend on free-form text or `sugaragent`.
 She knows:
 
 - a few greetings
-- a few colors
 - a few concrete nouns
+- a few colors
 
-She is not yet comfortable typing sentences in Spanish.
+She is not comfortable typing Spanish.
 
 ## Placement Outcome
 
 Initial placement sets something like:
 
 - `targetLanguage = Spanish`
+- `supportLanguage = English`
 - `comprehensionBand = 1`
 - `productionBand = 0`
 - `vocabularyBand = 1`
@@ -38,85 +39,99 @@ Initial placement sets something like:
 - `repairBand = 0`
 - `confidence = low`
 
-Derived reporting label may be `early A1`, but runtime behavior should use the richer learner state above.
+Derived reporting label may be `pre-A1 / early A1`, but runtime behavior should use the richer learner state above.
 
 ## User Story
 
-As an absolute beginner, I want to complete the first quest using very simple Spanish, some native-language support, and strong visual grounding, so that I feel capable instead of overwhelmed.
+As an absolute beginner, I want to complete the first quest by using context, repair, and guided mixed-language responses, so that I feel immersed instead of graded.
 
 ## Product Goal
 
-Prove that the player can complete the first story task without:
+Prove that the player can complete a real quest loop without:
 
 - unrestricted typing
 - grammar-heavy output
+- default translated subtitles
 - open conversation
 
-The player should leave the quest feeling:
+The player should leave feeling:
 
-- "I understood enough to help"
-- "I learned a few useful words"
-- "I can keep going"
+- `I understood enough to help.`
+- `I learned a real word tied to a real object.`
+- `I can keep going.`
 
 ## What the Player Sees
 
-The quest begins when Mia approaches the station manager.
+Mia approaches the station clerk.
 
-The manager says:
+The clerk says:
 
-`¿Ves la maleta roja?`
+`Do you see la maleta roja?`
 
-Below the line, the game shows a support strip:
+There is no always-visible translated strip under the line.
 
-`Find the red maleta.`
+The scene itself already helps:
 
-The words `maleta` and `roja` are highlighted, and the scene shows three visible bags. One of them is clearly red.
+- three suitcases are visible
+- one is clearly red
 
-If Mia taps:
+Mia sees a response builder with chips such as:
 
-- `maleta`, all luggage objects pulse briefly
-- `roja`, the red suitcase gets a stronger outline
+- response-building chips:
+  - `Sí`
+  - `I see`
+  - `la`
+  - `maleta`
+  - `roja`
+- fallback repair responses:
+  - `No entiendo`
+  - `Señálalo`
+  - `¿Qué significa "__" en inglés?`
 
-The player sees two large response buttons:
+For the clarification response, Mia can either:
 
-- `Sí`
-- `No`
+- tap `maleta` or `roja` in the NPC line to prefill the blank
 
-After choosing `Sí`, the clerk continues:
+This band is tap-only.
 
-`Bien. Toca la maleta roja.`
+As Mia taps chips, the UI shows the response she is building.
 
-The support strip updates to:
+Example built responses:
 
-`Tap the maleta roja.`
+- `Sí, I see la maleta roja.`
 
-If needed, the player can press:
+If Mia uses the clarification repair response `¿Qué significa "maleta" en inglés?`, the clerk then repairs in mixed language:
 
-- `Repetir`
-- `Mostrar pista`
-- `Traducir`
+`Suitcase. La maleta roja.`
 
-If she presses `Mostrar pista`, the camera centers the correct suitcase and briefly labels it `maleta roja`.
+At the same time:
 
-After the player clicks the correct luggage object in the world, the clerk asks for one last recognition step:
+- all suitcases pulse lightly
+- the red suitcase gets a stronger outline
 
-`La ____ es roja.`
+If Mia uses the repair response `Señálalo`, the same target suitcase is highlighted more strongly.
 
-Options:
+Mia then collects the correct suitcase and places it in her inventory.
 
-- `maleta`
-- `puerta`
-- `mesa`
+- inventory or held state shows `maleta roja`
 
-After choosing `maleta`, the quest completes with a short confirmation:
+When Mia returns to the clerk, she gets one final guided response builder that produces:
 
-`Gracias. Aquí está la maleta.`
+- `Here is la maleta roja.`
+
+The clerk replies:
+
+`Gracias.`
+
+The quest completes.
 
 ## Interaction Model
 
 - NPC delivery mode: scripted provider only
-- player response mode: choice buttons and one blank with a word bank
-- support-language policy: high mixed-language support with protected target-language keywords
+- player response mode: chip composition, object click, pickup, chip-built return response
+- fallback repair responses: `No entiendo`, `Señálalo`, and a clarification response template
+- clarification entry: tap-only
+- support-language policy: heavy in the initial line, repair, and response scaffold, but not as a translated subtitle strip
 - grounding intensity: maximum
 - support level: maximum
 - correction mode: implicit only
@@ -129,105 +144,105 @@ Evaluation is strictly deterministic.
 
 Accepted behaviors:
 
-- choosing `Sí` to confirm recognition
+- building a correct chip-composed response
+- using a valid repair response
 - clicking the correct world object
-- choosing `maleta` in the blank
+- completing the pickup
+- building the completion response
 
-No LLM is required for either turn production or turn evaluation.
+No LLM is required for turn production or evaluation.
 
 The engine and `sugarlang` only need:
 
+- authored chip sets
+- authored repair responses
 - object identity
-- authored accepted choices
-- authored blank answers
+- pickup success
+- authored completion options
 
 ## Success Criteria
 
 The experience is successful if:
 
-- Mia completes the quest without typing any Spanish
-- she sees at least one reinforced vocabulary item (`maleta`)
-- she is not forced into a failure loop after one wrong click
-- `sugarlang` records evidence showing recognition success and heavy support usage
+- Mia completes the quest without typing Spanish
+- she uses or sees `maleta` tied to the actual suitcase
+- repair feels like part of the conversation, not detached UI translation
+- the word `maleta` recurs in chip-built responses, object interaction, and return
+- one wrong choice does not trap her
 
 ## Engineering Acceptance Notes
 
-- Placement in this band must select the highest-support quest variant.
-- The response contract must be renderable using the existing dialogue UI plus simple support affordances.
-- A wrong object click should trigger a gentle retry, not a hard failure.
+- Placement in this band must select the highest-support scene variant.
+- Chips should be selectable tokens or very short chunks that let the player build a meaningful response, not be treated as the full response themselves.
+- The same suitcase identity must flow through:
+  - NPC description
+  - world click
+  - pickup state
+  - return step
+- The `B0` line and the happy-path response should both be visibly mixed-language, with active Spanish words preserved inside English support framing.
+- A wrong click should trigger gentle repair, not hard failure.
 - Learner evidence should record:
-  - support-language scaffold usage
-  - support usage
+  - repair usage
+  - support-language usage
   - grounding aid usage
   - recognition accuracy
-  - completion latency proxy
-  - vocabulary exposure for `maleta` and `roja`
+  - pickup success
+  - vocabulary exposure and reuse for `maleta` and `roja`
 
 ## Designer Setup in SugarEngine
 
 ### Existing UI: Base Quest Skeleton
 
-1. In `Dialogues`, create a dialogue named `Find the Luggage - Clerk`.
-2. Add nodes for:
-   - greeting
-   - luggage prompt
-   - confirmation
-   - completion
-3. In `Quests`, create a quest named `Find the Luggage`.
-4. Add objectives:
+1. In `Dialogues`, create `Find the Luggage - Clerk`.
+2. In `Quests`, create `Find the Luggage`.
+3. Add objectives:
    - `talk` to the clerk
-   - inspect or click the luggage object
-   - `talk` to the clerk again for completion
-5. In `NPCs`, assign the clerk to the quest dialogue.
-6. In `Regions`, place three luggage objects and mark one as the target object.
-7. In `Episode Details`, set this quest as the main quest for the tutorial episode.
+   - locate and `collect` the target suitcase
+   - `talk` to the clerk again to return it
+4. In `Regions`, place three suitcase objects and make the red suitcase pickup-enabled.
+5. Ensure the pickup maps to a real inventory item and the return step consumes or validates that item.
+6. In `NPCs`, assign the clerk to the quest dialogue.
 
 ### Proposed Sugarlang UI: Band-Specific Authoring
 
-1. Open the first `talk` objective and attach a `Sugarlang Scenario`.
+1. Attach a `Sugarlang Scenario` to the first clerk interaction.
 2. Set the scenario semantic task to:
-   - `identify_target_luggage`
-3. In the `Learner Band Matrix`, add an `early beginner` row.
-4. In the `Support-Language Policy Editor`, configure:
-   - a support strip in the native language
-   - protected target-language tokens `maleta` and `roja`
-   - translation available on request
-5. In the `Grounding Map Editor`, bind:
-   - `maleta` to the luggage objects
-   - `roja` to the red color attribute on `luggage_red_01`
-   - `maleta roja` to the target suitcase hint focus action
-6. In the `Response Contract Editor`, configure:
-   - turn 1: binary choice
-   - turn 2: world-object selection
-   - turn 3: single blank with a three-word bank
-7. In the `Evaluation Rules Editor`, define:
-   - accepted choice `Sí`
-   - accepted object id `luggage_red_01`
-   - accepted blank answer `maleta`
-8. In `Support and Feedback`, enable:
+   - `identify_and_return_target_luggage`
+3. In the `Learner Band Matrix`, author the `B0 Anchored Recognition` row.
+4. In the `Repair and Support Policy Editor`, enable:
+   - mastery-aware mixed initial delivery
+   - mixed-language repair
+   - point/highlight repair
    - repeat
-   - hint
-   - optional translation
-9. In `Placement Preview`, preview the quest as `comprehensionBand=1, productionBand=0`.
+5. In the `Response Scaffold Editor`, set:
+   - primary response mode: chip composition
+   - fallback repair responses: `No entiendo`, `Señálalo`, and `¿Qué significa "__" en inglés?`
+   - clarification response should prefill from `maleta` or `roja` in the NPC line
+   - grounded action: object click + pickup
+   - completion response: one guided chip-built return response
+6. In the `Grounding Map Editor`, bind:
+   - `maleta` to the suitcase objects
+   - `roja` to the red suitcase attribute
+7. In the `Grounded Quest Binding Editor`, bind the same referent across:
+   - red suitcase object
+   - pickup
+   - inventory label
+   - return objective
+8. In the `Evaluation Rules Editor`, define accepted chip sets and chip-built responses, accepted fallback repair responses, accepted object id, pickup success, and accepted return response.
+9. In `Placement Preview`, verify the scene feels like an in-world beginner interaction, not a subtitle exercise.
 
 ### AI-Assisted Authoring Path
 
-This use case should also be creatable without opening the Sugarlang UI first.
-
 Expected workflow:
 
-1. Author the English quest and dialogue as normal SugarEngine content.
+1. Author the English quest and the real suitcase pickup/return loop.
 2. Ask the AI assistant:
-   - `generate the absolute beginner Spanish Sugarlang draft for the clerk scene in Find the Luggage with English support-language scaffolding and visible bindings for maleta and roja`
-3. Let the assistant write the scenario draft, grounding map, beginner-band response contracts, and deterministic evaluation rules under `plugins/sugarlang/`.
-4. Review or refine the result in chat or in the editor.
+   - `generate the B0 Spanish Sugarlang draft for Find the Luggage; keep it immersive, make the initial NPC line and the happy-path response heavily mixed English+Spanish, preserve maleta and roja in Spanish, make chip composition primary, add fallback repair responses for No entiendo, Señálalo, and ¿Qué significa "__" en inglés?, let the clarification response prefill from maleta or roja, and bind maleta to the red suitcase pickup and return`
+3. Let the assistant write the scenario, grounding, grounded binding, beginner-band chip sets, fallback repair responses, clarification templates, and deterministic evaluation rules.
+4. Review or refine in chat or in the editor.
 
 ## Why This Use Case Matters
 
-This use case proves the architecture can deliver a true language-learning quest without:
+This use case proves that the first quest can feel like a real game task while still being accessible to a true beginner.
 
-- LLM generation
-- free-form player text
-- plugin coupling to `sugaragent`
-
-It is the clearest demonstration that `sugarlang` stands on its own.
+It is the clearest proof that `sugarlang` is not just a translated dialogue overlay.

@@ -34,6 +34,7 @@ export type ResponseContractMode =
   | 'single_blank'
   | 'blank_fill'
   | 'phrase_assembly'
+  | 'chip_composition'
   | 'word_bank'
   | 'short_text'
   | 'open_text'

@@ -32,6 +32,7 @@ The key decision is:
 5. The engine UI renders based on the response contract rather than assuming one universal dialogue interaction model.
 6. Each semantic scenario may define grounding references that bind language to world objects, attributes, regions, and actions.
 7. Each learner-band rendering may define a support-language policy that controls how target language and support language are mixed.
+8. A semantic scenario may keep one stable scenario referent while mapping it to different concrete grounded variants by learner band.
 
 ## Architectural Strategy
 
@@ -54,6 +55,15 @@ Examples:
 
 This is the stable layer that allows one narrative scene to support multiple learner experiences.
 
+The scenario layer should also be able to keep one stable scenario-level referent while allowing different concrete teaching variants by band.
+
+Example:
+
+- one `target_luggage_primary` referent
+- `B0` bound to a red suitcase
+- `B1` bound to a blue suitcase
+- `B2` bound to a black suitcase
+
 ### 2. Grounding References Are Part of the Semantic Contract
 
 Language-learning meaning in a game should be tied to visible world meaning whenever possible.
@@ -68,6 +78,8 @@ That means the scenario layer should be able to identify things like:
 Those references are not just hint metadata.
 
 They are part of how the same scene becomes learnable at beginner bands without rewriting the quest.
+
+They should also support a stable scenario referent plus optional band-specific concrete variants.
 
 ### 3. Success Model
 
@@ -97,6 +109,14 @@ It should support policy choices such as:
 
 This policy should vary by learner band and scene goal.
 
+It should also govern:
+
+- the initial-delivery line
+- repair variants
+- happy-path response frames
+
+The scene model should prefer natural mixed-language helper utterances over arbitrary token substitution.
+
 ### 5. Response Contract as a First-Class Runtime Concept
 
 The response contract should define what kind of answer the player is expected to give.
@@ -105,9 +125,12 @@ High-level modes include:
 
 - binary choice
 - multiple choice
+- chip composition
 - blank fill
 - word bank
-- phrase assembly
+- guided assembly
+- repair response
+- clarification response
 - constrained short text
 - short free-form text
 - open free-form text
@@ -117,6 +140,13 @@ High-level modes include:
 This is not just a UI convenience.
 
 It is part of the pedagogical design and part of the evaluator design.
+
+Important distinctions from the product contract:
+
+- `chip composition` is the primary early-band response mode where the learner builds the whole response from chips
+- `word bank` is a bounded candidate pool used to fill authored blanks or guided frames
+- low-band clarification may be tap-only even when the broader product later supports typed clarification
+- repair responses are not chips
 
 ### 6. Response Contracts Must Be Provider-Neutral
 
@@ -144,6 +174,14 @@ Learner state answers:
 - what input mode is appropriate
 
 That combination produces the actual player experience.
+
+If a mixed-language surface would sound unnatural, the architecture should permit:
+
+- a more natural mixed initial-delivery line
+- a more natural mixed repair line
+- a fully target-language completed response
+
+while keeping support in the scaffold or repair rather than forcing token-spliced final output.
 
 ## Why This Supports the Product and Use Cases
 
@@ -214,8 +252,11 @@ This ADR does not lock exact schema design, but it does imply certain patterns:
 
 - explicit scenario records separate from dialogue text
 - explicit grounding references tied to stable scene IDs
+- stable scenario referents plus optional band-specific concrete variant records
 - explicit support-language policy records by learner band
 - explicit response contract types
+- explicit response-frame records
+- explicit clarification-entry policy
 - semantic slot definitions
 - scenario preview tooling by learner band
 - validation that every Sugarlang scene points at stable source content

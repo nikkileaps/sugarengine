@@ -13,22 +13,22 @@ export const BAND_POLICIES: BandPolicyPack = {
       bandId: 'B0',
       supportLanguagePolicy: {
         mixingLevel: 'full_support',
-        showSupportStrip: true,
-        showGlosses: true,
+        showSupportStrip: false,
+        showGlosses: false,
       },
       groundingIntensity: 'always',
-      allowedResponseModes: ['yes_no', 'object_selection', 'single_blank'],
+      allowedResponseModes: ['chip_composition', 'object_selection'],
       correctionPosture: 'immediate',
     },
     {
       bandId: 'B1',
       supportLanguagePolicy: {
         mixingLevel: 'heavy_support',
-        showSupportStrip: true,
-        showGlosses: true,
+        showSupportStrip: false,
+        showGlosses: false,
       },
       groundingIntensity: 'on_first_encounter',
-      allowedResponseModes: ['single_blank', 'blank_fill', 'phrase_assembly', 'word_bank'],
+      allowedResponseModes: ['single_blank', 'blank_fill', 'phrase_assembly', 'word_bank', 'object_selection'],
       correctionPosture: 'immediate',
     },
     {
