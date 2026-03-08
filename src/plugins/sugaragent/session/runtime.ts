@@ -725,7 +725,9 @@ function defaultPipelineDiagnostics(input) {
   const policyPath = input.routing?.policyPath ?? 'safe_chat';
   const queryType = input.queryType ?? routeIntentToQueryType(routeIntent);
   const loreMatchCount = Array.isArray(input.loreMatches) ? input.loreMatches.length : 0;
-  const retrievalAttempted = input.retrievalAttempted === true;
+  const missingGameLoreBundle = input.missingGameLoreBundle === true;
+  const retrievalAttempted = input.retrievalAttempted === true
+    || (missingGameLoreBundle && isKnowledgeSeekingQueryType(queryType));
   const validationErrors = Array.isArray(input.validationErrors) ? input.validationErrors : [];
   const validationDecision = normalizeOptionalString(input.validationDecision)
     ?? (input.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'));
@@ -747,8 +749,12 @@ function defaultPipelineDiagnostics(input) {
       attempted: retrievalAttempted,
       candidateCount: retrievalAttempted ? loreMatchCount : 0,
       selectedCount: loreMatchCount,
-      qualityPath: retrievalAttempted ? (loreMatchCount > 0 ? 'single_pass' : 'abstain') : 'not_required',
-      qualityReason: retrievalAttempted ? (loreMatchCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not_required',
+      qualityPath: missingGameLoreBundle
+        ? 'error'
+        : retrievalAttempted ? (loreMatchCount > 0 ? 'single_pass' : 'abstain') : 'not_required',
+      qualityReason: missingGameLoreBundle
+        ? 'missing_game_lore_bundle'
+        : retrievalAttempted ? (loreMatchCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not_required',
       correctiveAttempted: false,
     },
     initiative: {
@@ -851,6 +857,7 @@ const DEFAULT_SESSION_OPTIONS = {
   session: null,
   loreDir: 'src/plugins/sugaragent/lore/generated',
   useLore: true,
+  missingGameLoreBundle: false,
   llamaBin: null,
   modelPath: null,
   llamaTimeoutMs: 120000,
@@ -990,6 +997,7 @@ export async function createSugarAgentSession(options = {}) {
             queryType,
             loreMatches: [],
             retrievalAttempted: false,
+            missingGameLoreBundle: args.missingGameLoreBundle === true,
             usedFallback: false,
             validationErrors: [],
             turnContext,
@@ -1171,6 +1179,7 @@ export async function createSugarAgentSession(options = {}) {
         queryType,
         loreMatches: retrieval.matches,
         retrievalAttempted: retrieval.attempted,
+        missingGameLoreBundle: args.missingGameLoreBundle === true,
         usedFallback,
         validationErrors,
         validationDecision,

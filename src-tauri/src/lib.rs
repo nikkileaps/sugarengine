@@ -29,11 +29,6 @@ const LLAMA_BIN_CANDIDATES: &[&str] = &[
   "bundle/bin/llama-completion",
 ];
 
-const LORE_DEFAULT_CANDIDATES: &[&str] = &[
-  "src/plugins/sugaragent/lore/generated/chunks.json",
-  "public/plugins/sugaragent/lore/generated/chunks.json",
-];
-
 #[derive(Default)]
 struct SugarAgentRuntimeState {
   loaded_model_path: Option<PathBuf>,
@@ -144,10 +139,10 @@ fn resolve_candidate_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
   if let Ok(current) = std::env::current_dir() {
     roots.push(current);
   }
-  roots.push(project_root());
   if let Some(active_root) = read_active_game_root() {
     roots.push(active_root);
   }
+  roots.push(project_root());
   if let Ok(resource_dir) = app.path().resource_dir() {
     roots.push(resource_dir);
   }
@@ -258,19 +253,11 @@ fn resolve_lore_chunks_path(app: &tauri::AppHandle, game_id: &str) -> Option<Pat
   let mut game_candidates = Vec::new();
   if !game_id.trim().is_empty() {
     game_candidates.push("plugins/sugaragent/lore/generated/chunks.json".to_string());
-    game_candidates.push("public/plugins/sugaragent/lore/generated/chunks.json".to_string());
-    game_candidates.push(format!("games/{game_id}/plugins/sugaragent/lore/generated/chunks.json"));
     game_candidates.push(format!("public/games/{game_id}/plugins/sugaragent/lore/generated/chunks.json"));
   }
 
   for root in roots {
     for candidate in &game_candidates {
-      let path = root.join(candidate);
-      if path.exists() {
-        return Some(path);
-      }
-    }
-    for candidate in LORE_DEFAULT_CANDIDATES {
       let path = root.join(candidate);
       if path.exists() {
         return Some(path);
@@ -845,6 +832,7 @@ async fn sugaragent_runtime_bridge(
         guard.conversations.get(&session_key).cloned().unwrap_or_default()
       };
 
+      let lore_bundle_available = resolve_lore_chunks_path(&app, context_game_id).is_some();
       let lore_matches = retrieve_lore_matches(&app, context_game_id, &inner, 3);
       let prompt = build_prompt(&inner, &history_snapshot, &lore_matches);
       let attempt = inner.attempt.unwrap_or(1);
@@ -893,6 +881,14 @@ async fn sugaragent_runtime_bridge(
         "runtime": "tauri-llama",
         "loreMatchCount": lore_matches.len(),
         "mode": inner.context.as_ref().and_then(|ctx| ctx.runtime_mode.clone()).unwrap_or_else(|| "llama".to_string()),
+        "retrieval": {
+          "attempted": true,
+          "candidateCount": lore_matches.len(),
+          "selectedCount": lore_matches.len(),
+          "qualityPath": if !lore_bundle_available { "error" } else if lore_matches.is_empty() { "abstain" } else { "single_pass" },
+          "qualityReason": if !lore_bundle_available { "missing_game_lore_bundle" } else if lore_matches.is_empty() { "no-lore-selected" } else { "lore-selected" },
+          "correctiveAttempted": false,
+        },
       });
       Ok(RuntimeBridgeResponse {
         ok: true,

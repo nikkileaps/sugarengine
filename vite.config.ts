@@ -40,7 +40,7 @@ export default defineConfig({
           startup?: { runtime?: { health?: { detail?: string } } };
         }>>();
         const registeredGameRoots = new Map<string, string>();
-        const loreFallbackWarnings = new Set<string>();
+        const loreResolutionWarnings = new Set<string>();
 
         const isValidSlug = (value: string): boolean => /^[a-z0-9-]+$/.test(value);
 
@@ -867,11 +867,16 @@ export default defineConfig({
             && fsSync.existsSync(resolve(loreDir, 'chunks.json'));
         };
 
-        const resolveSessionLoreConfig = (slug: string): { loreDir: string; useLore: boolean } => {
+        const resolveSessionLoreConfig = (slug: string): {
+          loreDir: string;
+          useLore: boolean;
+          missingGameLoreBundle?: boolean;
+          errorMessage?: string;
+        } => {
           if (!slug) {
             return {
               loreDir: defaultLoreDir,
-              useLore: hasLoreArtifacts(defaultLoreDir),
+              useLore: false,
             };
           }
 
@@ -879,8 +884,7 @@ export default defineConfig({
           const gameLoreDir = registeredGameRoot
             ? resolve(registeredGameRoot, 'plugins', 'sugaragent', 'lore', 'generated')
             : '';
-          const gamePublicLoreDir = resolve(projectRoot, 'public', 'games', slug, 'plugins', 'sugaragent', 'lore', 'generated');
-          const matchedGameLore = [gameLoreDir, gamePublicLoreDir]
+          const matchedGameLore = [gameLoreDir]
             .filter((candidate) => candidate.length > 0)
             .find((candidate) => hasLoreArtifacts(candidate));
           if (matchedGameLore) {
@@ -890,26 +894,22 @@ export default defineConfig({
             };
           }
 
-          const defaultAvailable = hasLoreArtifacts(defaultLoreDir);
-          if (defaultAvailable) {
-            const warningKey = `${slug}:default-lore-fallback`;
-            if (!loreFallbackWarnings.has(warningKey)) {
-              loreFallbackWarnings.add(warningKey);
-              console.warn(
-                `[sugaragent][lore][warn] No game-specific lore bundle found for "${slug}".\n`
-                + `Expected one of:\n`
-                + `  - ${gameLoreDir}\n`
-                + `  - ${gamePublicLoreDir}\n`
-                + `Using plugin default lore fallback:\n`
-                + `  - ${defaultLoreDir}\n`
-                + 'Re-ingest game lore to restore game-specific grounding.',
-              );
-            }
+          const warningKey = `${slug}:missing-game-lore`;
+          const errorMessage =
+            `[sugaragent][lore][error] No game-specific lore bundle found for "${slug}".\n`
+            + `Expected one of:\n`
+            + `  - ${gameLoreDir}\n`
+            + 'Re-ingest game lore to restore SugarAgent grounding for this game.';
+          if (!loreResolutionWarnings.has(warningKey)) {
+            loreResolutionWarnings.add(warningKey);
+            console.error(errorMessage);
           }
 
           return {
-            loreDir: defaultLoreDir,
-            useLore: defaultAvailable,
+            loreDir: gameLoreDir || defaultLoreDir,
+            useLore: false,
+            missingGameLoreBundle: true,
+            errorMessage,
           };
         };
 
@@ -1148,6 +1148,7 @@ export default defineConfig({
                 useLore: process.env.SUGARAGENT_USE_LORE === 'false'
                   ? false
                   : loreConfig.useLore,
+                missingGameLoreBundle: loreConfig.missingGameLoreBundle === true,
                 requireLoreScopeForRetrieval: false,
               });
             })();

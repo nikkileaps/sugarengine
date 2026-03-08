@@ -149,6 +149,8 @@ export interface SugarAgentPluginStateV0 {
   seenEvents: number;
 }
 
+const emittedLoreAvailabilityWarnings = new Set<string>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -668,6 +670,32 @@ function normalizeTurnDiagnostics(
     timestampMs: options.timestamp,
   };
   return normalized;
+}
+
+function notifyMissingGameLoreBundle(
+  diagnostics: PluginAgentTurnDiagnostics | undefined,
+  request: PluginAgentTurnRequest,
+): void {
+  if (diagnostics?.retrieval?.qualityReason !== 'missing_game_lore_bundle') return;
+
+  const gameId = toSafeString(request.context?.gameId) ?? 'current-game';
+  const warningKey = `${gameId}:missing-game-lore-bundle`;
+  if (emittedLoreAvailabilityWarnings.has(warningKey)) return;
+  emittedLoreAvailabilityWarnings.add(warningKey);
+
+  const message =
+    `SugarAgent lore bundle is missing for "${gameId}". `
+    + 'Re-ingest lore for this game to restore grounded NPC knowledge.';
+  console.error('[sugaragent][lore][error]', {
+    gameId,
+    npcId: request.npcId,
+    message,
+  });
+
+  const runtimeAlert = (globalThis as { alert?: (message: string) => void }).alert;
+  if (typeof runtimeAlert === 'function') {
+    runtimeAlert(message);
+  }
 }
 
 function normalizeText(text: string): string {
@@ -1327,6 +1355,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           validationErrors: generated.validationErrors,
           timestamp: now,
         });
+        notifyMissingGameLoreBundle(diagnostics, request);
         console.debug('[sugaragent][grounding]', {
           npcId: request.npcId,
           stage: groundingDebug.stage,
