@@ -12,6 +12,7 @@
 
 import type { ConversationTurnEnvelope, PlayerInput } from '../conversation/types';
 import { SupportStrip } from './SupportStrip';
+import type { GlossaryChipData } from './SupportStrip';
 import { ResponseModeUI } from './ResponseModeUI';
 import type { ResponseModeResult } from './ResponseModeUI';
 
@@ -21,6 +22,14 @@ export interface SugarlangTurnView {
   emotion?: string;
   supportText?: string;
   responseContract: ConversationTurnEnvelope['responseContract'];
+  /** Band policy info for adaptive display. */
+  bandPolicy?: {
+    showSupportStrip: boolean;
+    showGlosses: boolean;
+    bandId: string;
+  };
+  /** Glossary chip data for B2-B3 display. */
+  glossaryChips?: GlossaryChipData[];
 }
 
 type SugarlangSubmitHandler = (input: PlayerInput) => void;
@@ -112,11 +121,21 @@ export class SugarlangConversationUI {
     // NPC utterance
     this.utteranceEl.textContent = turn.utterance;
 
-    // Support strip
-    if (turn.supportText) {
+    // Support strip — adaptive by band
+    const showStrip = turn.bandPolicy ? turn.bandPolicy.showSupportStrip : true;
+    if (showStrip && turn.supportText) {
       this.supportStrip.show(turn.supportText);
     } else {
+      this.supportStrip.show(''); // hide the strip content
       this.supportStrip.hide();
+    }
+
+    // Glossary chips — B2 always visible, B3 on-demand, B4 hidden
+    if (turn.glossaryChips && turn.glossaryChips.length > 0 && turn.bandPolicy?.showGlosses) {
+      const onDemand = turn.bandPolicy.bandId === 'B3';
+      this.supportStrip.showGlossaryChips(turn.glossaryChips, onDemand);
+    } else {
+      this.supportStrip.hideGlossary();
     }
 
     // Clear feedback

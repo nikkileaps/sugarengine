@@ -130,10 +130,24 @@ export function setupGameUI(game: Game, container: HTMLElement) {
       // If utterance is empty, the scene is done (close intent already fired).
       if (!envelope.utterance) return;
 
-      // Extract support text from middleware annotations.
+      // Extract support text and band policy from middleware annotations.
       const slAnnotations = envelope.middlewareAnnotations['sugarlang'] as
-        | { supportText?: string }
+        | {
+            supportText?: string;
+            resolvedBand?: string;
+            showSupportStrip?: boolean;
+            showGlosses?: boolean;
+            teachingConcepts?: string[];
+          }
         | undefined;
+
+      // Build glossary chips from word bank in the response contract
+      const glossaryChips: Array<{ targetWord: string; supportWord: string; conceptId?: string }> = [];
+      if (envelope.responseContract.wordBank) {
+        for (const word of envelope.responseContract.wordBank) {
+          glossaryChips.push({ targetWord: word, supportWord: word });
+        }
+      }
 
       sugarlangUI.showTurn({
         utterance: envelope.utterance,
@@ -141,6 +155,14 @@ export function setupGameUI(game: Game, container: HTMLElement) {
         emotion: envelope.emotion,
         supportText: slAnnotations?.supportText,
         responseContract: envelope.responseContract,
+        bandPolicy: slAnnotations?.resolvedBand
+          ? {
+              showSupportStrip: slAnnotations.showSupportStrip ?? true,
+              showGlosses: slAnnotations.showGlosses ?? false,
+              bandId: slAnnotations.resolvedBand,
+            }
+          : undefined,
+        glossaryChips: glossaryChips.length > 0 ? glossaryChips : undefined,
       });
     },
   });

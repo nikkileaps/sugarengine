@@ -12,7 +12,7 @@
  */
 
 import type { PlayerInput, ResponseContractMode } from '../../engine/conversation/types';
-import type { SceneTurn } from './types';
+import type { SceneTurn, IntentFamily } from './types';
 
 // ---------------------------------------------------------------------------
 // Evaluation Result
@@ -166,6 +166,150 @@ function evaluatePhraseAssembly(
 }
 
 // ---------------------------------------------------------------------------
+// Text normalization for B2-B4
+// ---------------------------------------------------------------------------
+
+function normalizeForIntent(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[¿¡.,!?;:"""''()[\]{}]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function containsKeyword(normalized: string, keyword: string): boolean {
+  const normKw = normalizeForIntent(keyword);
+  // For multi-word keywords, check substring. For single words, check word boundary.
+  if (normKw.includes(' ')) {
+    return stripAccents(normalized).includes(stripAccents(normKw)) ||
+           normalized.includes(normKw);
+  }
+  const words = normalized.split(' ');
+  const wordsNoAccent = stripAccents(normalized).split(' ');
+  const kwNoAccent = stripAccents(normKw);
+  // Check exact match or prefix match (for verb stems like "ayud" matching "ayudar")
+  return words.some((w) => w === normKw || w.startsWith(normKw)) ||
+         wordsNoAccent.some((w) => w === kwNoAccent || w.startsWith(kwNoAccent));
+}
+
+// ---------------------------------------------------------------------------
+// Intent + Slot evaluators (B2-B4)
+// ---------------------------------------------------------------------------
+
+interface IntentMatchResult {
+  matched: boolean;
+  intentId?: string;
+  requiredSlotsFilled: number;
+  requiredSlotsTotal: number;
+  optionalSlotsFilled: number;
+  optionalSlotsTotal: number;
+}
+
+function matchIntent(normalized: string, intent: IntentFamily): IntentMatchResult {
+  // Check if any keyword pattern matches
+  const hasKeyword = intent.keywordPatterns.some((kw) => containsKeyword(normalized, kw));
+  if (!hasKeyword) {
+    return {
+      matched: false,
+      intentId: intent.intentId,
+      requiredSlotsFilled: 0,
+      requiredSlotsTotal: intent.requiredSlots.length,
+      optionalSlotsFilled: 0,
+      optionalSlotsTotal: intent.optionalSlots.length,
+    };
+  }
+
+  // Check required slots
+  let requiredFilled = 0;
+  for (const slot of intent.requiredSlots) {
+    if (slot.keywords.some((kw) => containsKeyword(normalized, kw))) {
+      requiredFilled++;
+    }
+  }
+
+  // Check optional slots
+  let optionalFilled = 0;
+  for (const slot of intent.optionalSlots) {
+    if (slot.keywords.some((kw) => containsKeyword(normalized, kw))) {
+      optionalFilled++;
+    }
+  }
+
+  const allRequiredMet = requiredFilled === intent.requiredSlots.length;
+
+  return {
+    matched: allRequiredMet,
+    intentId: intent.intentId,
+    requiredSlotsFilled: requiredFilled,
+    requiredSlotsTotal: intent.requiredSlots.length,
+    optionalSlotsFilled: optionalFilled,
+    optionalSlotsTotal: intent.optionalSlots.length,
+  };
+}
+
+function evaluateTextInput(
+  input: PlayerInput,
+  turn: SceneTurn,
+): Pick<EvaluationResult, 'correct' | 'taskSuccess' | 'formAccuracy' | 'matchedAnswer'> {
+  const intents = turn.evaluation?.intents;
+  if (!intents || intents.length === 0) {
+    // No intent evaluation configured — accept any input
+    return { correct: true, taskSuccess: true, formAccuracy: true };
+  }
+
+  const text = input.text ?? '';
+  if (!text.trim()) {
+    return { correct: false, taskSuccess: false, formAccuracy: false };
+  }
+
+  const normalized = normalizeForIntent(text);
+
+  // Try matching each intent
+  let bestMatch: IntentMatchResult | null = null;
+  for (const intent of intents) {
+    const result = matchIntent(normalized, intent);
+    if (result.matched) {
+      // Pick best match based on optional slot fill
+      if (!bestMatch || result.optionalSlotsFilled > bestMatch.optionalSlotsFilled) {
+        bestMatch = result;
+      }
+    }
+  }
+
+  if (bestMatch) {
+    // Compute form accuracy based on slot coverage
+    const totalSlots = bestMatch.requiredSlotsTotal + bestMatch.optionalSlotsTotal;
+    const filledSlots = bestMatch.requiredSlotsFilled + bestMatch.optionalSlotsFilled;
+    const formAccuracy = totalSlots > 0 ? filledSlots === totalSlots : true;
+
+    return {
+      correct: true,
+      taskSuccess: true,
+      formAccuracy,
+      matchedAnswer: bestMatch.intentId,
+    };
+  }
+
+  // No intent matched — check if any intent had a partial keyword match (weak but communicative)
+  for (const intent of intents) {
+    // If there are no required slots and the keyword matched but we returned false, re-check
+    if (intent.requiredSlots.length === 0) {
+      const hasKeyword = intent.keywordPatterns.some((kw) => containsKeyword(normalized, kw));
+      if (hasKeyword) {
+        return {
+          correct: true,
+          taskSuccess: true,
+          formAccuracy: false,
+          matchedAnswer: intent.intentId,
+        };
+      }
+    }
+  }
+
+  return { correct: false, taskSuccess: false, formAccuracy: false };
+}
+
+// ---------------------------------------------------------------------------
 // Main evaluator
 // ---------------------------------------------------------------------------
 
@@ -184,6 +328,8 @@ const MODE_EVALUATORS: Partial<
   blank_fill: evaluateBlankFill,
   phrase_assembly: evaluatePhraseAssembly,
   word_bank: evaluateBlankFill,
+  short_text: evaluateTextInput,
+  open_text: evaluateTextInput,
 };
 
 /**
@@ -245,6 +391,13 @@ function generateRecoveryFeedback(turn: SceneTurn, attemptCount: number): string
     if (turn.evaluation?.expectedYesNo !== undefined) {
       return turn.evaluation.expectedYesNo ? 'The answer is: Yes' : 'The answer is: No';
     }
+    // B2-B4: reveal intent hint
+    const intents = turn.evaluation?.intents;
+    if (intents && intents.length > 0) {
+      const firstIntent = intents[0]!;
+      const exampleWords = firstIntent.keywordPatterns.slice(0, 3).join(', ');
+      return `Try using words like: ${exampleWords}`;
+    }
   }
 
   // After 2 attempts, give a stronger hint
@@ -259,7 +412,50 @@ function generateRecoveryFeedback(turn: SceneTurn, attemptCount: number): string
       return turn.responseData?.hintText ?? 'Check the word bank for the right answer.';
     case 'phrase_assembly':
       return 'Try putting the words in a different order.';
+    case 'short_text':
+      return generateShortTextRecovery(turn, attemptCount);
+    case 'open_text':
+      return generateOpenTextRecovery(turn, attemptCount);
     default:
       return 'Try again with a different answer.';
   }
+}
+
+/** B2 recovery: show support-language prompt + template choices. */
+function generateShortTextRecovery(turn: SceneTurn, attemptCount: number): string {
+  if (attemptCount >= 3) {
+    // Offer template choices (downgrade to constrained)
+    const intents = turn.evaluation?.intents;
+    if (intents && intents.length > 0) {
+      const templates = intents
+        .map((i) => i.keywordPatterns[0])
+        .filter(Boolean);
+      if (templates.length > 0) {
+        return `Try one of these: ${templates.join(' / ')}`;
+      }
+    }
+  }
+  // After 2 attempts, show support-language prompt
+  if (turn.responseData?.hintText) {
+    return turn.responseData.hintText;
+  }
+  const wordBank = turn.responseData?.wordBank;
+  if (wordBank && wordBank.length > 0) {
+    return `Try using: ${wordBank.join(', ')}`;
+  }
+  return 'Try expressing the same idea with simpler words.';
+}
+
+/** B3/B4 recovery: simplify NPC line or offer structured support. */
+function generateOpenTextRecovery(turn: SceneTurn, attemptCount: number): string {
+  if (attemptCount >= 3) {
+    // Offer structured support
+    const intents = turn.evaluation?.intents;
+    if (intents && intents.length > 0) {
+      const options = intents.map((i) => i.label).join(' / ');
+      return `You could try to: ${options}`;
+    }
+  }
+  // After 2 attempts, suggest approach
+  return turn.responseData?.hintText ?? 'Try a shorter, simpler response.';
 }

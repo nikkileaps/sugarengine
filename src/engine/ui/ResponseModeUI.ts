@@ -74,6 +74,12 @@ export class ResponseModeUI {
       case 'word_bank':
         this.renderWordBank(contract);
         break;
+      case 'short_text':
+        this.renderShortText(contract);
+        break;
+      case 'open_text':
+        this.renderOpenText(contract);
+        break;
       default:
         // Unsupported mode — hide.
         this.hide();
@@ -240,6 +246,89 @@ export class ResponseModeUI {
     this.widgetArea.appendChild(chipRow);
   }
 
+  private renderShortText(contract: ResponseContract): void {
+    // Hint text
+    if (contract.hintText) {
+      const hint = document.createElement('div');
+      hint.className = 'sl-response-template';
+      hint.textContent = contract.hintText;
+      this.widgetArea.appendChild(hint);
+    }
+
+    // Glossary chips (word bank as hints, not auto-fill)
+    if (contract.wordBank && contract.wordBank.length > 0) {
+      const chipRow = document.createElement('div');
+      chipRow.className = 'sl-chip-row sl-glossary-chips';
+      for (const word of contract.wordBank) {
+        const chip = document.createElement('span');
+        chip.className = 'sl-glossary-chip';
+        chip.textContent = word;
+        chipRow.appendChild(chip);
+      }
+      this.widgetArea.appendChild(chipRow);
+    }
+
+    // Text input
+    const inputRow = document.createElement('div');
+    inputRow.className = 'sl-text-input-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'sl-text-input';
+    input.maxLength = contract.maxLength ?? 80;
+    input.placeholder = 'Type your answer…';
+    inputRow.appendChild(input);
+
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'sl-confirm-btn';
+    submitBtn.textContent = 'Send';
+    submitBtn.addEventListener('click', () => {
+      const text = input.value.trim();
+      if (text) this.submit({ text });
+    });
+    inputRow.appendChild(submitBtn);
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const text = input.value.trim();
+        if (text) this.submit({ text });
+      }
+    });
+
+    this.widgetArea.appendChild(inputRow);
+    // Auto-focus the input
+    requestAnimationFrame(() => input.focus());
+  }
+
+  private renderOpenText(contract: ResponseContract): void {
+    // Hint text
+    if (contract.hintText) {
+      const hint = document.createElement('div');
+      hint.className = 'sl-response-template';
+      hint.textContent = contract.hintText;
+      this.widgetArea.appendChild(hint);
+    }
+
+    // Text area
+    const textArea = document.createElement('textarea');
+    textArea.className = 'sl-text-area';
+    textArea.maxLength = contract.maxLength ?? 200;
+    textArea.placeholder = 'Type your response…';
+    textArea.rows = 3;
+    this.widgetArea.appendChild(textArea);
+
+    // Submit button
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'sl-confirm-btn';
+    submitBtn.textContent = 'Send';
+    submitBtn.addEventListener('click', () => {
+      const text = textArea.value.trim();
+      if (text) this.submit({ text });
+    });
+    this.widgetArea.appendChild(submitBtn);
+
+    requestAnimationFrame(() => textArea.focus());
+  }
+
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
@@ -386,6 +475,62 @@ export class ResponseModeUI {
       }
       .sl-confirm-btn:hover {
         background: rgba(100, 200, 120, 0.3);
+      }
+
+      .sl-text-input-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .sl-text-input {
+        flex: 1;
+        padding: 10px 14px;
+        font-size: 15px;
+        border: 1px solid rgba(180, 160, 140, 0.4);
+        background: rgba(255, 255, 255, 0.06);
+        color: #f2e9dd;
+        border-radius: 8px;
+        outline: none;
+        font-family: inherit;
+      }
+      .sl-text-input:focus {
+        border-color: rgba(136, 180, 220, 0.6);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .sl-text-area {
+        width: 100%;
+        padding: 10px 14px;
+        font-size: 15px;
+        border: 1px solid rgba(180, 160, 140, 0.4);
+        background: rgba(255, 255, 255, 0.06);
+        color: #f2e9dd;
+        border-radius: 8px;
+        outline: none;
+        resize: vertical;
+        font-family: inherit;
+        margin-bottom: 8px;
+        box-sizing: border-box;
+      }
+      .sl-text-area:focus {
+        border-color: rgba(136, 180, 220, 0.6);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .sl-glossary-chips {
+        margin-bottom: 6px;
+      }
+
+      .sl-glossary-chip {
+        display: inline-block;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        color: rgba(180, 220, 255, 0.85);
+        background: rgba(136, 180, 220, 0.1);
+        border: 1px solid rgba(136, 180, 220, 0.25);
+        border-radius: 12px;
       }
     `;
     document.head.appendChild(style);

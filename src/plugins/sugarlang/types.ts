@@ -155,12 +155,16 @@ export interface SceneTurn {
   };
   /** Expected correct answers for deterministic evaluation. */
   evaluation?: {
-    /** Accepted answers (case-insensitive). */
+    /** Accepted answers (case-insensitive). Used by B0/B1 modes. */
     acceptedAnswers?: string[];
     /** For object selection: accepted object IDs. */
     acceptedObjectIds?: string[];
     /** For yes/no: expected answer. */
     expectedYesNo?: boolean;
+    /** Intent families for B2-B4 text evaluation. */
+    intents?: IntentFamily[];
+    /** Morphology tolerance rules for text evaluation. */
+    morphologyTolerance?: MorphologyTolerance;
   };
   /** Emotion hint for the NPC. */
   emotion?: string;
@@ -181,6 +185,103 @@ export interface SceneLanguagePack {
   targetLanguage: string;
   supportLanguage: string;
   bands: SceneBandRealization[];
+}
+
+// ---------------------------------------------------------------------------
+// Learner State
+// ---------------------------------------------------------------------------
+
+/** Multidimensional learner state model. */
+export interface LearnerState {
+  targetLanguage: string;
+  supportLanguage: string;
+  /** Comprehension ability (0–1 scale). */
+  comprehension: number;
+  /** Production ability (0–1 scale). */
+  production: number;
+  /** Vocabulary control (0–1 scale). */
+  vocabulary: number;
+  /** Grammar control (0–1 scale). */
+  grammar: number;
+  /** Repair / self-correction ability (0–1 scale). */
+  repair: number;
+  /** Learner confidence (0–1 scale). */
+  confidence: number;
+  /** How much the learner depends on support-language aids (0–1 scale, lower = less dependent). */
+  supportUsage: number;
+  /** Structures the learner has demonstrated reliably. */
+  knownStructures: string[];
+  /** Structures the learner has shown inconsistently. */
+  unstableStructures: string[];
+}
+
+/** Result of a placement assessment. */
+export interface PlacementOutcome {
+  /** The multidimensional state snapshot from placement. */
+  state: LearnerState;
+  /** Derived CEFR-style label for reporting (not runtime control). */
+  derivedCefrLabel: string;
+  /** ISO timestamp of when placement was taken. */
+  timestamp: string;
+}
+
+// ---------------------------------------------------------------------------
+// Turn Evidence
+// ---------------------------------------------------------------------------
+
+/** Structured evidence captured from a single learning turn. */
+export interface TurnEvidence {
+  turnId: string;
+  timestamp: string;
+  // Raw facts
+  playerInput: string;
+  responseMode: ResponseContractMode;
+  bandUsed: LearnerBandId;
+  policyUsed: string;
+  supportShown: boolean;
+  supportRequested: boolean;
+  groundingShown: boolean;
+  groundingUsed: boolean;
+  retries: number;
+  // Derived scores
+  taskSuccess: boolean;
+  formAccuracy: number;
+  /** 0 = fully independent, 1 = fully dependent on support. */
+  supportDependence: number;
+}
+
+// ---------------------------------------------------------------------------
+// Intent + Slot Evaluation (B2-B4)
+// ---------------------------------------------------------------------------
+
+/** A family of communicative intents for evaluation. */
+export interface IntentFamily {
+  intentId: string;
+  /** Human-readable label. */
+  label: string;
+  /** Keyword patterns that signal this intent (checked against normalized input). */
+  keywordPatterns: string[];
+  /** Required slots — all must be present for intent match. */
+  requiredSlots: SlotRequirement[];
+  /** Optional slots — presence improves form accuracy score. */
+  optionalSlots: SlotRequirement[];
+}
+
+/** A slot requirement for intent evaluation. */
+export interface SlotRequirement {
+  conceptId: string;
+  /** Keywords that satisfy this slot (checked against normalized input). */
+  keywords: string[];
+}
+
+/** Morphology tolerance rules for text evaluation. */
+export interface MorphologyTolerance {
+  /** Accept input with missing accents (e.g. "donde" for "dónde"). */
+  acceptMissingAccents: boolean;
+  /** Accept input with missing articles (e.g. "maleta negra" for "la maleta negra"). */
+  acceptMissingArticles: boolean;
+  /** Accept flexible word order. */
+  acceptFlexibleWordOrder: boolean;
 }
 
 // ---------------------------------------------------------------------------

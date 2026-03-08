@@ -12,10 +12,11 @@
 
 import { PLUGIN_API_VERSION } from '../../engine/plugins/types';
 import type { EnginePlugin, PluginContext, PluginEvent } from '../../engine/plugins/types';
-import type { SugarlangContentBundle } from './types';
+import type { SugarlangContentBundle, LearnerState, PlacementOutcome, TurnEvidence } from './types';
 import { createEmptyBundle } from './content/loader';
 import { createSugarlangMiddleware } from './middleware';
 import { createSugarlangScriptedProvider } from './provider';
+import { LearnerStateManager } from './learner';
 import type { ConversationMiddleware, ConversationProvider } from '../../engine/conversation/types';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,8 @@ interface SugarlangPluginState {
   targetLanguage?: string;
   supportLanguage?: string;
   learnerBandOverride?: string;
+  learnerState?: Record<string, unknown>;
+  evidence?: TurnEvidence[];
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +57,12 @@ export function createSugarlangPlugin(options: SugarlangPluginOptions = {}): Eng
   getContentBundle(): SugarlangContentBundle;
   /** Update NPC-to-scenario mapping. */
   setNpcScenarioMap(map: Map<string, string>): void;
+  /** Get the learner state manager. */
+  getLearnerStateManager(): LearnerStateManager;
+  /** Get the current learner state. */
+  getLearnerState(): Readonly<LearnerState>;
+  /** Apply a placement outcome to set the learner state. */
+  setPlacement(placement: PlacementOutcome): void;
 } {
   const id = options.id ?? 'sugarlang';
   const contentBundle = options.contentBundle ?? createEmptyBundle();
@@ -62,6 +71,7 @@ export function createSugarlangPlugin(options: SugarlangPluginOptions = {}): Eng
   let npcNameScenarioMap = new Map<string, string>();
 
   const state: SugarlangPluginState = {};
+  const learnerStateManager = new LearnerStateManager();
 
   const getScenarioForNpc = (npcId: string, npcName?: string) => {
     // Try id first, then name.
@@ -77,6 +87,7 @@ export function createSugarlangPlugin(options: SugarlangPluginOptions = {}): Eng
   const middleware = createSugarlangMiddleware({
     contentBundle,
     getScenarioForNpc,
+    learnerStateManager,
   });
 
   // Build the scripted provider.
@@ -114,13 +125,19 @@ export function createSugarlangPlugin(options: SugarlangPluginOptions = {}): Eng
   }
 
   function serializeState(): Record<string, unknown> {
-    return { ...state };
+    return {
+      ...state,
+      learnerState: learnerStateManager.serialize(),
+    };
   }
 
   function loadState(saved: Record<string, unknown>): void {
     if (typeof saved.targetLanguage === 'string') state.targetLanguage = saved.targetLanguage;
     if (typeof saved.supportLanguage === 'string') state.supportLanguage = saved.supportLanguage;
     if (typeof saved.learnerBandOverride === 'string') state.learnerBandOverride = saved.learnerBandOverride;
+    if (saved.learnerState && typeof saved.learnerState === 'object') {
+      learnerStateManager.loadSerialized(saved.learnerState as Record<string, unknown>);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -160,6 +177,18 @@ export function createSugarlangPlugin(options: SugarlangPluginOptions = {}): Eng
 
     setNpcScenarioMap(map: Map<string, string>) {
       npcScenarioMap = map;
+    },
+
+    getLearnerStateManager() {
+      return learnerStateManager;
+    },
+
+    getLearnerState() {
+      return learnerStateManager.getState();
+    },
+
+    setPlacement(placement: PlacementOutcome) {
+      learnerStateManager.applyPlacement(placement);
     },
   };
 }

@@ -4,7 +4,7 @@
  *
  * Provides:
  *   - Language direction toggle (en→es / es→en)
- *   - Band selector (B0, B1)
+ *   - Band selector (B0, B1, B2, B3, B4)
  */
 
 export interface SugarlangPreviewConfig {
@@ -61,7 +61,7 @@ export class SugarlangPreviewControls {
     const bandBtns = document.createElement('div');
     bandBtns.className = 'sl-preview-btn-row';
 
-    const bands = ['B0', 'B1'];
+    const bands = ['B0', 'B1', 'B2', 'B3', 'B4'];
     const bandBtnEls: HTMLButtonElement[] = [];
     for (const band of bands) {
       const btn = this.createToggleBtn(band, () => {

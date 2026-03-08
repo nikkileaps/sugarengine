@@ -28,12 +28,16 @@ import type {
   BandPolicy,
   GroundingMap,
   ScenarioBrief,
+  TurnEvidence,
 } from './types';
+import type { LearnerStateManager } from './learner';
 
 export interface SugarlangMiddlewareConfig {
   contentBundle: SugarlangContentBundle;
   /** Resolve the active scenario ID for the given NPC (by id or name). */
   getScenarioForNpc(npcId: string, npcName?: string): string | undefined;
+  /** Optional learner state manager for band resolution and evidence updates. */
+  learnerStateManager?: LearnerStateManager;
 }
 
 /**
@@ -69,15 +73,19 @@ export function createSugarlangMiddleware(
       'learner_policy',
       'pre_provider',
       'post_provider',
+      'analysis',
     ],
     priority: 10,
   };
 
   function resolveBand(session: ConversationSession): LearnerBandId {
-    // Use the preview override if set, otherwise default to B0.
-    // Phase 2 will use actual learner model placement.
+    // Preview override takes priority (for creator testing).
     if (session.learnerBandOverride) {
       return session.learnerBandOverride as LearnerBandId;
+    }
+    // Use learner state manager if available.
+    if (config.learnerStateManager) {
+      return config.learnerStateManager.getEffectiveBand();
     }
     return 'B0';
   }
@@ -162,6 +170,17 @@ export function createSugarlangMiddleware(
     if (scope) {
       constraints.groundingScope = scope;
     }
+
+    // Apply band-specific constraints.
+    if (state.bandPolicy) {
+      // Set grounding intensity as a hard constraint.
+      constraints.hardConstraints['groundingIntensity'] = state.bandPolicy.groundingIntensity;
+      // Set allowed response modes as an advisory preference.
+      constraints.advisoryPreferences['allowedResponseModes'] = state.bandPolicy.allowedResponseModes;
+      // Set support language visibility.
+      constraints.advisoryPreferences['showSupportStrip'] = state.bandPolicy.supportLanguagePolicy.showSupportStrip;
+      constraints.advisoryPreferences['showGlosses'] = state.bandPolicy.supportLanguagePolicy.showGlosses;
+    }
   }
 
   function postProvider(
@@ -173,7 +192,7 @@ export function createSugarlangMiddleware(
 
     // Extract support text from the provider diagnostics.
     const providerDiag = envelope.providerDiagnostics as
-      | { supportText?: string; turnId?: string; teachingConcepts?: string[] }
+      | { supportText?: string; turnId?: string; teachingConcepts?: string[]; lastTurnEvidence?: TurnEvidence }
       | undefined;
 
     // Annotate the envelope with sugarlang metadata.
@@ -181,10 +200,29 @@ export function createSugarlangMiddleware(
       scenarioId: state.scenarioId,
       resolvedBand: state.resolvedBand,
       supportLanguagePolicy: state.bandPolicy?.supportLanguagePolicy.mixingLevel,
+      showSupportStrip: state.bandPolicy?.supportLanguagePolicy.showSupportStrip ?? false,
+      showGlosses: state.bandPolicy?.supportLanguagePolicy.showGlosses ?? false,
       supportText: providerDiag?.supportText,
       turnId: providerDiag?.turnId,
       teachingConcepts: providerDiag?.teachingConcepts,
     };
+  }
+
+  function analysis(
+    _session: ConversationSession,
+    envelope: ConversationTurnEnvelope,
+  ): void {
+    const state = getState(_session);
+    if (!state.scenarioId) return;
+
+    // Extract turn evidence from provider diagnostics.
+    const providerDiag = envelope.providerDiagnostics as
+      | { lastTurnEvidence?: TurnEvidence }
+      | undefined;
+
+    if (providerDiag?.lastTurnEvidence && config.learnerStateManager) {
+      config.learnerStateManager.updateFromEvidence(providerDiag.lastTurnEvidence);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -221,7 +259,9 @@ export function createSugarlangMiddleware(
         case 'post_provider':
           postProvider(session, envelope);
           break;
-        // analysis and telemetry stages will be implemented in Phase 2.
+        case 'analysis':
+          analysis(session, envelope);
+          break;
       }
     },
   };
