@@ -40,6 +40,7 @@ import {
   ResonanceGameUI,
   ControlsHint,
   AgentConversationUI,
+  SugarlangConversationUI,
 } from './engine';
 
 export function setupGameUI(game: Game, container: HTMLElement) {
@@ -55,6 +56,7 @@ export function setupGameUI(game: Game, container: HTMLElement) {
   const itemViewUI = new ItemViewUI(container);
   const spellMenuUI = new SpellMenuUI(container, game.caster);
   const agentConversationUI = new AgentConversationUI(container);
+  const sugarlangUI = new SugarlangConversationUI(container);
   new CasterHUD(container, game.caster);
   const resonanceGameUI = new ResonanceGameUI(container);
   const controlsHint = new ControlsHint(container);
@@ -62,6 +64,11 @@ export function setupGameUI(game: Game, container: HTMLElement) {
 
   agentConversationUI.setOnSubmit((message) => game.submitAgentConversationTurn(message));
   agentConversationUI.setOnClose(() => game.closeAgentConversation());
+
+  sugarlangUI.setOnSubmit((input) => {
+    void game.submitSugarlangTurn(input);
+  });
+  sugarlangUI.setOnClose(() => game.closeSugarlangConversation());
   const isPreviewRuntime = window.location.pathname.includes('preview.html');
   if (isPreviewRuntime) {
     agentConversationUI.setOnReset(async (session) => {
@@ -112,6 +119,29 @@ export function setupGameUI(game: Game, container: HTMLElement) {
     },
     onAgentConversationEnd: () => {
       agentConversationUI.hide();
+    },
+    onSugarlangSessionStart: () => {
+      sugarlangUI.show();
+    },
+    onSugarlangSessionEnd: () => {
+      sugarlangUI.hide();
+    },
+    onSugarlangTurnProduced: (envelope) => {
+      // If utterance is empty, the scene is done (close intent already fired).
+      if (!envelope.utterance) return;
+
+      // Extract support text from middleware annotations.
+      const slAnnotations = envelope.middlewareAnnotations['sugarlang'] as
+        | { supportText?: string }
+        | undefined;
+
+      sugarlangUI.showTurn({
+        utterance: envelope.utterance,
+        speakerName: envelope.speakerName,
+        emotion: envelope.emotion,
+        supportText: slAnnotations?.supportText,
+        responseContract: envelope.responseContract,
+      });
     },
   });
 
@@ -173,6 +203,7 @@ export function setupGameUI(game: Game, container: HTMLElement) {
     giftUI.isVisible() ||
     spellMenuUI.isVisible() ||
     agentConversationUI.isVisible() ||
+    sugarlangUI.isVisible() ||
     resonanceGameUI.isActive();
 
   let nearbyPickupId: string | null = null;

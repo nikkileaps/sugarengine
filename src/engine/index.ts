@@ -132,7 +132,12 @@ export {
   FadeOverlay,
   ControlsHint,
   AgentConversationUI,
+  ResponseModeUI,
+  SupportStrip,
+  SugarlangConversationUI,
+  SugarlangPreviewControls,
 } from './ui';
+export type { SugarlangTurnView, SugarlangPreviewConfig } from './ui';
 
 // Resonance System
 export { ResonancePointLoader } from './resonance';
@@ -172,6 +177,35 @@ export type { BTConditionChecker, BTActionHandler } from './systems/BehaviorTree
 // World State (ADR-018)
 export { WorldStateEvaluator, WorldStateNotifier, FlagsManager } from './state';
 export type { WorldStateCondition, StateChange, StateChangeListener, StateNamespace } from './state';
+
+// Conversation (ADR-SL-002)
+export {
+  ConversationHost,
+  ScriptedDialogueProvider,
+  SugarAgentProviderAdapter,
+} from './conversation';
+export type {
+  ConversationHostContext,
+  ConversationHostEventHandlers,
+  LanguageContext,
+  SugarAgentAdapterContext,
+  ConversationSession,
+  ResponseContract,
+  ResponseContractMode,
+  GroundingReference,
+  GroundingMetadata,
+  ProviderConstraintBundle,
+  ConversationTurnEnvelope,
+  ConversationProvider,
+  ConversationProviderDescriptor,
+  ProviderSelectionContext,
+  PlayerInput,
+  ProviderTurnOutput,
+  ConversationMiddleware,
+  ConversationMiddlewareDescriptor,
+  ConversationMiddlewareStage,
+  ConversationCapability,
+} from './conversation';
 
 // Plugins (ADR-024)
 export { PluginManager, PluginSystem, PLUGIN_API_VERSION } from './plugins';

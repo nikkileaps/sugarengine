@@ -27,6 +27,8 @@ export interface ProjectData {
   spells?: unknown[];
   resonancePoints?: unknown[];
   vfxDefinitions?: unknown[];
+  /** Enable sugarlang language-learning overlay. `true` for demo content. */
+  sugarlang?: unknown;
 }
 
 export class PreviewManager {

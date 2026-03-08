@@ -1,0 +1,375 @@
+import type { PluginIntent, PluginIntentResult } from '../plugins/types';
+import type {
+  ConversationSession,
+  ConversationProvider,
+  ConversationMiddleware,
+  ConversationMiddlewareStage,
+  ConversationTurnEnvelope,
+  ProviderConstraintBundle,
+  ProviderSelectionContext,
+  PlayerInput,
+} from './types';
+
+// ---------------------------------------------------------------------------
+// Host Context (what the host needs from the Game)
+// ---------------------------------------------------------------------------
+
+export interface ConversationHostContext {
+  executeIntent(intent: PluginIntent): Promise<PluginIntentResult>;
+  addMovementLock(id: string): void;
+  removeMovementLock(id: string): void;
+}
+
+// ---------------------------------------------------------------------------
+// Host Events (what the host emits to the outside world)
+// ---------------------------------------------------------------------------
+
+export interface ConversationHostEventHandlers {
+  onSessionStart?: (session: ConversationSession) => void;
+  onSessionEnd?: (session: ConversationSession) => void;
+  onTurnProduced?: (envelope: ConversationTurnEnvelope) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Language Context
+// ---------------------------------------------------------------------------
+
+export interface LanguageContext {
+  targetLanguage?: string;
+  supportLanguage?: string;
+  learnerBandOverride?: string;
+}
+
+// ---------------------------------------------------------------------------
+// ConversationHost
+// ---------------------------------------------------------------------------
+
+let nextSessionId = 1;
+
+function generateSessionId(): string {
+  return `session_${nextSessionId++}_${Date.now()}`;
+}
+
+function generateTurnId(sessionId: string, turnIndex: number): string {
+  return `${sessionId}_turn_${turnIndex}`;
+}
+
+/**
+ * Engine-owned conversation orchestrator.
+ *
+ * Manages session lifecycle, provider selection, ordered middleware execution,
+ * and normalized turn envelopes. Replaces the previous first-plugin-wins
+ * interaction model with a proper provider + middleware pipeline.
+ */
+export class ConversationHost {
+  private providers: ConversationProvider[] = [];
+  private middlewares: ConversationMiddleware[] = [];
+  private activeSession: ConversationSession | null = null;
+  private hostContext: ConversationHostContext;
+  private eventHandlers: ConversationHostEventHandlers = {};
+  private languageContext: LanguageContext = {};
+
+  constructor(hostContext: ConversationHostContext) {
+    this.hostContext = hostContext;
+  }
+
+  // -------------------------------------------------------------------------
+  // Registration
+  // -------------------------------------------------------------------------
+
+  registerProvider(provider: ConversationProvider): void {
+    this.providers.push(provider);
+    this.providers.sort((a, b) => a.descriptor.priority - b.descriptor.priority);
+  }
+
+  registerMiddleware(middleware: ConversationMiddleware): void {
+    this.middlewares.push(middleware);
+    // Sort by priority for each stage execution
+    this.middlewares.sort((a, b) => a.descriptor.priority - b.descriptor.priority);
+  }
+
+  // -------------------------------------------------------------------------
+  // Configuration
+  // -------------------------------------------------------------------------
+
+  setEventHandlers(handlers: ConversationHostEventHandlers): void {
+    this.eventHandlers = handlers;
+  }
+
+  setLanguageContext(context: LanguageContext): void {
+    this.languageContext = { ...context };
+    // Update active session if language context changes
+    if (this.activeSession) {
+      this.activeSession.targetLanguage = context.targetLanguage;
+      this.activeSession.supportLanguage = context.supportLanguage;
+      this.activeSession.learnerBandOverride = context.learnerBandOverride;
+    }
+  }
+
+  getLanguageContext(): Readonly<LanguageContext> {
+    return this.languageContext;
+  }
+
+  // -------------------------------------------------------------------------
+  // Session Lifecycle
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start a conversation with an NPC.
+   * Selects the appropriate provider and runs the middleware session-start hooks.
+   */
+  async startConversation(
+    npcId: string,
+    npcName: string | undefined,
+    selectionContext: ProviderSelectionContext,
+  ): Promise<ConversationSession | null> {
+    if (this.activeSession) {
+      console.warn('[ConversationHost] Cannot start conversation: one is already active');
+      return null;
+    }
+
+    // Select provider
+    const provider = this.selectProvider(npcId, selectionContext);
+    if (!provider) {
+      console.warn(`[ConversationHost] No provider can handle NPC "${npcId}"`);
+      return null;
+    }
+
+    // Create session
+    const session: ConversationSession = {
+      sessionId: generateSessionId(),
+      npcId,
+      npcName,
+      providerId: provider.descriptor.id,
+      turnIndex: 0,
+      targetLanguage: this.languageContext.targetLanguage,
+      supportLanguage: this.languageContext.supportLanguage,
+      learnerBandOverride: this.languageContext.learnerBandOverride,
+      middlewareState: {},
+    };
+
+    // Start provider session (pass selection context so provider can access dialogueId, etc.)
+    await provider.startSession(session, selectionContext);
+
+    // Run middleware session-start hooks
+    for (const mw of this.middlewares) {
+      if (mw.onSessionStart) {
+        try {
+          await mw.onSessionStart(session);
+        } catch (error) {
+          console.error(`[ConversationHost] Middleware "${mw.descriptor.id}" failed in onSessionStart`, error);
+        }
+      }
+    }
+
+    this.activeSession = session;
+    this.hostContext.addMovementLock('conversation');
+    this.eventHandlers.onSessionStart?.(session);
+
+    return session;
+  }
+
+  /**
+   * Submit player input and produce the next NPC turn.
+   * Runs the full middleware pipeline around provider execution.
+   */
+  async submitTurn(playerInput?: PlayerInput): Promise<ConversationTurnEnvelope | null> {
+    const session = this.activeSession;
+    if (!session) {
+      console.warn('[ConversationHost] Cannot submit turn: no active session');
+      return null;
+    }
+
+    const provider = this.findProvider(session.providerId);
+    if (!provider) {
+      console.error(`[ConversationHost] Provider "${session.providerId}" not found`);
+      return null;
+    }
+
+    const turnId = generateTurnId(session.sessionId, session.turnIndex);
+
+    // Build initial constraint bundle
+    const constraints: ProviderConstraintBundle = {
+      sessionId: session.sessionId,
+      turnId,
+      targetLanguage: session.targetLanguage,
+      supportLanguage: session.supportLanguage,
+      learnerBand: session.learnerBandOverride,
+      hardConstraints: {},
+      advisoryPreferences: {},
+    };
+
+    // --- Pre-provider middleware stages ---
+    await this.runBeforeProvider(session, constraints, 'context_hydration');
+    await this.runBeforeProvider(session, constraints, 'learner_policy');
+    await this.runBeforeProvider(session, constraints, 'pre_provider');
+
+    // --- Provider execution ---
+    const providerOutput = await provider.produceTurn(session, constraints, playerInput);
+
+    // --- Build normalized envelope ---
+    const envelope: ConversationTurnEnvelope = {
+      sessionId: session.sessionId,
+      turnId,
+      turnIndex: session.turnIndex,
+      providerId: session.providerId,
+      utterance: providerOutput.utterance,
+      speakerId: providerOutput.speakerId,
+      speakerName: providerOutput.speakerName,
+      emotion: providerOutput.emotion,
+      intent: providerOutput.intent,
+      responseContract: providerOutput.responseContract,
+      targetLanguage: session.targetLanguage,
+      supportLanguage: session.supportLanguage,
+      hostActionProposals: providerOutput.hostActionProposals ?? [],
+      groundingMetadata: providerOutput.groundingMetadata,
+      providerDiagnostics: providerOutput.diagnostics,
+      middlewareAnnotations: {},
+      timestampMs: Date.now(),
+    };
+
+    // --- Post-provider middleware stages ---
+    await this.runAfterProvider(session, envelope, 'post_provider');
+    await this.runAfterProvider(session, envelope, 'analysis');
+    await this.runAfterProvider(session, envelope, 'telemetry');
+
+    // --- Execute validated host actions ---
+    for (const action of envelope.hostActionProposals) {
+      const result = await this.hostContext.executeIntent(action);
+      if (!result.success) {
+        console.warn(`[ConversationHost] Host action rejected: ${result.error}`);
+      }
+    }
+
+    // Advance turn counter
+    session.turnIndex++;
+
+    this.eventHandlers.onTurnProduced?.(envelope);
+
+    return envelope;
+  }
+
+  /**
+   * End the active conversation session.
+   */
+  async endConversation(): Promise<void> {
+    const session = this.activeSession;
+    if (!session) return;
+
+    const provider = this.findProvider(session.providerId);
+
+    // Run middleware session-end hooks
+    for (const mw of this.middlewares) {
+      if (mw.onSessionEnd) {
+        try {
+          await mw.onSessionEnd(session);
+        } catch (error) {
+          console.error(`[ConversationHost] Middleware "${mw.descriptor.id}" failed in onSessionEnd`, error);
+        }
+      }
+    }
+
+    // End provider session
+    if (provider) {
+      await provider.endSession(session);
+    }
+
+    this.activeSession = null;
+    this.hostContext.removeMovementLock('conversation');
+    this.eventHandlers.onSessionEnd?.(session);
+  }
+
+  // -------------------------------------------------------------------------
+  // State Queries
+  // -------------------------------------------------------------------------
+
+  isActive(): boolean {
+    return this.activeSession !== null;
+  }
+
+  getActiveSession(): Readonly<ConversationSession> | null {
+    return this.activeSession;
+  }
+
+  /**
+   * Check whether any registered provider can handle the given NPC.
+   * Used by the interaction system to decide whether to show the prompt.
+   */
+  hasProviderFor(npcId: string, context: ProviderSelectionContext): boolean {
+    return this.selectProvider(npcId, context) !== null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Provider Management
+  // -------------------------------------------------------------------------
+
+  private selectProvider(
+    npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationProvider | null {
+    for (const provider of this.providers) {
+      if (provider.canHandle(npcId, context)) {
+        return provider;
+      }
+    }
+    return null;
+  }
+
+  private findProvider(id: string): ConversationProvider | null {
+    return this.providers.find((p) => p.descriptor.id === id) ?? null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Middleware Pipeline
+  // -------------------------------------------------------------------------
+
+  private getMiddlewaresForStage(
+    stage: ConversationMiddlewareStage,
+  ): ConversationMiddleware[] {
+    return this.middlewares.filter((mw) => mw.descriptor.stages.includes(stage));
+  }
+
+  private async runBeforeProvider(
+    session: ConversationSession,
+    constraints: ProviderConstraintBundle,
+    stage: 'context_hydration' | 'learner_policy' | 'pre_provider',
+  ): Promise<void> {
+    for (const mw of this.getMiddlewaresForStage(stage)) {
+      if (mw.beforeProvider) {
+        try {
+          await mw.beforeProvider(session, constraints, stage);
+        } catch (error) {
+          console.error(`[ConversationHost] Middleware "${mw.descriptor.id}" failed in ${stage}`, error);
+        }
+      }
+    }
+  }
+
+  private async runAfterProvider(
+    session: ConversationSession,
+    envelope: ConversationTurnEnvelope,
+    stage: 'post_provider' | 'analysis' | 'telemetry',
+  ): Promise<void> {
+    for (const mw of this.getMiddlewaresForStage(stage)) {
+      if (mw.afterProvider) {
+        try {
+          await mw.afterProvider(session, envelope, stage);
+        } catch (error) {
+          console.error(`[ConversationHost] Middleware "${mw.descriptor.id}" failed in ${stage}`, error);
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Cleanup
+  // -------------------------------------------------------------------------
+
+  async dispose(): Promise<void> {
+    if (this.activeSession) {
+      await this.endConversation();
+    }
+    this.providers = [];
+    this.middlewares = [];
+  }
+}

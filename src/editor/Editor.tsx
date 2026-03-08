@@ -5,7 +5,7 @@
  * migrated here from the legacy vanilla EditorApp over time.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
@@ -263,6 +263,15 @@ export function Editor() {
     text: string;
   } | null>(null);
 
+  const [saveFlashVisible, setSaveFlashVisible] = useState(false);
+
+  // Auto-hide the save flash after a short delay.
+  useEffect(() => {
+    if (!saveFlashVisible) return;
+    const timer = setTimeout(() => setSaveFlashVisible(false), 1800);
+    return () => clearTimeout(timer);
+  }, [saveFlashVisible]);
+
   // Get current episode
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId);
   const resolvedGameId = gameId ?? toGameSlug(projectName ?? 'untitled-game');
@@ -414,6 +423,9 @@ export function Editor() {
         buildCurrentProjectDocument(),
         `__sugarengine/game-assets/${resolvedGameId}/`,
       ),
+      // Enable sugarlang demo content in preview.
+      // Phase 3 will replace this with persisted project-level toggle + content.
+      sugarlang: true,
     };
 
     console.log('[Editor] handlePreview: playerCaster =', playerCaster);
@@ -619,6 +631,8 @@ export function Editor() {
         defaultEpisodeId: project.defaultEpisode ?? currentEpisodeId,
       });
       setDirty(false);
+      console.log(`[Editor] Project saved to ${projectFilePath}`);
+      setSaveFlashVisible(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setGameLifecycleError(message);
@@ -1100,6 +1114,27 @@ export function Editor() {
                                       </Button>
                                     </Group>
                                   </AppShell.Header>
+
+                                  {/* Save confirmation flash */}
+                                  {saveFlashVisible && (
+                                    <div style={{
+                                      position: 'fixed',
+                                      top: 60,
+                                      left: '50%',
+                                      transform: 'translateX(-50%)',
+                                      zIndex: 9999,
+                                      background: '#1e1e2e',
+                                      border: '1px solid #a6e3a1',
+                                      color: '#a6e3a1',
+                                      padding: '8px 20px',
+                                      borderRadius: 8,
+                                      fontSize: 13,
+                                      fontWeight: 500,
+                                      boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                    }}>
+                                      Project saved
+                                    </div>
+                                  )}
 
                                   <AppShell.Navbar p="md">
                                     {panelContent.list}

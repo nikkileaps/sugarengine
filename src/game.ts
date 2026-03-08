@@ -61,7 +61,7 @@ async function loadGameData(slug: string): Promise<GameData> {
 
 async function runGame(gameData: GameData, gameSlug: string) {
   const container = document.getElementById('app')!;
-  const runtimePlugins = buildRuntimePluginsFromProject(gameData);
+  const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(gameData);
   const gameId = gameData.meta?.gameId || gameSlug;
   const contentBasePath = gameData.meta?.contentBasePath || `games/${gameSlug}/assets/`;
 
@@ -96,6 +96,8 @@ async function runGame(gameData: GameData, gameSlug: string) {
     projectData: gameData,
     currentEpisode: episodeId,
     plugins: runtimePlugins,
+    conversationMiddleware,
+    conversationProviders,
     titleScreen: {
       ...DEFAULT_GAME_CONFIG.titleScreen,
       ...gameData.titleScreen,

@@ -12,6 +12,7 @@ import {
   DebugHUD,
   FreeCameraController,
   LoadingScreen,
+  SugarlangPreviewControls,
 } from './engine';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
 import { buildRuntimePluginsFromProject } from './plugins/runtime';
@@ -26,7 +27,7 @@ let gameInstance: Game | null = null;
 
 async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
-  const runtimePlugins = buildRuntimePluginsFromProject(projectData);
+  const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(projectData);
   const projectMeta = (projectData as { meta?: { gameId?: string; contentBasePath?: string } } | undefined)?.meta;
   const gameId = projectMeta?.gameId || 'editor-preview';
   const contentBasePath = projectMeta?.contentBasePath || '';
@@ -94,6 +95,8 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     projectData,
     currentEpisode: episodeId,
     plugins: runtimePlugins,
+    conversationMiddleware,
+    conversationProviders,
     titleScreen: {
       ...DEFAULT_GAME_CONFIG.titleScreen,
       ...projectTitleScreen,
@@ -125,6 +128,15 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   updateAgentDebugInfo();
   const debugInfoInterval = window.setInterval(updateAgentDebugInfo, 500);
   window.addEventListener('beforeunload', () => window.clearInterval(debugInfoInterval), { once: true });
+
+  // Sugarlang preview controls
+  const slControls = new SugarlangPreviewControls(container);
+  slControls.setOnChange((config) => {
+    game.setSugarlangContext(config.targetLanguage, config.supportLanguage, config.bandOverride);
+  });
+  // Apply default config immediately
+  const defaultSLConfig = slControls.getConfig();
+  game.setSugarlangContext(defaultSLConfig.targetLanguage, defaultSLConfig.supportLanguage, defaultSLConfig.bandOverride);
 
   // Free camera controller for positioning title screen camera (F2 to toggle)
   const freeCam = new FreeCameraController(game.engine.getCamera(), container);

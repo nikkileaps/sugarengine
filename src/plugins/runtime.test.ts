@@ -3,12 +3,12 @@ import { buildRuntimePluginsFromProject } from './runtime';
 
 describe('buildRuntimePluginsFromProject', () => {
   it('returns no plugins when config has no plugin entries', () => {
-    const plugins = buildRuntimePluginsFromProject({});
+    const { plugins } = buildRuntimePluginsFromProject({});
     expect(plugins).toHaveLength(0);
   });
 
   it('enables SugarAgent from string plugin id', () => {
-    const plugins = buildRuntimePluginsFromProject({
+    const { plugins } = buildRuntimePluginsFromProject({
       plugins: ['sugaragent'],
     });
 
@@ -17,7 +17,7 @@ describe('buildRuntimePluginsFromProject', () => {
   });
 
   it('enables SugarAgent from object plugin entry', () => {
-    const plugins = buildRuntimePluginsFromProject({
+    const { plugins } = buildRuntimePluginsFromProject({
       plugins: [{ id: 'sugaragent', enabled: true }],
     });
 
@@ -26,7 +26,7 @@ describe('buildRuntimePluginsFromProject', () => {
   });
 
   it('treats object plugin entry as enabled when enabled is omitted', () => {
-    const plugins = buildRuntimePluginsFromProject({
+    const { plugins } = buildRuntimePluginsFromProject({
       plugins: [{ id: 'sugaragent' }],
     });
 
@@ -35,7 +35,7 @@ describe('buildRuntimePluginsFromProject', () => {
   });
 
   it('does not enable SugarAgent when explicitly disabled', () => {
-    const plugins = buildRuntimePluginsFromProject({
+    const { plugins } = buildRuntimePluginsFromProject({
       plugins: [{ id: 'sugaragent', enabled: false }],
     });
 
@@ -43,7 +43,7 @@ describe('buildRuntimePluginsFromProject', () => {
   });
 
   it('supports top-level sugaragent.enabled gate', () => {
-    const plugins = buildRuntimePluginsFromProject({
+    const { plugins } = buildRuntimePluginsFromProject({
       sugaragent: { enabled: true },
     });
 
@@ -52,7 +52,7 @@ describe('buildRuntimePluginsFromProject', () => {
   });
 
   it('ignores unrelated plugin ids', () => {
-    const plugins = buildRuntimePluginsFromProject({
+    const { plugins } = buildRuntimePluginsFromProject({
       plugins: ['foo', { id: 'bar', enabled: true }],
     });
 
