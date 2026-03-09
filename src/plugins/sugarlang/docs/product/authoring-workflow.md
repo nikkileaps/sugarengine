@@ -6,7 +6,7 @@ This document defines the intended creator workflow for Sugarlang authoring.
 
 The central requirement is:
 
-the creator should be able to author the game in English first and then ask Sugarlang, through the editor, chat, or CLI, to generate and refine the immersive language-learning overlay.
+the creator should be able to author the game in English first and then ask Sugarlang, through the editor, an external AI assistant in chat, or direct structured-file editing, to generate and refine the immersive language-learning overlay.
 
 ## Core Authoring Model
 
@@ -51,7 +51,7 @@ For the initial product:
 
 ## Source of Truth
 
-Canonical Sugarlang content should live in human-readable files under the game root.
+Canonical Sugarlang content should live in human-readable JSON files under the game root.
 
 The canonical on-disk layout is defined in [ADR-SL-001](../adr/001-english-first-authoring-overlay-and-source-of-truth-model.md).
 
@@ -69,13 +69,24 @@ SQLite may be useful for caches.
 
 It should not be the source of truth for authored Sugarlang content.
 
-## Authoring Clients
+## Authoring Workflows
 
-Sugarlang should support the same workflow from three equivalent clients.
+Sugarlang should support the same workflow through three aligned workflows over one artifact model.
 
 ### Editor Client
 
-The creator selects a quest, objective, or dialogue scene and uses actions such as:
+The creator uses the editor to enable Sugarlang for the project, inspect artifacts, switch preview bands/language directions, validate artifacts, and reload previewed content.
+
+V1 does not require a full dedicated Sugarlang authoring suite in the editor.
+
+The minimum editor responsibilities are:
+
+- project-level Sugarlang enablement and language-pair configuration
+- artifact-backed preview controls
+- validation/error inspection
+- opening or locating the relevant Sugarlang artifact files
+
+Later editor-specific actions may include:
 
 - `Generate Sugarlang Draft`
 - `Regenerate Beginner Bands`
@@ -84,9 +95,11 @@ The creator selects a quest, objective, or dialogue scene and uses actions such 
 - `Generate Spanish Variants`
 - `Rebuild Grounded Quest Binding`
 
+Those richer in-editor surfaces and actions are post-V1 work and belong to Phase 6 of the implementation plan, not Phase 4.
+
 ### Chat Client
 
-The creator talks to an AI assistant and says things like:
+The creator talks to an external AI assistant operating in the same workspace and says things like:
 
 - `generate the Sugarlang draft for quest find-the-luggage`
 - `rewrite the B0 and B1 variants to be more immersive and less translated`
@@ -94,21 +107,39 @@ The creator talks to an AI assistant and says things like:
 - `bind maleta to the red suitcase pickup and the return step`
 - `regenerate only the Spanish B2 variant with stronger repair behavior`
 
-The assistant reads the English-authored game content and writes the same Sugarlang files the editor would use.
+The assistant reads the English-authored game content and writes the same Sugarlang files the editor preview will use.
 
-### CLI / Automation Client
+### Direct Structured-File Editing
 
-This supports batch generation, validation, or recurring refresh jobs.
+The creator can also edit the persisted Sugarlang artifacts directly when the AI draft or editor preview needs manual correction.
 
-Examples:
+This is important for V1 because:
 
-- generate drafts for all scenes in an episode
-- validate grounded bindings after a quest edit
-- regenerate only one target language after source-scene changes
+- the canonical source of truth is on disk
+- the file format must stay human-reviewable
+- external AI assistance should not be the only way to recover from bad output
+
+## V1 Implementation Scope
+
+The full end-state authoring vision includes AI-assisted draft generation and richer editor surfaces.
+
+Phase 4 V1 implementation should be narrower:
+
+1. canonical persisted Sugarlang artifacts on disk
+2. loaders, serializers, and validators for those artifacts
+3. minimal editor integration for enablement, preview, and inspection
+4. external AI-assisted drafting/refinement through direct file writes
+
+Phase 4 V1 does **not** require:
+
+- a built-in chat client
+- a CLI authoring path
+- a full in-editor semantic/pedagogy authoring suite
+- in-product LLM-driven pedagogical inference
 
 ## Shared Generation Pipeline
 
-All clients should use the same underlying generation pipeline:
+The full end-state pipeline is:
 
 1. read English-authored quest, dialogue, NPC, region, object, pickup, inventory, and objective structure
 2. read visible scene context that can ground language
@@ -123,7 +154,16 @@ All clients should use the same underlying generation pipeline:
 11. draft evaluation rules and failure recovery
 12. validate references and write round-trip-safe files
 
-This prevents the editor and chat from drifting into separate authoring systems.
+In V1, the implemented code path only needs to cover the structural parts of that pipeline:
+
+- artifact creation
+- stable reference extraction
+- validation
+- file serialization/loading
+
+Language-aware drafting, mixed-language authoring, and pedagogical refinement may still be performed by an external AI assistant or direct human editing against those same files.
+
+This prevents the editor and external AI workflow from drifting into separate authoring systems.
 
 ## What the AI Should Infer From the English Scene
 
@@ -176,6 +216,9 @@ Examples:
 - clarification repair response rendered in the target language, for example Spanish-target `¿Qué significa "__" en inglés?`
   - the support-language label inside the utterance should also be localized to the target language
 - typed response using insert chips: `¿Dónde está la maleta negra?`
+- staged B2 repair ladder:
+  - first failure: `Show me more words`, `Say it more simply`
+  - third failure: `Say it in {supportLanguage}`
 - guided return response: `Aquí está la maleta azul.`
 
 It should not default to empty acknowledgements unless the band or scene truly requires them.

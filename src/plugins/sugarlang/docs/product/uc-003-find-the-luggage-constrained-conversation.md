@@ -54,16 +54,37 @@ Typing is primary now.
 She also sees a visible support chip tray beneath the box:
 
 - insert chips:
-  - `¿Dónde está`
+  - `sí`
+  - `te ayudo`
   - `la maleta`
-  - `negra`
-- fallback repair responses:
-  - `No entiendo`
-  - `¿Qué significa "__" en inglés?`
 
 She can type directly, use the insert chips to add key words or chunks, or combine both.
 
-For the clarification response, Elena can tap `perdí` to prefill the blank, or type the unclear word if the scene allows it.
+At first exposure, the stronger repair controls are not yet visible.
+
+If Elena fails once, the scene reveals stronger repair controls such as:
+
+- `Show me more words`
+- `Say it more simply`
+
+`Show me more words` expands the insert tray with more useful chunks such as:
+
+- `¿Dónde está`
+- `negra`
+- `cerca de`
+- `la puerta`
+
+`Say it more simply` keeps the line in Spanish, but rephrases it closer to `B1` support.
+
+If Elena fails again, both repair actions stay available with stronger outputs.
+
+If Elena fails a third time, the scene adds a final rescue:
+
+- `Say it in English`
+
+In the general product contract, that final label must be dynamic from `supportLanguage`.
+
+Clarification can still exist at `B2`. Elena can tap `perdí` to prefill a clarification response, or type the unclear word because typed interaction now exists at this band.
 
 If she types `¿Dónde está la maleta negra?`, the clerk replies:
 
@@ -86,8 +107,11 @@ When she returns, she types or selects a short final report such as:
 ## Interaction Model
 
 - NPC delivery mode: scripted provider only
-- player response mode: short constrained text with visible insert chips, pickup, short report
-- fallback repair responses: `No entiendo` and a clarification response template
+- player response mode: short constrained text with a small visible insert tray, pickup, short report
+- fallback repair controls:
+  - first and second failure: `Show me more words`, `Say it more simply`
+  - third failure: add `Say it in {supportLanguage}`
+  - clarification may also be available when the scene authors it
 - support-language policy: moderate and mostly repair-driven
 - grounding intensity: medium-high
 - support level: medium
@@ -117,13 +141,13 @@ Minor mistakes may still count if the communicative goal is clear.
 The experience is successful if:
 
 - Elena types at least one original sentence
-- the game can still rescue her with repair and support chips if needed
+- the game can still rescue her with a staged repair ladder and expanded insert support if needed
 - the quest advances on communicative success, not perfect form
 - `maleta negra` stays tied to the object, pickup, and return
 
 ## Engineering Acceptance Notes
 
-- The response contract must support constrained text with optional visible insert chips plus explicit fallback repair responses.
+- The response contract must support constrained text with a small visible insert tray plus a staged repair ladder that can be revealed and strengthened after failure.
 - Evaluation must support intent-plus-slot matching with normalization.
 - A typed failure should be able to degrade into stronger chip-based support without breaking immersion.
 - Evidence should distinguish:
@@ -149,11 +173,14 @@ The experience is successful if:
 2. In the `Repair and Support Policy Editor`, set:
    - no default translated subtitle
    - support-language repair on confusion or failure
-   - visible fallback repair responses
+   - failure-triggered repair ladder
 3. In the `Response Scaffold Editor`, configure:
    - short constrained text as primary
-   - insert chips as visible support
-   - fallback repair responses including `No entiendo` and `¿Qué significa "__" en inglés?`
+   - a small visible insert tray on first exposure
+   - `Show me more words` to expand the tray after failure
+   - `Say it more simply` to rephrase in the target language at a lower band expression level
+   - `Say it in {supportLanguage}` as the final rescue step
+   - repair controls hidden on first exposure and revealed after failure
    - pickup interaction
    - short return report
 4. In the `Grounding Map Editor`, bind:
@@ -170,7 +197,7 @@ Expected workflow:
 
 1. Keep the English-authored quest as the source content.
 2. Ask the AI assistant:
-   - `generate the B2 Spanish Sugarlang draft for Find the Luggage with constrained text, visible insert chips, fallback repair responses for No entiendo and ¿Qué significa "__" en inglés?, let the clarification response prefill from perdí, and a stable maleta negra pickup and return loop`
+   - `generate the B2 Spanish Sugarlang draft for Find the Luggage with constrained text, a small visible insert tray on first exposure, Show me more words and Say it more simply after first failure, Say it in English as the third-failure rescue, optional clarification prefilling from perdí, and a stable maleta negra pickup and return loop`
 3. Let the assistant write the response contract, grounding, grounded binding, repair variants, and deterministic evaluation rules.
 4. Review or refine in chat or in the editor.
 

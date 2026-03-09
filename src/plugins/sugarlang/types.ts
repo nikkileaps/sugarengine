@@ -144,6 +144,10 @@ export interface RepairOption {
   repairId: string;
   /** Player-facing label shown as a tappable repair response. */
   label: string;
+  /** First failed-attempt count at which this repair becomes visible. */
+  minAttempt?: number;
+  /** Last failed-attempt count at which this repair stays visible. */
+  maxAttempt?: number;
   /**
    * Repair type. Determines behavior:
    * - 'fixed': player taps, NPC replies with the authored repairReply.

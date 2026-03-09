@@ -102,6 +102,24 @@ The system should support:
 
 These should be chosen by pedagogy policy, not hard-wired to the evaluator result.
 
+At typed bands, staged repair should increase support in distinct dimensions rather than repeating the same help in multiple buttons.
+
+For `B2`, the preferred ladder is:
+
+1. `Show me more words`
+   - increases production support by expanding the visible insert tray
+2. `Say it more simply`
+   - increases comprehension support by rephrasing the prompt at a lower band while staying in the target language
+3. `Say it in {supportLanguage}`
+   - provides a final support-language paraphrase for that turn only
+
+This staged ladder is still deterministic-first because:
+
+- the repair actions are authored,
+- the visibility thresholds are authored or policy-driven,
+- the resulting scaffolds remain bounded,
+- the evaluator still scores task success, form quality, and support dependence separately.
+
 ### 5. Delayed or Optional Feedback Is a First-Class Pattern
 
 For many conversational flows, especially higher bands, continuous interruption harms immersion and confidence.

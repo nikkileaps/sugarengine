@@ -97,8 +97,9 @@ It is about:
 | 1 | Low-band immersive rework | Play `Find the Luggage` in `B0` and `B1` with the new immersive contract: chips-only `B0`, word-bank `B1`, tap-only repair, natural mixed-language helper lines, grounded quest actions |
 | 2 | Artifact/runtime alignment | Run the same low-band experience from the updated artifact model: scene language packs drive initial delivery, repair, happy-path response frames, and grounded band variants |
 | 3 | Mid-band and evaluator alignment | Play `B2` and `B3` with the updated typed-response, degradation, and deterministic evaluation contract |
-| 4 | Authoring and preview alignment | Generate, refine, and preview the updated Sugarlang overlay model from editor, chat, or CLI |
+| 4 | Authoring and preview alignment | Persist, validate, preview, and iteratively refine the updated Sugarlang overlay model from the editor, an external AI assistant, or direct structured-file editing |
 | 5 | Optional SugarAgent re-alignment and production hardening | Use the same Sugarlang scene model in scripted-only and SugarAgent-assisted advanced scenes, with replays, traces, and evals aligned to the post-pivot contract |
+| 6 | Full Sugarlang authoring suite | Build the dedicated in-editor Sugarlang authoring surfaces and integrated draft/refinement workflow on top of the V1 artifact model |
 
 ## Coverage Map
 
@@ -298,49 +299,84 @@ A creator can preview `B2` and `B3`, fail and recover through support, and confi
 
 ### Outcome
 
-Make the post-pivot Sugarlang model easy to generate, refine, and preview through the same shared artifact model from editor, chat, and CLI entry points.
+Build the V1 authoring foundation for the post-pivot Sugarlang model:
+
+- canonical on-disk artifact persistence,
+- loader/serializer/validator support,
+- minimal editor integration for preview and inspection,
+- one shared artifact model that can also be edited directly or by an external AI assistant.
+
+This phase does **not** require building a full in-product AI generation stack or a full dedicated Sugarlang editor suite.
 
 ### Scope
 
-#### Generation alignment
+#### Artifact persistence and loading
 
-1. Update the shared draft-generation pipeline so it produces the post-pivot artifact model.
-2. Ensure generation can draft:
-   - natural mixed-language initial lines,
-   - repair variants,
-   - happy-path response frames,
-   - band-specific grounded variants,
-   - response-mode selections,
-   - evaluator candidates.
-3. Ensure generation respects the natural-helper-utterance rule instead of producing token-spliced mixed lines.
+1. Implement the canonical Sugarlang on-disk layout under `plugins/sugarlang/`.
+2. Use human-readable JSON files as the canonical persisted artifact format for V1.
+3. Implement loaders, serializers, and validation for:
+   - scenario artifacts,
+   - shared defaults,
+   - per-language scene packs,
+   - grounded quest bindings,
+   - grounding maps.
+4. Migrate the canonical `Find the Luggage` content out of TypeScript module exports into those persisted artifacts.
+5. If temporary import bridges are needed during migration, keep them transitional and non-canonical.
 
-#### Authoring surface alignment
+#### Structural draft scaffolding
+
+1. Implement a non-LLM structural drafting path that can read existing English-authored game structure and emit correctly shaped Sugarlang artifact skeletons.
+2. Limit that drafting scope to:
+   - stable source references,
+   - scenario shells,
+   - grounding/binding shells,
+   - per-language scene-pack shells,
+   - status fields and validation metadata.
+3. Do **not** require semantic inference, natural-language drafting, or mixed-language pedagogy generation inside Phase 4 product code.
+4. Reserve language-specific drafting and refinement for:
+   - direct human editing of the artifact files,
+   - external AI-assisted generation/refinement operating on those same files.
+
+#### Minimal editor and preview alignment
 
 1. Update editor preview and refinement surfaces to reflect:
-   - `B0` chips,
-   - `B1` word-bank blank fill,
-   - low-band repair responses,
-   - grounded band variants,
-   - scene-language-pack ownership of low-band surfaces.
-2. Ensure chat and CLI entry points operate on the same artifact model and validation rules.
-3. Preserve round-trip-safe editing and regeneration.
+   - project-level Sugarlang enablement/config,
+   - artifact-backed language/band preview switching,
+   - validation and artifact inspection,
+   - the current band behaviors described by the product docs.
+2. Replace the hardcoded preview-only Sugarlang toggle with artifact-backed/project-backed preview wiring.
+3. Add a minimal Sugarlang inspection surface rather than a full seven-panel authoring suite.
+4. V1 does **not** require dedicated editor panels for:
+   - semantic scenario authoring,
+   - repair policy editing,
+   - grounding map editing,
+   - grounded quest binding editing,
+   - full learner-band matrix editing.
+5. Preserve round-trip-safe file editing and preview reload behavior.
+
+#### External AI and direct-file editing alignment
+
+1. Treat chat-based AI authoring in V1 as an external assistant operating on workspace files, not as a built-in editor chat client.
+2. Ensure the artifact model, loader, and validator make that workflow safe and repeatable.
+3. Do not add a CLI authoring path in V1.
 
 #### Preview and validation alignment
 
 1. Add validations for the updated artifact boundaries and band contracts.
-2. Ensure the creator can preview both language directions and adjacent bands with the new low-band and mid-band behavior.
+2. Ensure the creator can preview both language directions and adjacent bands with the new low-band and mid-band behavior from persisted artifacts.
 3. Add regression fixtures for the post-pivot golden slice.
 
 ### Preview Target
 
-A creator can ask Sugarlang from the editor, chat, or CLI to generate or refine a scene, then preview the result and see the post-pivot low-band and mid-band behavior directly from the generated artifacts.
+A creator can enable Sugarlang for a project, load persisted Sugarlang artifacts from disk, preview the result across bands and language directions, inspect validation output, edit the structured artifact files directly or through an external AI assistant, and then reload the preview against the same artifact model.
 
 ### Exit Criteria
 
-1. Authoring/generation tools produce the same product the current docs describe.
-2. The editor, chat, and CLI operate on one artifact model.
-3. Regeneration respects the post-pivot ownership boundaries.
-4. Preview tooling makes the band progression and language-pair progression easy to inspect.
+1. Canonical Sugarlang content is persisted as JSON artifacts under the game root rather than as TypeScript-only demo content.
+2. Loader/serializer/validator support the current artifact model and product contracts.
+3. The editor can preview and inspect those artifacts without relying on hardcoded demo wiring.
+4. External AI-assisted editing and direct structured-file editing both operate safely on the same artifact model.
+5. Preview tooling makes the band progression and language-pair progression easy to inspect.
 
 ## Phase 5: Optional SugarAgent Re-Alignment and Production Hardening
 
@@ -389,6 +425,72 @@ A creator can preview an advanced scene in both scripted-only and SugarAgent-ass
 3. Replay, eval, and observability reflect the post-pivot runtime model.
 4. The production shape remains compatible with later AI-topology changes.
 
+## Phase 6: Full Sugarlang Authoring Suite
+
+### Status
+
+Post-V1 expansion phase. Not required for V1 complete.
+
+### Outcome
+
+Build the richer integrated Sugarlang authoring environment on top of the V1 artifact model, validation layer, and preview/runtime foundation.
+
+This is the phase where Sugarlang stops being primarily:
+
+- persisted files,
+- external AI-assisted edits,
+- minimal editor preview/config
+
+and becomes a first-class in-editor authoring system.
+
+### Scope
+
+#### Dedicated editor surfaces
+
+1. Build the dedicated Sugarlang editor panels described by the product docs, including:
+   - scenario panel,
+   - learner band matrix,
+   - repair/support policy editor,
+   - response scaffold editor,
+   - grounding map editor,
+   - grounded quest binding editor,
+   - placement and preview panel.
+2. Make those panels artifact-backed rather than introducing a second hidden authoring model.
+3. Ensure edits remain round-trip-safe with direct file editing and external AI-assisted edits.
+
+#### Integrated draft and refinement actions
+
+1. Add integrated editor actions such as:
+   - `Generate Sugarlang Draft`
+   - `Regenerate Beginner Bands`
+   - `Regenerate Repair Policy`
+   - `Generate English Variants`
+   - `Generate Spanish Variants`
+   - `Rebuild Grounded Quest Binding`
+2. Ensure these actions operate on the same artifact model and validation rules already established in Phase 4.
+3. Keep built-in generation optional and replaceable so future local-model, API-model, or self-hosted model deployments can plug into the same workflow.
+
+#### Rich preview and review tooling
+
+1. Expand preview tooling so creators can compare:
+   - adjacent bands,
+   - support-language and target-language pairs,
+   - repair ladder states,
+   - grounded variant behavior.
+2. Add artifact-aware diff/review flows so generated changes can be inspected before acceptance.
+3. Add stronger validation/reporting for drift between base authored scenes and Sugarlang overlays.
+
+### Preview Target
+
+A creator can stay inside the editor, generate or refine a Sugarlang scene draft, inspect and edit the scenario/band/repair/grounding artifacts through dedicated panels, preview the result immediately, and still fall back to direct artifact editing or external AI-assisted edits without model drift.
+
+### Exit Criteria
+
+1. The full Sugarlang editor suite exists and is backed by the same artifact model used in V1.
+2. Integrated draft/refinement actions operate safely on those artifacts.
+3. Direct file editing, external AI-assisted editing, and editor-driven editing remain interoperable.
+4. The dedicated authoring experience does not create a second source of truth.
+
 ## Validation Rules Across All Phases
 
 After each phase:
@@ -409,7 +511,9 @@ Sugarlang V1 is complete when all of the following are true:
 4. Grounded quest actions and recurring vocabulary are visible parts of the experience, not incidental embellishments.
 5. Scripted-only Sugarlang fully supports the documented use cases.
 6. Optional SugarAgent composition works without changing Sugarlang ownership boundaries.
-7. Editor, chat, and CLI authoring flows operate on the same updated artifact model.
+7. Editor preview/config, external AI-assisted file generation, and direct structured-file editing operate on the same updated artifact model.
+
+Phase 6 is explicitly outside this definition of V1 complete.
 
 ## Non-Goals for This Plan
 

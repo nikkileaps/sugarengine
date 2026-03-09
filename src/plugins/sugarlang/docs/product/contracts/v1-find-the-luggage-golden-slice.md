@@ -327,19 +327,36 @@ Initial NPC move:
 Primary response contract:
 
 - short constrained text
-- visible insert chips remain available as support
+- a small visible insert tray remains available as support
 - pickup and return
+
+Initial support rule:
+
+- the first typed exposure should show the text box and a small insert tray
+- first and second failures should reveal `Show me more words` and `Say it more simply`
+- third failure should add `Say it in {supportLanguage}` as the final rescue
 
 Example insert chips:
 
-- `¿Dónde está`
+- `sí`
+- `te ayudo`
 - `la maleta`
+
+Example first-failure repair controls:
+
+- `Show me more words`
+- `Say it more simply`
+
+Example expanded insert tray after `Show me more words`:
+
+- `¿Dónde está`
 - `negra`
+- `cerca de`
+- `la puerta`
 
-Example fallback repair responses:
+Example final rescue:
 
-- `No entiendo`
-- `¿Qué significa "__" en inglés?`
+- `Say it in {supportLanguage}`
 
 Clarification note:
 
@@ -354,7 +371,8 @@ Example resulting responses:
 
 Repair behavior:
 
-- support may clarify a single unknown word, point to a landmark, or show a stronger reply suggestion
+- support may expand the insert tray, lower the phrasing to the next-lower band while staying in the target language, clarify a single unknown word, point to a landmark, or finally reveal a support-language paraphrase
+- stronger repair controls should not dominate the first exposure
 - example repair:
   - `I lost mi maleta negra. Está cerca de la puerta.`
 
@@ -429,12 +447,14 @@ Primary response contract:
 
 Fallback support:
 
-- after failed typing or explicit help request, surface:
-  - response-building chips
-  - one revealed glossary item
-  - one stronger grounded highlight
+- no visible support on first exposure
+- first and second failures should reveal:
+  - `Show me more words`
+  - `Say it more simply`
+- third failure should add:
+  - `Say it in {supportLanguage}`
 
-Example fallback chips:
+Example `Show me more words` reveal:
 
 - `¿Qué significa`
 - `mostrador`
@@ -445,7 +465,8 @@ Example fallback chips:
 
 Repair behavior:
 
-- targeted rephrase, not full translation
+- `Say it more simply` should rephrase the line at a B2-style level while staying in the target language
+- `Say it in {supportLanguage}` is the final rescue, not the default support mode
 - example repair:
   - `El mostrador, the counter there. La maleta pequeña está al lado.`
 
@@ -483,7 +504,7 @@ Completion response:
 Success rule:
 
 - player may succeed directly or through clarification
-- chip scaffolds appear only after failure or on request
+- chip scaffolds appear only after failure
 
 ### `B4 Natural Interaction`
 

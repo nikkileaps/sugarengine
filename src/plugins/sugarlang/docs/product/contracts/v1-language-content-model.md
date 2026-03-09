@@ -291,7 +291,9 @@ Spanish note:
 | `repair.what_does_it_mean` | `what does it mean` | `qué significa` | `B2` |
 | `repair.point_to_it` | `point to it` | `señálalo` | `B0` |
 | `repair.repeat` | `repeat` | `repite` | `B0` |
+| `repair.more_words` | `show me more words` | `muéstrame más palabras` | `B2` |
 | `repair.simpler` | `say it more simply` | `más simple` | `B2` |
+| `repair.in_support_language` | `say it in support language` | `dilo en mi idioma de apoyo` | `B2` |
 
 ### F. Social and confirmation language
 

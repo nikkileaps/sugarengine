@@ -20,6 +20,7 @@ import { MagicPanel } from './panels/magic';
 import { PlayerPanel } from './panels/player';
 import { ResonancePanel } from './panels/resonance';
 import { VFXPanel } from './panels/vfx';
+import { SugarlangPanel } from './panels/sugarlang';
 import { WelcomeDialog } from './components/WelcomeDialog';
 import { NewGameDialog } from './components/NewGameDialog';
 import { OpenGameDialog } from './components/OpenGameDialog';
@@ -49,6 +50,7 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'player', label: 'Player', icon: '🧙' },
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
+  { value: 'sugarlang', label: 'Sugarlang', icon: '🌍' },
 ];
 
 const AVAILABLE_PLUGINS = [
@@ -56,6 +58,11 @@ const AVAILABLE_PLUGINS = [
     id: 'sugaragent',
     name: 'SugarAgent',
     description: 'Agentic NPC conversation, memory, lore retrieval, and beat contracts.',
+  },
+  {
+    id: 'sugarlang',
+    name: 'Sugarlang',
+    description: 'Immersive language-learning overlay with learner bands, repair, and grounded vocabulary.',
   },
 ] as const;
 
@@ -417,15 +424,19 @@ export function Editor() {
   const handlePreview = () => {
     if (!previewManagerRef.current) return;
 
+    // Build sugarlang preview config from project plugins
+    const sugarlangPlugin = plugins.find((p) => p.id === 'sugarlang');
+    const sugarlangConfig = sugarlangPlugin?.enabled !== false && sugarlangPlugin
+      ? { enabled: true }
+      : sugarlangPlugin ? false : true; // Default to demo if no explicit plugin config
+
     const projectData: PreviewProjectData = {
       version: 1,
       ...buildPreviewProjectDocument(
         buildCurrentProjectDocument(),
         `__sugarengine/game-assets/${resolvedGameId}/`,
       ),
-      // Enable sugarlang demo content in preview.
-      // Phase 3 will replace this with persisted project-level toggle + content.
-      sugarlang: true,
+      sugarlang: sugarlangConfig,
     };
 
     console.log('[Editor] handlePreview: playerCaster =', playerCaster);
@@ -965,7 +976,21 @@ export function Editor() {
                                 vfxDefinitions={vfxDefinitions.map((v) => ({ id: v.id, name: v.name }))}
                                 episodes={episodeList}
                               >
-                                  {(regionPanel) => {
+                                  {(regionPanel) => (
+                                    <SugarlangPanel
+                                      gameRootPath={gameRootPath}
+                                      gameId={resolvedGameId}
+                                      plugins={plugins}
+                                      onPluginsChange={setPlugins}
+                                      projectInput={{
+                                        quests: quests as any,
+                                        dialogues: dialogues as any,
+                                        npcs: npcs as any,
+                                        regions: regions as any,
+                                        items: items as any,
+                                      }}
+                                    >
+                                      {(sugarlangPanel) => {
                                         // Select the panel based on active tab
                                         const panelContent =
                                           activeTab === 'dialogues' ? dialoguePanel :
@@ -978,6 +1003,7 @@ export function Editor() {
                                           activeTab === 'player' ? playerPanel :
                                           activeTab === 'inspections' ? inspectionPanel :
                                           activeTab === 'regions' ? regionPanel :
+                                          activeTab === 'sugarlang' ? sugarlangPanel :
                                           npcPanel;
 
                               return (
@@ -1153,7 +1179,9 @@ export function Editor() {
                                   )}
                                         </AppShell>
                                       );
-                                    }}
+                                      }}
+                                    </SugarlangPanel>
+                                  )}
                                   </RegionPanel>
                                   )}
                                 </PlayerPanel>

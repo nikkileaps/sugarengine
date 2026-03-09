@@ -167,6 +167,7 @@ export function setupGameUI(game: Game, container: HTMLElement) {
               label: string;
               type: 'fixed' | 'clarification_template';
             }>;
+            showRepairOptions?: boolean;
             tappableWords?: string[];
           }
         | undefined;
@@ -190,6 +191,8 @@ export function setupGameUI(game: Game, container: HTMLElement) {
         // Glossary chips require real lexicon translations — not yet wired.
         glossaryChips: undefined,
         repairOptions: diagnostics?.repairOptions,
+        showRepairOptions: diagnostics?.showRepairOptions
+          ?? ((diagnostics?.repairOptions?.length ?? 0) > 0),
         tappableWords: diagnostics?.tappableWords,
       });
     },

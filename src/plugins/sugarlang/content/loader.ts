@@ -2,8 +2,9 @@
  * Sugarlang content loader.
  *
  * Loads content from the game project's `plugins/sugarlang/` directory structure.
- * In development mode, content is passed from the editor project data.
- * In production mode, content is loaded from files.
+ * Supports two loading modes:
+ *   1. Inline project data (legacy: TS modules or JSON embedded in project)
+ *   2. Artifact files (V1: JSON files under plugins/sugarlang/)
  */
 
 import type {
@@ -15,6 +16,8 @@ import type {
   BandPolicyPack,
   SceneLanguagePack,
 } from '../types';
+
+import { deserializeContentBundle, validateContentBundle } from './artifacts';
 
 /** Raw project data shape for sugarlang content. */
 export interface SugarlangProjectData {
@@ -132,3 +135,20 @@ export function resolveSceneBandContent(
   if (!pack) return null;
   return pack.bands.find((b) => b.bandId === bandId) ?? null;
 }
+
+/**
+ * Load a content bundle from persisted JSON artifact files.
+ * Takes a Map<relativePath, jsonString> as returned by loadAllSugarlangArtifacts().
+ */
+export function loadContentFromArtifacts(files: Map<string, string>): {
+  bundle: SugarlangContentBundle;
+  errors: string[];
+  warnings: string[];
+} {
+  return deserializeContentBundle(files);
+}
+
+/**
+ * Validate an already-loaded content bundle for cross-reference integrity.
+ */
+export { validateContentBundle };

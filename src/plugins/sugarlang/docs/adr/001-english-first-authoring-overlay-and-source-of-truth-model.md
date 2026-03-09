@@ -37,7 +37,7 @@ That means:
 3. Sugarlang overlay files are the canonical source of truth for the language-learning layer.
 4. Those overlay files must be human-readable and round-trip-safe.
 5. AI-generated drafts are first-class authored artifacts, not ephemeral previews.
-6. The editor UI, chat-based AI assistance, and CLI/automation are all equal authoring clients over the same Sugarlang overlay model.
+6. The editor UI, external chat-based AI assistance, and direct structured-file editing are aligned authoring workflows over the same Sugarlang overlay model.
 7. Local databases may support caches, indexes, replay lookup, or analytics, but they are not the canonical store for authored Sugarlang content.
 8. The base game content is authored in English, while Sugarlang overlays target runtime `target language` and `support language` behavior.
 
@@ -152,7 +152,7 @@ The system should treat the following as equivalent intents:
 
 - clicking `Generate Sugarlang Draft` in the editor
 - asking an AI assistant in chat to generate the draft for a quest or scene
-- invoking a CLI or automation command to generate or refresh the draft
+- creating or refining the same artifact files directly when needed
 
 All three should write the same underlying Sugarlang artifacts, including:
 
@@ -161,6 +161,15 @@ All three should write the same underlying Sugarlang artifacts, including:
 - grounded quest bindings
 - per-band mixed-language surface lines
 - response frames and response contracts
+
+For V1 implementation scope, the built product code only needs to provide:
+
+- persisted artifact files
+- serializers and loaders
+- validators
+- structural scaffold generation from English-authored scene references
+
+The actual language-aware drafting may still be performed by an external AI assistant operating on those same files.
 
 ## Why This Supports the Product and Use Cases
 
@@ -193,7 +202,7 @@ The pattern across these products is consistent:
 - AI augmentation second
 - content review remains necessary
 
-Sugarlang should adopt the same architectural posture, but make it compatible with a creator-owned game project and chat-based authoring.
+Sugarlang should adopt the same architectural posture, but make it compatible with a creator-owned game project and external chat-based authoring.
 
 ## Alternatives Considered
 
@@ -225,7 +234,7 @@ Rejected.
 Why:
 
 - it blocks chat-based AI authoring
-- it duplicates generation logic if CLI or automation is added later
+- it blocks direct structured-file editing as a first-class fallback
 - it is misaligned with the target creator workflow
 
 ### 4. Make AI Output Ephemeral Until a Human Clicks "Save"
@@ -240,7 +249,7 @@ Why:
 
 ## Technology and Pattern Options
 
-This ADR intentionally does not lock exact formats.
+This ADR intentionally keeps room for future format changes, but V1 should make one concrete choice.
 
 Patterns that are consistent with the decision:
 
@@ -250,7 +259,11 @@ Patterns that are consistent with the decision:
 - status fields like `draft`, `reviewed`, `approved`
 - regeneration markers or metadata for safe partial refresh
 
-The main constraint is not the file extension.
+For V1, canonical persisted Sugarlang artifacts should be JSON files on disk.
+
+TypeScript modules may remain as transitional fixtures or tests during migration, but they must not remain the canonical authored source of truth.
+
+The main constraint is not only the file extension.
 
 The main constraint is:
 
@@ -265,7 +278,7 @@ This decision is intentionally compatible with all three model-serving futures:
 
 ### Browser-Local AI
 
-The chat client or editor uses local models to generate or refine Sugarlang overlays.
+An external AI assistant or editor-integrated helper uses local models to generate or refine Sugarlang overlays.
 
 No architecture change is required.
 
@@ -290,7 +303,7 @@ runtime deployment can evolve without changing what authored Sugarlang content i
 Positive:
 
 - aligns with the real creator workflow
-- supports editor/chat/CLI parity
+- supports editor/external-AI/file-edit parity
 - makes AI output durable and reviewable
 - keeps the game layer and pedagogy layer distinct
 - avoids database lock-in for authored content

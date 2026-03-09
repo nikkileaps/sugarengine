@@ -8,7 +8,7 @@ Typing is primary.
 
 Chips are no longer primary.
 
-They appear after failure or on request.
+They appear only after failure.
 
 ## Persona
 
@@ -37,7 +37,7 @@ Initial placement sets something like:
 
 ## User Story
 
-As an intermediate learner, I want the game to trust me with a short real interaction and only surface stronger scaffolds if I ask for them or actually need them.
+As an intermediate learner, I want the game to trust me with a short real interaction and only surface stronger scaffolds if I actually need them.
 
 ## Product Goal
 
@@ -64,23 +64,32 @@ He types a response such as:
 - `¿Está cerca de la puerta?`
 - `Voy a buscar la maleta.`
 
-If he types something off-track or asks for help, the scene reveals stronger repair:
+If he types something off-track once, the scene reveals stronger repair:
 
-- one glossary reveal
-- one grounded highlight
-- optional fallback chip tray
+- `Show me more words`
+- `Say it more simply`
 
-Example repair:
-
-`El mostrador, the counter there. La maleta pequeña está al lado.`
-
-If Mateo fails again, fallback chip sets can appear:
+`Show me more words` reveals a bounded fallback chip set such as:
 
 - `¿Qué significa`
 - `mostrador`
 - `cinta verde`
 - `Voy a buscar`
 - `la maleta`
+
+`Say it more simply` keeps the repair in Spanish, but drops it toward a `B2`-style phrasing.
+
+Example simpler repair:
+
+`La maleta es pequeña. Tiene una cinta verde. Está al lado del mostrador.`
+
+If Mateo fails again, both repair actions stay available with stronger outputs.
+
+If Mateo fails a third time, the scene adds a final rescue:
+
+- `Say it in English`
+
+In the general product contract, that label must come from `supportLanguage`.
 
 Mateo then finds, picks up, and returns the correct suitcase.
 
@@ -92,7 +101,7 @@ He reports back with a short typed line:
 
 - NPC delivery mode: scripted provider by default
 - player response mode: short multi-turn text, pickup, short report-back
-- support-language policy: low by default, stronger only on request or failure
+- support-language policy: low by default, stronger only after failure
 - grounding intensity: medium and reveal-based
 - support level: medium_to_low
 - free-form text: allowed, but scoped to the scene objective
@@ -125,14 +134,15 @@ The experience is successful if:
 
 - Mateo can complete the quest through a short believable interaction
 - clarification is recognized as smart play, not failure
-- chip scaffolds stay secondary and appear mainly after failure or on request
+- chip scaffolds stay secondary and appear only after failure
 - the same referent survives description, pickup, and return
 
 ## Engineering Acceptance Notes
 
 - The semantic scene contract must support clarification as a valid learner action.
 - Evaluation must support multiple authored intent paths through the same quest.
-- Fallback chip composition must be available after failed typing, but not shown as the default primary surface.
+- The first typed exposure must not show fallback chips.
+- After failure, the repair ladder should reveal `Show me more words`, `Say it more simply`, and then `Say it in {supportLanguage}` on the third failure.
 - Learner evidence should distinguish:
   - direct success
   - success after clarification
@@ -157,8 +167,10 @@ The experience is successful if:
 1. Author the `B3 Independent Task Dialogue` row in the `Learner Band Matrix`.
 2. In the `Repair and Support Policy Editor`, configure:
    - no default translation
-   - on-request clarification
-   - fallback chip composition only after failure or explicit help
+   - clarification as a valid response path
+   - fallback chip composition only after failure
+   - `Say it more simply` mapped to a B2-style reformulation
+   - `Say it in {supportLanguage}` only on the third failure
 3. In the `Response Scaffold Editor`, configure:
    - short multi-turn text as primary
    - pickup interaction
@@ -176,7 +188,7 @@ Expected workflow:
 
 1. Keep the authored English scene with its clarification beats.
 2. Ask the AI assistant:
-   - `generate the B3 Spanish Sugarlang draft for Find the Luggage; make typing primary, keep fallback chip composition only after failure, and bind the green-ribbon suitcase through pickup and return`
+   - `generate the B3 Spanish Sugarlang draft for Find the Luggage; make typing primary, show no support on first exposure, reveal Show me more words and Say it more simply after failure, add Say it in English as the third-failure rescue, and bind the green-ribbon suitcase through pickup and return`
 3. Let the assistant draft the repair policy, fallback chip sets, grounding, grounded binding, and evaluation tolerances.
 4. Review or refine in chat or in the editor.
 

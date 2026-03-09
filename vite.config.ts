@@ -847,6 +847,113 @@ export default defineConfig({
           }
         });
 
+        // ---------------------------------------------------------------
+        // Plugin artifact I/O endpoint
+        // Supports read/write/list/delete for plugin artifact files
+        // under {gameRoot}/plugins/{pluginId}/...
+        // ---------------------------------------------------------------
+        server.middlewares.use('/__sugarengine/plugin-artifact', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          try {
+            const body = await readRequestBody(req);
+            const op = normalizeOptionalString(body.op);
+            const gameId = normalizeOptionalString(body.gameId);
+            const pluginId = normalizeOptionalString(body.pluginId);
+            const artifactPath = normalizeOptionalString(body.artifactPath);
+
+            if (!gameId || !pluginId) {
+              writeJson(res, 400, { ok: false, error: 'Missing gameId or pluginId' });
+              return;
+            }
+
+            // Validate pluginId contains no path traversal
+            if (pluginId.includes('..') || pluginId.includes('/') || pluginId.includes('\\')) {
+              writeJson(res, 400, { ok: false, error: 'Invalid pluginId' });
+              return;
+            }
+
+            const gameRoot = resolveRegisteredGameRoot(gameId);
+            if (!gameRoot) {
+              writeJson(res, 404, { ok: false, error: 'Unknown game root' });
+              return;
+            }
+
+            const pluginDir = resolve(gameRoot, 'plugins', pluginId);
+
+            if (op === 'list') {
+              // List all JSON files under the plugin directory recursively
+              if (!fsSync.existsSync(pluginDir)) {
+                writeJson(res, 200, { ok: true, files: [] });
+                return;
+              }
+              const files: string[] = [];
+              const walk = (dir: string) => {
+                for (const entry of fsSync.readdirSync(dir, { withFileTypes: true })) {
+                  if (entry.isDirectory()) {
+                    walk(join(dir, entry.name));
+                  } else if (entry.name.endsWith('.json')) {
+                    files.push(relative(pluginDir, join(dir, entry.name)));
+                  }
+                }
+              };
+              walk(pluginDir);
+              writeJson(res, 200, { ok: true, files });
+              return;
+            }
+
+            if (!artifactPath) {
+              writeJson(res, 400, { ok: false, error: 'Missing artifactPath' });
+              return;
+            }
+
+            // Validate artifact path — no traversal
+            const filePath = resolve(pluginDir, artifactPath);
+            const relativePath = relative(pluginDir, filePath);
+            if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+              writeJson(res, 403, { ok: false, error: 'Forbidden artifact path' });
+              return;
+            }
+
+            if (op === 'read') {
+              if (!fsSync.existsSync(filePath)) {
+                writeJson(res, 404, { ok: false, error: 'Artifact not found' });
+                return;
+              }
+              const content = await fs.readFile(filePath, 'utf8');
+              writeJson(res, 200, { ok: true, content });
+              return;
+            }
+
+            if (op === 'write') {
+              const content = typeof body.content === 'string' ? body.content : null;
+              if (!content) {
+                writeJson(res, 400, { ok: false, error: 'Missing content' });
+                return;
+              }
+              await fs.mkdir(dirname(filePath), { recursive: true });
+              await fs.writeFile(filePath, content, 'utf8');
+              writeJson(res, 200, { ok: true });
+              return;
+            }
+
+            if (op === 'delete') {
+              if (fsSync.existsSync(filePath)) {
+                await fs.unlink(filePath);
+              }
+              writeJson(res, 200, { ok: true });
+              return;
+            }
+
+            writeJson(res, 400, { ok: false, error: 'Unknown plugin-artifact op' });
+          } catch (error) {
+            writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
+        });
+
         const readActiveGameSlug = async (): Promise<string> => {
           const selection = await readActiveGameSelection();
           return selection?.slug ?? '';

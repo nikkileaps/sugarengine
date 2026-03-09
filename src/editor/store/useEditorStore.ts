@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import type { EnvironmentAnimationEntry } from '../../engine/shaders';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance' | 'vfx';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance' | 'vfx' | 'sugarlang';
 
 export interface ValidationError {
   type: 'error' | 'warning';

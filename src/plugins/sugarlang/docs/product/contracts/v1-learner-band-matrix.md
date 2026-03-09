@@ -146,8 +146,8 @@ CEFR remains a reporting aid only.
 | --- | --- | --- | --- | --- | --- | --- |
 | `B0` | "I can succeed without typing." | heavily mixed line where a few active target words stay visible inside support-language framing | mixed-language rephrase, pointing, highlight, repeat | chip composition, object selection, single blank | primary | 2-4 |
 | `B1` | "I can fill in a short answer with help." | mixed line with more target-language carry-through and clear grounded referents | mixed-language repair plus guided location or action phrasing | word bank, blank fill, guided assembly | not primary for full-response building | 4-6 |
-| `B2` | "I can type one short idea and still get help." | mostly target-language line with bounded task framing | shorter repair, support-language helper prompt, glossary, repair responses, or insert chips | short constrained text | visible support scaffold | 6-8 |
-| `B3` | "I can handle a short task exchange and ask for clarification." | mostly natural target-language exchange | targeted rephrase, optional simplify, fallback chip composition after failure | short multi-turn text | fallback or on request | 8-10 |
+| `B2` | "I can type one short idea and still get help." | mostly target-language line with bounded task framing | shorter repair, support-language helper prompt, small insert tray on first exposure, `Show me more words` and `Say it more simply` after failure, `{supportLanguage}` paraphrase as final rescue | short constrained text | visible support scaffold | 6-8 |
+| `B3` | "I can handle a short task exchange and ask for clarification." | mostly natural target-language exchange | no visible support on first exposure, then `Show me more words` and `Say it more simply` after failure, `{supportLanguage}` paraphrase as final rescue | short multi-turn text | fallback only after failure | 8-10 |
 | `B4` | "The game treats me like a capable speaker." | naturalistic task dialogue | low-friction clarification and optional support only | open text in a bounded scene | hidden fallback | 8-12 with a smaller focus subset |
 
 ## Detailed Band Contract
@@ -284,8 +284,10 @@ Primary response modes:
 
 Fallback support:
 
-- insert chips for key target-language words or short chunks
-- repair responses
+- a small insert tray for key target-language words or short chunks
+- `Show me more words` to expand the tray after failure
+- `Say it more simply` to rephrase in the target language at a lower expression level
+- `Say it in {supportLanguage}` as the final rescue step
 - stronger prompt framing after failure
 
 Scene authoring rule:
@@ -308,7 +310,7 @@ Primary outcome:
 Support-language posture:
 
 - low by default
-- surfaced on request or after failure
+- surfaced after failure
 
 Grounding posture:
 
@@ -323,9 +325,10 @@ Primary response modes:
 
 Fallback support:
 
-- simplify
-- reveal one glossary or grounding item
-- fallback chip composition after failure
+- no visible support on first exposure
+- `Show me more words` after failure to reveal chunks or chips
+- `Say it more simply` after failure to rephrase at a B2-style level while staying in the target language
+- `Say it in {supportLanguage}` as the final rescue step
 
 Scene authoring rule:
 

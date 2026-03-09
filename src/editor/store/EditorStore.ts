@@ -4,7 +4,7 @@
 
 import { Store } from './Store';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'sugarlang';
 
 export interface EditorState {
   activeTab: EditorTab;

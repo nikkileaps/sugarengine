@@ -172,6 +172,18 @@ function evaluatePhraseAssembly(
 // Text normalization for B2-B4
 // ---------------------------------------------------------------------------
 
+/** Spanish and English articles for morphology-tolerant stripping. */
+const SPANISH_ARTICLES = /\b(el|la|los|las|un|una)\b/g;
+const ENGLISH_ARTICLES = /\b(the|a|an)\b/g;
+
+function stripArticles(s: string): string {
+  return s
+    .replace(SPANISH_ARTICLES, '')
+    .replace(ENGLISH_ARTICLES, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normalizeForIntent(s: string): string {
   return s
     .trim()
@@ -265,12 +277,29 @@ function evaluateTextInput(
     return { correct: false, taskSuccess: false, formAccuracy: 0 };
   }
 
-  const normalized = normalizeForIntent(text);
+  const morphTolerance = turn.evaluation?.morphologyTolerance;
 
-  // Try matching each intent
+  let normalized = normalizeForIntent(text);
+
+  // Article stripping: when acceptMissingArticles is true, strip articles from
+  // both input and keyword targets so "maleta negra" matches "la maleta negra".
+  const shouldStripArticles = morphTolerance?.acceptMissingArticles ?? false;
+  if (shouldStripArticles) {
+    normalized = stripArticles(normalized);
+  }
+
+  // Track whether accent stripping was needed for formAccuracy penalty
+  const normalizedNoAccent = stripAccents(normalized);
+  const inputNeededAccentStripping = normalized !== normalizedNoAccent;
+
+  // Try matching each intent (with article-stripped input if applicable)
   let bestMatch: IntentMatchResult | null = null;
   for (const intent of intents) {
-    const result = matchIntent(normalized, intent);
+    // If stripping articles, also strip from keyword patterns for matching
+    const matchIntent_ = shouldStripArticles
+      ? { ...intent, keywordPatterns: intent.keywordPatterns.map((kw) => stripArticles(kw)) }
+      : intent;
+    const result = matchIntent(normalized, matchIntent_);
     if (result.matched) {
       // Pick best match based on optional slot fill
       if (!bestMatch || result.optionalSlotsFilled > bestMatch.optionalSlotsFilled) {
@@ -283,7 +312,13 @@ function evaluateTextInput(
     // Compute form accuracy as continuous score based on slot coverage
     const totalSlots = bestMatch.requiredSlotsTotal + bestMatch.optionalSlotsTotal;
     const filledSlots = bestMatch.requiredSlotsFilled + bestMatch.optionalSlotsFilled;
-    const formAccuracy = totalSlots > 0 ? filledSlots / totalSlots : 1.0;
+    let formAccuracy = totalSlots > 0 ? filledSlots / totalSlots : 1.0;
+
+    // Accent penalty: if acceptMissingAccents is false and the player dropped accents,
+    // reduce formAccuracy by 0.2 (penalty, not rejection).
+    if (morphTolerance && !morphTolerance.acceptMissingAccents && inputNeededAccentStripping) {
+      formAccuracy = Math.max(0, formAccuracy - 0.2);
+    }
 
     return {
       correct: true,
@@ -297,12 +332,20 @@ function evaluateTextInput(
   for (const intent of intents) {
     // If there are no required slots and the keyword matched but we returned false, re-check
     if (intent.requiredSlots.length === 0) {
-      const hasKeyword = intent.keywordPatterns.some((kw) => containsKeyword(normalized, kw));
+      const checkNormalized = shouldStripArticles ? stripArticles(normalizeForIntent(text)) : normalizeForIntent(text);
+      const hasKeyword = intent.keywordPatterns.some((kw) => {
+        const checkKw = shouldStripArticles ? stripArticles(kw) : kw;
+        return containsKeyword(checkNormalized, checkKw);
+      });
       if (hasKeyword) {
+        let formAccuracy = 0.3;
+        if (morphTolerance && !morphTolerance.acceptMissingAccents && inputNeededAccentStripping) {
+          formAccuracy = Math.max(0, formAccuracy - 0.2);
+        }
         return {
           correct: true,
           taskSuccess: true,
-          formAccuracy: 0.3,
+          formAccuracy,
           matchedAnswer: intent.intentId,
         };
       }
@@ -470,14 +513,12 @@ function generateRecoveryFeedback(turn: SceneTurn, attemptCount: number): string
 /** B2 recovery: show support-language prompt + template choices. */
 function generateShortTextRecovery(turn: SceneTurn, attemptCount: number): string {
   if (attemptCount >= 3) {
-    // Offer template choices (downgrade to constrained)
+    // Offer template choices using human-readable intent labels (not raw keyword stems)
     const intents = turn.evaluation?.intents;
     if (intents && intents.length > 0) {
-      const templates = intents
-        .map((i) => i.keywordPatterns[0])
-        .filter(Boolean);
-      if (templates.length > 0) {
-        return `Try one of these: ${templates.join(' / ')}`;
+      const labels = intents.map((i) => i.label).filter(Boolean);
+      if (labels.length > 0) {
+        return `Try one of these: ${labels.join(' / ')}`;
       }
     }
   }

@@ -242,8 +242,8 @@ The V1 rule is:
 
 - `B0`: chip composition is the primary response mode
 - `B1`: word-bank blank fill and guided assembly become primary
-- `B2`: typing becomes primary, but chips may still appear as visible support scaffolds
-- `B3`: typing is primary; chip scaffolds appear after failure or when the player requests help
+- `B2`: typing becomes primary, a small insert tray may remain visible as support, stronger repair controls should appear after failure, and the final rescue can reveal a support-language paraphrase
+- `B3`: typing is primary; no visible support appears on first exposure, and the staged repair ladder appears only after failure
 - `B4`: chips are hidden by default and only surfaced as explicit fallback support
 
 This preserves the good part of the current MVP while making the progression feel more immersive.
@@ -262,6 +262,29 @@ Typical repair responses include:
 - repair responses such as `No entiendo` or `Señálalo`
 - clarification responses rendered in the target language, such as Spanish-target `¿Qué significa "__" en inglés?`
 - insert chips for key target-language words or short chunks
+
+At typed bands, Sugarlang should distinguish between:
+
+- visible support scaffolds
+  - for example a small insert tray that is part of the initial typed-response surface
+- stronger repair controls
+  - for example `Show me more words`, `Say it more simply`, or a clarification repair response
+
+The stronger repair controls should usually appear only after failure, not as part of the first typed exposure by default.
+
+For `B2`, the preferred repair ladder is:
+
+1. first failure
+   - reveal `Show me more words`
+   - reveal `Say it more simply`
+2. second failure
+   - keep both actions available
+   - strengthen their outputs:
+     - `Show me more words` expands the visible insert tray
+     - `Say it more simply` drops the NPC phrasing toward the next-lower band while staying in the target language
+3. third failure
+   - add `Say it in {supportLanguage}` as the last-resort rescue
+   - this should reveal a support-language paraphrase for that turn, not turn the scene into a permanent subtitle strip
 
 The product should prefer repair that uses:
 
@@ -312,8 +335,8 @@ The creator workflow remains:
 This generation step should be available from:
 
 - the editor UI
-- chat with an AI assistant
-- CLI or automation
+- chat with an external AI assistant
+- direct structured-file editing
 
 All three should target the same Sugarlang files and contracts.
 
@@ -341,7 +364,7 @@ For the initial product:
 
 ## Source of Truth and Storage Model
 
-Sugarlang content should be persisted as human-readable files under the game root.
+Sugarlang content should be persisted as human-readable JSON files under the game root.
 
 The canonical on-disk layout is defined in [ADR-SL-001](../adr/001-english-first-authoring-overlay-and-source-of-truth-model.md).
 
@@ -363,12 +386,21 @@ It should not be the canonical source of authored Sugarlang content.
 
 These use cases assume the following Sugarlang authoring surfaces exist somewhere in the shared authoring system, with the editor acting as one client of that system.
 
+V1 does not require the full suite to exist as dedicated editor panels.
+
+The full integrated suite is post-V1 work and belongs to Phase 6 of the implementation plan.
+
 ### 0. Draft Generation Actions
 
 Purpose:
 
 - generate or regenerate Sugarlang drafts from English-authored content
-- support the same actions from editor, chat, and CLI
+- support the same actions from editor, an external AI assistant, and direct structured-file editing
+
+V1 implementation note:
+
+- the full shared authoring vision does not require all of these surfaces as dedicated editor panels in Phase 4
+- the minimum Phase 4 editor scope is project configuration, artifact-backed preview controls, and artifact inspection/validation
 
 ### 1. Sugarlang Scenario Panel
 

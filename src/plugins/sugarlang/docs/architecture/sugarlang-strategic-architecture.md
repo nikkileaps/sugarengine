@@ -14,7 +14,7 @@ It describes the end state where:
 - `sugarlang` can also augment optional free-form conversation when `sugaragent` is enabled
 - English-authored game content remains the primary creative input
 - the language-learning layer is generated and refined as a separate overlay
-- the same Sugarlang authoring pipeline can be used from the editor, chat, CLI, or automation
+- the same Sugarlang authoring artifacts can be used from the editor, an external AI assistant in chat, or direct structured-file editing
 - engine core remains generic and does not hardcode either plugin
 
 This architecture builds on the product goals in [LANGUAGE_LEARNING_PRODUCT_ROADMAP.md](../research/LANGUAGE_LEARNING_PRODUCT_ROADMAP.md), which is retained as historical product research context. The binding product and delivery contracts now live in the Sugarlang product docs, ADRs, and phased implementation plan.
@@ -37,7 +37,7 @@ This architecture builds on the product goals in [LANGUAGE_LEARNING_PRODUCT_ROAD
 9. English-authored quests and dialogues must remain the primary authoring input for game content.
 10. Sugarlang authored/generated language-learning data must be stored as human-readable files under the game root.
 11. SQLite or other local databases may be used for caches, indexes, replay artifacts, or analytics staging, but not as the source of truth for authored Sugarlang content.
-12. The editor UI must not be the only authoring client; chat- and CLI-driven generation must operate on the same underlying files and contracts.
+12. The editor UI must not be the only authoring workflow; external chat-based AI assistance and direct structured-file editing must operate on the same underlying files and contracts.
 13. Support-language policy and scene-grounding metadata must be first-class authoring and runtime concepts, not ad hoc UI text.
 14. The base game content is authored in English, while runtime language behavior is driven by target language and support language.
 15. Mixed-language initial delivery, repair, and happy-path response frames must be scene-authored/runtime-controlled and must not collapse into always-on translation strips or arbitrary token-spliced UI text.
@@ -191,6 +191,7 @@ That includes:
 - support-language policy selection
 - response-mode shaping
 - initial-delivery, repair, and happy-path response-frame shaping
+- staged repair-control visibility and repair-ladder progression
 - natural mixed-language rendering policy
 - grounding-aware adaptation and hinting
 - adaptive rendering constraints
@@ -214,6 +215,23 @@ Engine-owned UI surfaces should render:
 
 This layer must consume a normalized response contract rather than special-casing one plugin.
 
+At typed bands, the rendering layer must also distinguish between:
+
+- visible support scaffolds that are part of the first-response surface
+- stronger repair controls that are revealed after failure
+
+For `B2`, the expected interaction ladder is:
+
+1. initial typed turn
+   - text box plus a small visible insert tray
+2. first and second failure
+   - reveal `Show me more words`
+   - reveal `Say it more simply`
+3. third failure
+   - add `Say it in {supportLanguage}` as the final rescue
+
+That means repair authoring cannot be modeled as a single always-visible button list. The architecture must support authored repair options plus runtime visibility rules.
+
 ### 6.6 Authoring and Draft Generation Layer
 
 The final architecture must include a first-class authoring layer, not just a runtime layer.
@@ -230,11 +248,11 @@ That layer should support an English-first workflow:
 
 The critical architecture point is that the editor is only one client of this authoring system.
 
-The same draft-generation service and the same on-disk source of truth must be usable from:
+The same artifact model and the same on-disk source of truth must be usable from:
 
 - SugarEngine editor actions
-- chat-based AI assistance
-- CLI or automation tasks
+- chat-based AI assistance operating on workspace files
+- direct structured-file editing
 
 ## 7) Required Engine Architecture for Plugin Composition
 
@@ -563,8 +581,8 @@ The architecture should support multiple authoring clients over the same Sugarla
 Those clients are:
 
 - editor-driven authoring
-- chat-driven AI authoring
-- CLI or automation-driven authoring
+- external chat-driven AI authoring
+- direct structured-file editing
 
 All of them should use the same underlying capabilities:
 

@@ -117,6 +117,14 @@ It should also govern:
 
 The scene model should prefer natural mixed-language helper utterances over arbitrary token substitution.
 
+At typed bands, the support-language policy should also govern a staged repair ladder rather than a flat set of always-visible repair actions.
+
+For `B2`, the preferred contract is:
+
+- first exposure: mostly target-language line plus a small visible insert tray
+- first and second failure: reveal production-help and comprehension-help repairs such as `Show me more words` and `Say it more simply`
+- third failure: add `Say it in {supportLanguage}` as the final rescue for that turn
+
 ### 5. Response Contract as a First-Class Runtime Concept
 
 The response contract should define what kind of answer the player is expected to give.
@@ -147,6 +155,15 @@ Important distinctions from the product contract:
 - `word bank` is a bounded candidate pool used to fill authored blanks or guided frames
 - low-band clarification may be tap-only even when the broader product later supports typed clarification
 - repair responses are not chips
+- typed-band repair controls may be authored for a turn without being visible on first exposure
+- repair visibility is part of the response-contract realization, not just a UI toggle
+
+For the `B2` product specifically:
+
+- a small insert tray is part of the default typed-response surface
+- `Show me more words` increases production support by expanding the insert tray
+- `Say it more simply` lowers the expression complexity while staying in the target language
+- `Say it in {supportLanguage}` is a final rescue and should reveal a support-language paraphrase for that turn
 
 ### 6. Response Contracts Must Be Provider-Neutral
 

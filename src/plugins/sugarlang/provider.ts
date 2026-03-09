@@ -50,6 +50,8 @@ interface ProviderSessionState {
     originalTurn: SceneTurn;
     bandId: LearnerBandId;
   };
+  /** Deferred correction feedback to show on the next turn (for 'delayed' correctionPosture). */
+  deferredCorrection?: string;
 }
 
 function getProviderState(session: ConversationSession): ProviderSessionState | undefined {
@@ -117,19 +119,19 @@ function buildRecoveryTurn(
       };
 
     case 'B2': {
-      // B2: downgrade to multiple_choice with template options
+      // B2: downgrade to multiple_choice with human-readable intent labels
       const intents = turn.evaluation?.intents;
       const choices: string[] = [];
       if (intents) {
         for (const intent of intents) {
-          if (intent.keywordPatterns.length > 0) {
-            choices.push(intent.keywordPatterns[0]!);
-          }
+          choices.push(intent.label);
         }
       }
       if (choices.length === 0) {
         choices.push('sí', 'no');
       }
+      // Include the word bank as a hint in the recovery contract
+      const wordBank = turn.responseData?.wordBank;
       return {
         utterance: evalResult.feedback ?? 'Let me give you some options.',
         speakerId: turn.speakerId,
@@ -138,15 +140,19 @@ function buildRecoveryTurn(
         responseContract: {
           mode: 'multiple_choice',
           choices,
+          wordBank,
+          hintText: wordBank ? `Words you can use: ${wordBank.join(', ')}` : undefined,
         },
       };
     }
 
     case 'B3': {
-      // B3: simplify the NPC line, reveal grounding, downgrade to constrained
+      // B3: after the authored repair ladder is exhausted, keep the learner on
+      // the same scene turn and reveal the full insert bank as a last guided
+      // typing attempt instead of switching to meta UI copy.
       const wordBank = turn.responseData?.wordBank ?? [];
       return {
-        utterance: evalResult.feedback ?? 'Let me make it simpler.',
+        utterance: turn.initialDelivery ?? turn.targetText,
         speakerId: turn.speakerId,
         speakerName: turn.speakerName,
         emotion: 'patient',
@@ -154,7 +160,9 @@ function buildRecoveryTurn(
           mode: 'short_text',
           maxLength: turn.responseData?.maxLength ?? 80,
           wordBank,
-          hintText: 'Use the word bank to help you.',
+          hintText: wordBank.length > 0
+            ? 'Use these words if they help you respond.'
+            : 'Try one short reply.',
         },
       };
     }
@@ -300,6 +308,22 @@ function extractTappableWords(turn: SceneTurn): string[] {
   return words;
 }
 
+function isRepairOptionVisible(
+  attemptCount: number,
+  option: NonNullable<SceneTurn['repairOptions']>[number],
+): boolean {
+  if (option.minAttempt != null && attemptCount < option.minAttempt) return false;
+  if (option.maxAttempt != null && attemptCount > option.maxAttempt) return false;
+  return true;
+}
+
+function getVisibleRepairOptions(
+  attemptCount: number,
+  turn: SceneTurn,
+): NonNullable<SceneTurn['repairOptions']> {
+  return (turn.repairOptions ?? []).filter((option) => isRepairOptionVisible(attemptCount, option));
+}
+
 // ---------------------------------------------------------------------------
 // Provider factory
 // ---------------------------------------------------------------------------
@@ -395,7 +419,39 @@ export function createSugarlangScriptedProvider(
       const { originalTurn, bandId } = state.pendingRecovery;
       state.pendingRecovery = undefined;
 
-      if (bandId === 'B4') {
+      if (bandId === 'B2') {
+        // B2 recovery: player picked an intent label from multiple_choice.
+        // Match by label and accept as taskSuccess.
+        const choiceText = (playerInput.text ?? '').trim();
+        const intents = originalTurn.evaluation?.intents;
+        const matchedIntent = intents?.find(
+          (i) => i.label.toLowerCase() === choiceText.toLowerCase(),
+        );
+        if (matchedIntent) {
+          // Build evidence for the successful recovery
+          const bandUsed = (session.learnerBandOverride ?? 'B0') as LearnerBandId;
+          state.lastTurnEvidence = {
+            turnId: originalTurn.turnId,
+            timestamp: new Date().toISOString(),
+            playerInput: choiceText,
+            responseMode: 'multiple_choice',
+            bandUsed,
+            policyUsed: 'recovery',
+            supportShown: true,
+            supportRequested: true,
+            groundingShown: false,
+            groundingUsed: false,
+            retries: 3,
+            deliveryType: originalTurn.initialDelivery ? 'initialDelivery' : 'targetText',
+            teachingConcepts: originalTurn.teachingConcepts,
+            taskSuccess: true,
+            formAccuracy: 0.3,
+            supportDependence: 1,
+          };
+          console.log(`[SL·P2] B2 recovery → matched intent="${matchedIntent.intentId}" via label`);
+        }
+        // Advance to next turn regardless (fall through below)
+      } else if (bandId === 'B4') {
         const choice = (playerInput.text ?? '').toLowerCase().trim();
 
         if (choice === 'clarify' || choice === 'repeat' || choice === 'simplify') {
@@ -431,10 +487,11 @@ export function createSugarlangScriptedProvider(
     else if (playerInput?.text?.startsWith('repair:') && state.turnCursor > 0) {
       const previousTurn = state.turns[state.turnCursor - 1];
       if (previousTurn?.repairOptions) {
+        const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, previousTurn);
         const parts = playerInput.text.substring(7).split(':');
         const repairId = parts[0]!;
         const prefillWord = parts[1];
-        const repairOpt = previousTurn.repairOptions.find((r) => r.repairId === repairId);
+        const repairOpt = visibleRepairOptions.find((r) => r.repairId === repairId);
         if (repairOpt) {
           // Build the NPC repair reply
           let repairReply = repairOpt.repairReply;
@@ -445,9 +502,9 @@ export function createSugarlangScriptedProvider(
           // If the repair option has a response contract override, use it
           if (repairOpt.responseContractOverride) {
             responseContract.mode = repairOpt.responseContractOverride.mode;
-            if (repairOpt.responseContractOverride.choices) responseContract.choices = repairOpt.responseContractOverride.choices;
-            if (repairOpt.responseContractOverride.wordBank) responseContract.wordBank = repairOpt.responseContractOverride.wordBank;
-            if (repairOpt.responseContractOverride.hintText) responseContract.hintText = repairOpt.responseContractOverride.hintText;
+            if ('choices' in repairOpt.responseContractOverride) responseContract.choices = repairOpt.responseContractOverride.choices;
+            if ('wordBank' in repairOpt.responseContractOverride) responseContract.wordBank = repairOpt.responseContractOverride.wordBank;
+            if ('hintText' in repairOpt.responseContractOverride) responseContract.hintText = repairOpt.responseContractOverride.hintText;
           }
 
           // Build repair-specific evidence record
@@ -502,7 +559,8 @@ export function createSugarlangScriptedProvider(
               targetText: previousTurn.targetText,
               turnId: previousTurn.turnId,
               teachingConcepts: previousTurn.teachingConcepts,
-              repairOptions: previousTurn.repairOptions,
+              repairOptions: visibleRepairOptions,
+              showRepairOptions: visibleRepairOptions.length > 0,
               tappableWords: extractTappableWords(previousTurn),
               repairUsed: repairId,
             },
@@ -521,6 +579,8 @@ export function createSugarlangScriptedProvider(
 
         // Build turn evidence
         const bandUsed = (constraints.learnerBand ?? 'B0') as LearnerBandId;
+        const correctionPosture = (constraints.hardConstraints['correctionPosture'] as string | undefined) ?? 'immediate';
+        const bandId = (constraints.learnerBand ?? 'B0') as LearnerBandId;
         // Resolve the band-variant object ID from grounding scope
         const bandVariantObjectId = constraints.groundingScope?.find(
           (ref) => ref.conceptId === 'object.suitcase',
@@ -549,7 +609,7 @@ export function createSugarlangScriptedProvider(
 
         console.log(
           `[SL·P2] eval → turn=${previousTurn.turnId} correct=${evalResult.correct} formAccuracy=${evalResult.formAccuracy}` +
-          ` taskSuccess=${evalResult.taskSuccess} attempt=${state.attemptCount}`,
+          ` taskSuccess=${evalResult.taskSuccess} attempt=${state.attemptCount} posture=${correctionPosture}`,
         );
         console.log(
           `[SL·P2] evidence → delivery=${state.lastTurnEvidence.deliveryType}` +
@@ -558,39 +618,110 @@ export function createSugarlangScriptedProvider(
           ` groundingRefs=[${(state.lastTurnEvidence.shownGroundingRefs ?? []).join(', ')}]`,
         );
 
-        if (!evalResult.correct && state.attemptCount < 3) {
-          // Retry the same turn with feedback
-          const retryContract = turnToResponseContract(previousTurn);
-          retryContract.hintText = evalResult.feedback ?? retryContract.hintText;
+        // --- Advancement decision: based on taskSuccess, not correct ---
+        // taskSuccess=true means the player communicated the right thing.
+        // correct=false just means form wasn't perfect (e.g. wrong word order).
+        // When taskSuccess=true but correct=false, advance but record lower formAccuracy.
 
-          setProviderState(session, state);
-          return {
-            utterance: evalResult.feedback ?? 'Try again!',
-            speakerId: previousTurn.speakerId,
-            speakerName: previousTurn.speakerName,
-            emotion: 'encouraging',
-            responseContract: retryContract,
-          };
-        }
-
-        // If 3+ failed attempts, apply band-specific recovery then advance
-        if (!evalResult.correct && state.attemptCount >= 3) {
-          const bandId = (constraints.learnerBand ?? 'B0') as LearnerBandId;
-          const recoveryOutput = buildRecoveryTurn(previousTurn, evalResult, bandId);
+        if (evalResult.taskSuccess) {
+          // Player communicated successfully — advance (reset attempt counter)
           state.attemptCount = 0;
-
-          if (recoveryOutput) {
-            // For B4 and B3 recovery with choices, mark pending so next input
-            // is handled as a recovery choice, not evaluated against the turn.
-            if (bandId === 'B4' || (bandId === 'B3' && recoveryOutput.responseContract.mode === 'short_text')) {
-              state.pendingRecovery = { originalTurn: previousTurn, bandId };
-            }
-            setProviderState(session, state);
-            return recoveryOutput;
-          }
+          // Fall through to produce next turn below
+        } else if (correctionPosture === 'none') {
+          // B4: never show correction — always advance on failure
+          state.attemptCount = 0;
+          console.log(`[SL·P2] posture=none → advancing without correction`);
+          // Fall through to produce next turn below
         } else {
-          // Correct — reset attempt counter and advance
-          state.attemptCount = 0;
+          const recoveryThreshold = (bandId === 'B2' || bandId === 'B3') ? 4 : 3;
+
+          if (state.attemptCount >= recoveryThreshold) {
+            // Recovery threshold reached — apply band-specific hard recovery.
+            const recoveryOutput = buildRecoveryTurn(previousTurn, evalResult, bandId);
+            state.attemptCount = 0;
+
+            if (recoveryOutput) {
+              // Mark pending so next input is handled as a recovery choice,
+              // not evaluated against the turn.
+              if (bandId === 'B2' || bandId === 'B4' || (bandId === 'B3' && recoveryOutput.responseContract.mode === 'short_text')) {
+                state.pendingRecovery = { originalTurn: previousTurn, bandId };
+              }
+              setProviderState(session, state);
+              return recoveryOutput;
+            }
+            // null recovery = just advance (fall through)
+          } else if (correctionPosture === 'delayed') {
+            // B2: don't show correction immediately — store it for the next turn
+            state.deferredCorrection = evalResult.feedback ?? 'Check your previous answer.';
+            console.log(`[SL·P2] posture=delayed → deferring correction to next turn`);
+            // Retry the same turn without correction feedback shown
+            const retryContract = turnToResponseContract(previousTurn);
+            // On attempt 2+, restore word bank for B3 scaffold gating
+            if (state.attemptCount >= 2 && previousTurn.responseData?.wordBank) {
+              retryContract.wordBank = previousTurn.responseData.wordBank;
+            }
+
+            const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, previousTurn);
+
+            setProviderState(session, state);
+            return {
+              utterance: previousTurn.initialDelivery ?? previousTurn.targetText,
+              speakerId: previousTurn.speakerId,
+              speakerName: previousTurn.speakerName,
+              emotion: previousTurn.emotion,
+              responseContract: retryContract,
+              diagnostics: {
+                supportText: previousTurn.supportText,
+                targetText: previousTurn.targetText,
+                turnId: previousTurn.turnId,
+                teachingConcepts: previousTurn.teachingConcepts,
+                repairOptions: visibleRepairOptions,
+                showRepairOptions: visibleRepairOptions.length > 0,
+                tappableWords: extractTappableWords(previousTurn),
+              },
+            };
+          } else if (correctionPosture === 'on_request') {
+            // B3: don't auto-correct — re-show the same turn and reveal the
+            // next stage of authored repair options after failure. The typed
+            // surface stays clean until the learner explicitly asks for more
+            // production help via a repair action.
+            const retryContract = turnToResponseContract(previousTurn);
+            // Keep the first-response surface clean; B3 support should be
+            // revealed through authored repair actions, not auto-shown hints.
+            delete retryContract.wordBank;
+
+            const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, previousTurn);
+            setProviderState(session, state);
+            return {
+              utterance: previousTurn.initialDelivery ?? previousTurn.targetText,
+              speakerId: previousTurn.speakerId,
+              speakerName: previousTurn.speakerName,
+              emotion: previousTurn.emotion,
+              responseContract: retryContract,
+              diagnostics: {
+                supportText: previousTurn.supportText,
+                targetText: previousTurn.targetText,
+                turnId: previousTurn.turnId,
+                teachingConcepts: previousTurn.teachingConcepts,
+                repairOptions: visibleRepairOptions,
+                showRepairOptions: visibleRepairOptions.length > 0,
+                tappableWords: extractTappableWords(previousTurn),
+              },
+            };
+          } else {
+            // immediate (B0/B1): current behavior — show feedback and retry immediately
+            const retryContract = turnToResponseContract(previousTurn);
+            retryContract.hintText = evalResult.feedback ?? retryContract.hintText;
+
+            setProviderState(session, state);
+            return {
+              utterance: evalResult.feedback ?? 'Try again!',
+              speakerId: previousTurn.speakerId,
+              speakerName: previousTurn.speakerName,
+              emotion: 'encouraging',
+              responseContract: retryContract,
+            };
+          }
         }
       }
     }
@@ -610,12 +741,30 @@ export function createSugarlangScriptedProvider(
     const currentTurn = state.turns[state.turnCursor]!;
     state.turnCursor++;
     state.attemptCount = 0;
+
+    // Consume any deferred correction from the previous turn (delayed posture)
+    const deferredNote = state.deferredCorrection;
+    state.deferredCorrection = undefined;
+
     setProviderState(session, state);
 
     const responseContract = turnToResponseContract(currentTurn);
 
+    // B3 scaffold gating: strip wordBank from initial turn (shown on retry only)
+    const bandId = (constraints.learnerBand ?? 'B0') as LearnerBandId;
+    if (bandId === 'B3' && responseContract.wordBank) {
+      delete responseContract.wordBank;
+      console.log(`[SL·P2] B3 scaffold gating → wordBank stripped from initial turn ${currentTurn.turnId}`);
+    }
+
     // Render initialDelivery if authored, otherwise fall back to targetText
-    const renderedUtterance = currentTurn.initialDelivery ?? currentTurn.targetText;
+    let renderedUtterance = currentTurn.initialDelivery ?? currentTurn.targetText;
+
+    // Prepend deferred correction note if present (delayed posture from previous turn)
+    if (deferredNote) {
+      renderedUtterance = `[Note: ${deferredNote}] ${renderedUtterance}`;
+      console.log(`[SL·P2] deferred correction shown: "${deferredNote}"`);
+    }
 
     console.log(
       `[SL·P2] turn → id=${currentTurn.turnId} delivery=${currentTurn.initialDelivery ? 'initialDelivery' : 'targetText'}` +
@@ -623,9 +772,11 @@ export function createSugarlangScriptedProvider(
     );
 
     // Extract tappable target-language words for clarification prefill
-    const tappableWords = currentTurn.teachingConcepts.length > 0 && currentTurn.repairOptions?.some((r) => r.type === 'clarification_template')
+    const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, currentTurn);
+    const tappableWords = currentTurn.teachingConcepts.length > 0 && visibleRepairOptions.some((r) => r.type === 'clarification_template')
       ? extractTappableWords(currentTurn)
       : undefined;
+    const showRepairOptions = visibleRepairOptions.length > 0;
 
     return {
       utterance: renderedUtterance,
@@ -643,8 +794,11 @@ export function createSugarlangScriptedProvider(
         turnId: currentTurn.turnId,
         teachingConcepts: currentTurn.teachingConcepts,
         lastTurnEvidence: state.lastTurnEvidence,
-        repairOptions: currentTurn.repairOptions,
+        repairOptions: visibleRepairOptions,
+        showRepairOptions,
         tappableWords,
+        deferredCorrection: deferredNote,
+        correctionPosture: constraints.hardConstraints['correctionPosture'],
       },
     };
   }

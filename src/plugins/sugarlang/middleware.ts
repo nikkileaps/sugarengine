@@ -239,6 +239,8 @@ export function createSugarlangMiddleware(
     if (state.bandPolicy) {
       // Set grounding intensity as a hard constraint.
       constraints.hardConstraints['groundingIntensity'] = state.bandPolicy.groundingIntensity;
+      // Set correction posture as a hard constraint.
+      constraints.hardConstraints['correctionPosture'] = state.bandPolicy.correctionPosture;
       // Set allowed response modes as an advisory preference.
       constraints.advisoryPreferences['allowedResponseModes'] = state.bandPolicy.allowedResponseModes;
       // Set support language visibility.

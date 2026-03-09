@@ -39,6 +39,8 @@ export interface SugarlangTurnView {
   glossaryChips?: GlossaryChipData[];
   /** Authored repair options for this turn. */
   repairOptions?: RepairOptionView[];
+  /** Whether repair controls should be visible right now. */
+  showRepairOptions?: boolean;
   /** Tappable target-language words from the utterance for clarification prefill. */
   tappableWords?: string[];
 }
@@ -143,7 +145,12 @@ export class SugarlangConversationUI {
 
     // NPC utterance — if tappable words exist, render them as interactive spans
     this.utteranceEl.innerHTML = '';
-    if (turn.tappableWords && turn.tappableWords.length > 0 && turn.repairOptions?.some((r) => r.type === 'clarification_template')) {
+    if (
+      turn.showRepairOptions &&
+      turn.tappableWords &&
+      turn.tappableWords.length > 0 &&
+      turn.repairOptions?.some((r) => r.type === 'clarification_template')
+    ) {
       this.renderTappableUtterance(turn.utterance, turn.tappableWords, turn.repairOptions);
     } else {
       this.utteranceEl.textContent = turn.utterance;
@@ -151,7 +158,7 @@ export class SugarlangConversationUI {
 
     // Repair responses — rendered between utterance and response widget
     this.repairArea.innerHTML = '';
-    if (turn.repairOptions && turn.repairOptions.length > 0) {
+    if (turn.showRepairOptions && turn.repairOptions && turn.repairOptions.length > 0) {
       this.renderRepairOptions(turn.repairOptions);
     }
 
