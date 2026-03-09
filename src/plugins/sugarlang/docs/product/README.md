@@ -40,7 +40,11 @@ The same band and contract model must also support the opposite `Spanish support
 
 ## Shared Quest Definition
 
-All five use cases are different learner-facing realizations of the same quest:
+`UC-001` through `UC-005` are different learner-facing realizations of the same quest.
+
+`UC-006` is the writer-facing happy-path for authoring that same quest as a scripted-only Sugarlang lesson/quest inside SugarEngine.
+
+The shared quest is:
 
 - quest name: `Find the Luggage`
 - setting: a train station or port terminal
@@ -328,17 +332,93 @@ Relevant current engine behavior:
 The creator workflow remains:
 
 1. author the game in English using normal SugarEngine tools
-2. ask Sugarlang to generate the learning overlay
-3. review and refine the generated overlay
-4. preview the same scene across learner bands and language pairs
+2. ask Sugarlang to generate a draft directly or generate a bounded draft packet for the selected scene or quest slice
+3. review and refine the generated overlay in SugarEngine or hand that same bounded job to an external workspace assistant such as Codex
+4. preview and validate the same scene across learner bands and language pairs
 
-This generation step should be available from:
+This generation step should be available through one shared artifact model from:
 
 - the editor UI
-- chat with an external AI assistant
+- a generated packet plus task handoff to an external workspace assistant
 - direct structured-file editing
 
 All three should target the same Sugarlang files and contracts.
+
+## Authoring Principle: Stable Referents, Band-Specific Lexical Activation
+
+The writer should not have to choose between:
+
+- a stable quest/world referent
+- and progressive vocabulary teaching
+
+Sugarlang should model those as related but separate things.
+
+The clean authoring model is:
+
+- `world referent`
+  - the actual thing in the quest or scene
+  - suitcase, counter, ribbon, door
+- `semantic concept`
+  - the language-learning concept attached to that thing
+  - `object.suitcase`, `color.red`, `object.counter`
+- `lexical status by band`
+  - whether that concept is:
+  - `active`
+  - `reinforced`
+  - `passive visible`
+  - `deferred`
+
+That means the same suitcase can exist at every band, while the language foregrounded around it changes by band.
+
+For example:
+
+- the suitcase referent may exist in `B0` through `B4`
+- `maleta` may be active in `B0`
+- `roja` may be active in `B0` and reinforced later
+- `mostrador` may stay deferred until `B2` or `B3`
+- `cinta verde` may be introduced only in later bands
+
+So the quest truth stays stable.
+
+The learner-facing vocabulary emphasis changes.
+
+### Quest Lexical Fit
+
+Not every quest beat is equally good for every band.
+
+Sugarlang should therefore help the writer evaluate a scene's `lexical fit` for each band.
+
+The system should extract candidate concepts from the authored quest and score them using inputs such as:
+
+- frequency tier
+- quest centrality
+- visual groundability
+- concreteness
+- reusability in later quests
+- learner-band appropriateness
+
+Frequency matters.
+
+It should not be the only rule.
+
+A quest-central, perfectly groundable word like `maleta` may deserve early introduction even if it is not one of the absolute highest-frequency words in the language overall.
+
+### AI's Role in Authoring
+
+This is exactly where AI should help on the design side.
+
+The AI should:
+
+- read the authored quest and scene
+- extract candidate referents and concepts
+- score them for band suitability
+- draft per-band active/reinforced/passive/deferred concept sets
+- warn when a quest beat is a poor fit for a band
+- propose simplifications, sub-beats, or variant objects when needed
+
+The AI should not just translate lines.
+
+It should help the writer decide what this quest can responsibly teach at each band.
 
 ## Runtime Language Model
 
@@ -395,12 +475,14 @@ The full integrated suite is post-V1 work and belongs to Phase 6 of the implemen
 Purpose:
 
 - generate or regenerate Sugarlang drafts from English-authored content
-- support the same actions from editor, an external AI assistant, and direct structured-file editing
+- support the same actions from editor, an external workspace assistant, and direct structured-file editing
+- generate bounded draft packets and assistant-task handoff text when direct in-editor drafting is not the chosen path
 
 V1 implementation note:
 
 - the full shared authoring vision does not require all of these surfaces as dedicated editor panels in Phase 4
 - the minimum Phase 4 editor scope is project configuration, artifact-backed preview controls, and artifact inspection/validation
+- later phases should let the editor generate a bounded draft packet and copy a task handoff for Codex or another external assistant without forcing the writer to invent the prompt manually
 
 ### 1. Sugarlang Scenario Panel
 
@@ -409,6 +491,7 @@ Purpose:
 - bind the authored scene to a semantic learning scenario
 - declare the communicative task
 - declare scene-supported learner bands
+- review candidate referents and their quest lexical fit
 
 ### 2. Learner Band Matrix
 
@@ -416,6 +499,7 @@ Purpose:
 
 - define how the same scene behaves at `B0` through `B4`
 - declare response posture, repair posture, support-language posture, and success expectations by band
+- declare which concepts are active, reinforced, passive visible, or deferred in each band
 
 ### 3. Repair and Support Policy Editor
 
@@ -440,6 +524,7 @@ Purpose:
 
 - bind concepts to objects, attributes, landmarks, and regions
 - bind repair responses to highlights, pointing, inspect reveals, and camera focus
+- show which grounded concepts are currently active versus backgrounded by band
 
 ### 6. Grounded Quest Binding Editor
 

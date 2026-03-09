@@ -9,6 +9,7 @@ import type {
   ProviderSelectionContext,
   PlayerInput,
 } from './types';
+import { createReplayCollector, type ReplayBundle, type ReplayCollector } from './replay';
 
 // ---------------------------------------------------------------------------
 // Host Context (what the host needs from the Game)
@@ -28,6 +29,8 @@ export interface ConversationHostEventHandlers {
   onSessionStart?: (session: ConversationSession) => void;
   onSessionEnd?: (session: ConversationSession) => void;
   onTurnProduced?: (envelope: ConversationTurnEnvelope) => void;
+  /** Called when a session ends with the complete replay bundle. */
+  onReplayAvailable?: (bundle: ReplayBundle) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,9 +48,14 @@ export interface LanguageContext {
 // ---------------------------------------------------------------------------
 
 let nextSessionId = 1;
+let nextTraceId = 1;
 
 function generateSessionId(): string {
   return `session_${nextSessionId++}_${Date.now()}`;
+}
+
+function generateTraceId(): string {
+  return `trace_${nextTraceId++}_${Date.now()}`;
 }
 
 function generateTurnId(sessionId: string, turnIndex: number): string {
@@ -65,6 +73,7 @@ export class ConversationHost {
   private providers: ConversationProvider[] = [];
   private middlewares: ConversationMiddleware[] = [];
   private activeSession: ConversationSession | null = null;
+  private activeReplayCollector: ReplayCollector | null = null;
   private hostContext: ConversationHostContext;
   private eventHandlers: ConversationHostEventHandlers = {};
   private languageContext: LanguageContext = {};
@@ -128,8 +137,17 @@ export class ConversationHost {
       return null;
     }
 
+    // Enrich selection context with language settings so providers can
+    // pre-resolve band policy during canHandle (e.g. B4 agent_preferred).
+    const enrichedContext: ProviderSelectionContext = {
+      ...selectionContext,
+      targetLanguage: selectionContext.targetLanguage ?? this.languageContext.targetLanguage,
+      supportLanguage: selectionContext.supportLanguage ?? this.languageContext.supportLanguage,
+      learnerBandOverride: selectionContext.learnerBandOverride ?? this.languageContext.learnerBandOverride,
+    };
+
     // Select provider
-    const provider = this.selectProvider(npcId, selectionContext);
+    const provider = this.selectProvider(npcId, enrichedContext);
     if (!provider) {
       console.warn(`[ConversationHost] No provider can handle NPC "${npcId}"`);
       return null;
@@ -138,6 +156,7 @@ export class ConversationHost {
     // Create session
     const session: ConversationSession = {
       sessionId: generateSessionId(),
+      traceId: generateTraceId(),
       npcId,
       npcName,
       providerId: provider.descriptor.id,
@@ -148,8 +167,8 @@ export class ConversationHost {
       middlewareState: {},
     };
 
-    // Start provider session (pass selection context so provider can access dialogueId, etc.)
-    await provider.startSession(session, selectionContext);
+    // Start provider session (pass enriched context so provider can access dialogueId, language, etc.)
+    await provider.startSession(session, enrichedContext);
 
     // Run middleware session-start hooks
     for (const mw of this.middlewares) {
@@ -163,7 +182,15 @@ export class ConversationHost {
     }
 
     this.activeSession = session;
+    this.activeReplayCollector = createReplayCollector(session);
     this.hostContext.addMovementLock('conversation');
+
+    console.log(
+      `[ConversationHost] session started → trace=${session.traceId} provider=${session.providerId}` +
+      ` npc=${npcId} lang=${session.targetLanguage ?? '?'}/${session.supportLanguage ?? '?'}` +
+      ` band=${session.learnerBandOverride ?? 'auto'}`,
+    );
+
     this.eventHandlers.onSessionStart?.(session);
 
     return session;
@@ -226,6 +253,7 @@ export class ConversationHost {
       providerDiagnostics: providerOutput.diagnostics,
       turnEvidence: providerOutput.turnEvidence,
       middlewareAnnotations: {},
+      traceId: session.traceId,
       timestampMs: Date.now(),
     };
 
@@ -241,6 +269,16 @@ export class ConversationHost {
         console.warn(`[ConversationHost] Host action rejected: ${result.error}`);
       }
     }
+
+    // Capture for replay
+    this.activeReplayCollector?.addTurn(envelope);
+
+    console.log(
+      `[ConversationHost] turn ${envelope.turnIndex} → trace=${envelope.traceId}` +
+      ` provider=${envelope.providerId} mode=${envelope.responseContract.mode}` +
+      (envelope.turnEvidence ? ' evidence=yes' : '') +
+      (envelope.middlewareAnnotations['sugarlang'] ? ` sl=${JSON.stringify((envelope.middlewareAnnotations['sugarlang'] as any)?.resolvedBand)}` : ''),
+    );
 
     // Advance turn counter
     session.turnIndex++;
@@ -273,6 +311,17 @@ export class ConversationHost {
     // End provider session
     if (provider) {
       await provider.endSession(session);
+    }
+
+    // Finalize and emit replay bundle
+    if (this.activeReplayCollector) {
+      const replayBundle = this.activeReplayCollector.finalize();
+      this.activeReplayCollector = null;
+      console.log(
+        `[ConversationHost] session ended → trace=${replayBundle.session.traceId}` +
+        ` turns=${replayBundle.turnCount} provider=${replayBundle.session.providerId}`,
+      );
+      this.eventHandlers.onReplayAvailable?.(replayBundle);
     }
 
     this.activeSession = null;

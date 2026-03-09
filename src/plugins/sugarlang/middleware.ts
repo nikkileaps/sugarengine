@@ -30,6 +30,7 @@ import type {
   GroundedQuestBinding,
   LexiconPack,
   ScenarioBrief,
+  SceneBandRealization,
   TurnEvidence,
 } from './types';
 import type { LearnerStateManager } from './learner';
@@ -188,6 +189,19 @@ export function createSugarlangMiddleware(
     }
   }
 
+  function findBandRealization(
+    scenarioId: string,
+    bandId: LearnerBandId,
+    targetLanguage: string,
+  ): SceneBandRealization | undefined {
+    for (const [, pack] of contentBundle.sceneLanguagePacks) {
+      if (pack.scenarioId === scenarioId && pack.targetLanguage === targetLanguage) {
+        return pack.bands.find((b) => b.bandId === bandId);
+      }
+    }
+    return undefined;
+  }
+
   function learnerPolicy(
     session: ConversationSession,
     constraints: ProviderConstraintBundle,
@@ -205,6 +219,18 @@ export function createSugarlangMiddleware(
     constraints.learnerBand = bandId;
     if (policy) {
       constraints.supportLanguagePolicy = policy.supportLanguagePolicy.mixingLevel;
+    }
+
+    // Expose provider policy from the band realization so the adapter and
+    // tests can observe whether this band prefers agent-assisted interaction.
+    const targetLang = session.targetLanguage ?? 'es';
+    const bandRealization = findBandRealization(state.scenarioId, bandId, targetLang);
+    if (bandRealization?.providerPolicy) {
+      constraints.advisoryPreferences['providerPolicy'] = bandRealization.providerPolicy;
+      console.log(
+        `[SL·P5] providerPolicy=${bandRealization.providerPolicy} band=${bandId}` +
+        ` scenario=${state.scenarioId} lang=${targetLang}`,
+      );
     }
   }
 

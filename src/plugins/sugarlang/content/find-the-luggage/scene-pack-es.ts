@@ -689,6 +689,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
     // -----------------------------------------------------------------------
     {
       bandId: 'B4',
+      providerPolicy: 'agent_preferred',
       turns: [
         {
           turnId: 'b4-es-01',

@@ -52,6 +52,37 @@ export interface PluginAgentProfile {
   relatedLoreScopes?: string[];
 }
 
+/**
+ * Pedagogy context forwarded from engine-mediated middleware (e.g. Sugarlang)
+ * into agent turns. Allows the agent to respect learner-band behavior,
+ * support-language policy, and grounding without direct plugin-to-plugin coupling.
+ */
+export interface PluginPedagogyContext {
+  learnerBand?: string;
+  supportLanguagePolicy?: string;
+  targetLanguage?: string;
+  supportLanguage?: string;
+  communicativeTask?: string;
+  correctionPosture?: string;
+  /** Response contract the provider should aim to satisfy. */
+  responseContract?: {
+    mode: string;
+    choices?: string[];
+    wordBank?: string[];
+    maxLength?: number;
+    hintText?: string;
+  };
+  /** Grounding references available for this turn. */
+  groundingScope?: Array<{
+    conceptId: string;
+    targetForm: string;
+    worldObjectId?: string;
+    worldAttribute?: string;
+  }>;
+  /** Scene semantics from the active scenario. */
+  sceneSemantics?: Record<string, unknown>;
+}
+
 export interface PluginAgentContext {
   gameId?: string;
   regionPath?: string;
@@ -67,6 +98,8 @@ export interface PluginAgentContext {
     trackedTopicCount?: number;
     exhausted?: boolean;
   };
+  /** Pedagogy context from engine-mediated middleware (e.g. Sugarlang). */
+  pedagogyContext?: PluginPedagogyContext;
 }
 
 export type PluginAgentConversationMode = 'character' | 'narrative' | 'hybrid' | 'unknown';

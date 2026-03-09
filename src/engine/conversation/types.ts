@@ -6,6 +6,8 @@ import type { PluginIntent } from '../plugins/types';
 
 export interface ConversationSession {
   sessionId: string;
+  /** Stable trace ID shared by all turns in this session. */
+  traceId: string;
   npcId: string;
   npcName?: string;
   providerId: string;
@@ -228,6 +230,8 @@ export interface ProviderSelectionContext {
   npcInteractionMode: 'scripted' | 'agent' | 'hybrid';
   targetLanguage?: string;
   supportLanguage?: string;
+  /** Learner band override, used by providers to pre-resolve band policy. */
+  learnerBandOverride?: string;
   /** Pre-resolved dialogue ID for scripted providers. */
   dialogueId?: string;
   /** NPC display name (for name-based provider matching). */

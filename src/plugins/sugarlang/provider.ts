@@ -350,8 +350,26 @@ export function createSugarlangScriptedProvider(
     // Only handle when there's NO pre-resolved dialogueId (quest/BT/default dialogues
     // go to ScriptedDialogueProvider instead).
     if (context.dialogueId) return false;
-    // Handle when the NPC has a sugarlang scenario (by id or name).
-    return !!config.getScenarioForNpc(npcId, context.npcName);
+    // Must have a sugarlang scenario for this NPC.
+    const scenarioId = config.getScenarioForNpc(npcId, context.npcName);
+    if (!scenarioId) return false;
+
+    // If the NPC supports agent mode and the active band prefers agent interaction,
+    // decline so SugarAgentProviderAdapter can handle it instead.
+    if (context.npcInteractionMode === 'agent' || context.npcInteractionMode === 'hybrid') {
+      const bandId = (context.learnerBandOverride ?? 'B0') as LearnerBandId;
+      const targetLang = context.targetLanguage ?? 'es';
+      const bandContent = resolveSceneBandContent(contentBundle, scenarioId, targetLang, bandId);
+      if (bandContent?.providerPolicy === 'agent_preferred') {
+        console.log(
+          `[SL·provider] declining NPC "${npcId}" — band=${bandId} providerPolicy=agent_preferred` +
+          ` mode=${context.npcInteractionMode}, deferring to SugarAgent`,
+        );
+        return false;
+      }
+    }
+
+    return true;
   }
 
   async function startSession(

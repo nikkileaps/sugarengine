@@ -226,6 +226,13 @@ export interface SceneTurn {
 export interface SceneBandRealization {
   bandId: LearnerBandId;
   turns: SceneTurn[];
+  /**
+   * Provider policy for this band realization.
+   * - 'scripted': always use scripted provider (default)
+   * - 'agent_preferred': prefer SugarAgent when available, fall back to scripted
+   * - 'agent_only': require SugarAgent (skip this band if unavailable)
+   */
+  providerPolicy?: 'scripted' | 'agent_preferred' | 'agent_only';
 }
 
 /** Scene language pack for one scenario + target language. */

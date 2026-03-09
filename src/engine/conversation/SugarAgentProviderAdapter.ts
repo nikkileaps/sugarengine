@@ -1,4 +1,5 @@
 import type { PluginManager } from '../plugins/PluginManager';
+import type { PluginPedagogyContext } from '../plugins/types';
 import type {
   ConversationProvider,
   ConversationProviderDescriptor,
@@ -67,6 +68,45 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
   ): Promise<ProviderTurnOutput> {
     const message = playerInput?.text ?? '';
 
+    // Bridge engine-mediated pedagogy constraints into the agent turn request
+    const pedagogyContext: PluginPedagogyContext | undefined =
+      (constraints.learnerBand || constraints.supportLanguagePolicy || constraints.groundingScope)
+        ? {
+            learnerBand: constraints.learnerBand,
+            supportLanguagePolicy: constraints.supportLanguagePolicy,
+            targetLanguage: constraints.targetLanguage,
+            supportLanguage: constraints.supportLanguage,
+            communicativeTask: constraints.communicativeTask,
+            correctionPosture: constraints.hardConstraints['correctionPosture'] as string | undefined,
+            responseContract: constraints.responseContract
+              ? {
+                  mode: constraints.responseContract.mode,
+                  choices: constraints.responseContract.choices,
+                  wordBank: constraints.responseContract.wordBank,
+                  maxLength: constraints.responseContract.maxLength,
+                  hintText: constraints.responseContract.hintText,
+                }
+              : undefined,
+            groundingScope: constraints.groundingScope?.map((ref) => ({
+              conceptId: ref.conceptId,
+              targetForm: ref.targetForm,
+              worldObjectId: ref.worldObjectId,
+              worldAttribute: ref.worldAttribute,
+            })),
+            sceneSemantics: constraints.sceneSemantics,
+          }
+        : undefined;
+
+    if (pedagogyContext) {
+      console.log(
+        `[SugarAgentAdapter] pedagogy bridged → band=${pedagogyContext.learnerBand}` +
+        ` policy=${pedagogyContext.supportLanguagePolicy}` +
+        ` posture=${pedagogyContext.correctionPosture ?? 'none'}` +
+        ` grounding=${pedagogyContext.groundingScope?.length ?? 0} refs` +
+        ` task=${pedagogyContext.communicativeTask ?? '?'}`,
+      );
+    }
+
     const result = await this.pluginManager.runAgentTurn({
       npcId: session.npcId,
       npcName: session.npcName,
@@ -79,6 +119,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
         interactionPolicy: this.adapterContext.getNpcInteractionPolicy(session.npcId),
         questSnapshot: this.adapterContext.buildQuestSnapshot(),
         flagSnapshot: this.adapterContext.serializeFlags(),
+        pedagogyContext,
       },
     });
 

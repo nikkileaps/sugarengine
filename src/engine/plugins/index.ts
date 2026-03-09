@@ -18,6 +18,7 @@ export type {
   PluginAgentBeatContract,
   PluginAgentBeatEvidence,
   PluginAgentContext,
+  PluginPedagogyContext,
   PluginAgentConversationMode,
   PluginAgentInitiativeAction,
   PluginAgentValidationDecision,
