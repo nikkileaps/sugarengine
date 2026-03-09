@@ -5,7 +5,7 @@
  * migrated here from the legacy vanilla EditorApp over time.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
@@ -39,7 +39,7 @@ import {
   type EditorProjectDocument,
 } from './game-root/project-document';
 
-const TABS: { value: EditorTab; label: string; icon: string }[] = [
+const BASE_TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'dialogues', label: 'Dialogues', icon: '💬' },
   { value: 'quests', label: 'Quests', icon: '📜' },
   { value: 'npcs', label: 'NPCs', icon: '👤' },
@@ -50,7 +50,10 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'player', label: 'Player', icon: '🧙' },
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
-  { value: 'sugarlang', label: 'Sugarlang', icon: '🌍' },
+];
+
+const PLUGIN_TABS: { value: EditorTab; label: string; icon: string; pluginId: string }[] = [
+  { value: 'sugarlang', label: 'Sugarlang', icon: '🌍', pluginId: 'sugarlang' },
 ];
 
 const AVAILABLE_PLUGINS = [
@@ -215,6 +218,11 @@ export function Editor() {
   const setEpisodes = useEditorStore((s) => s.setEpisodes);
   const plugins = useEditorStore((s) => s.plugins);
   const setPlugins = useEditorStore((s) => s.setPlugins);
+  const enabledPluginIds = useMemo(() => new Set(plugins.filter((p) => p.enabled !== false).map((p) => p.id)), [plugins]);
+  const tabs = useMemo(() => [
+    ...BASE_TABS,
+    ...PLUGIN_TABS.filter((t) => enabledPluginIds.has(t.pluginId)),
+  ], [enabledPluginIds]);
   const regions = useEditorStore((s) => s.regions);
   const setRegions = useEditorStore((s) => s.setRegions);
   const playerCaster = useEditorStore((s) => s.playerCaster);
@@ -424,11 +432,9 @@ export function Editor() {
   const handlePreview = () => {
     if (!previewManagerRef.current) return;
 
-    // Build sugarlang preview config from project plugins
-    const sugarlangPlugin = plugins.find((p) => p.id === 'sugarlang');
-    const sugarlangConfig = sugarlangPlugin?.enabled !== false && sugarlangPlugin
-      ? { enabled: true }
-      : sugarlangPlugin ? false : true; // Default to demo if no explicit plugin config
+    // Only include sugarlang in preview when the plugin is explicitly enabled
+    const sugarlangEnabled = enabledPluginIds.has('sugarlang');
+    const sugarlangConfig = sugarlangEnabled ? { enabled: true } : undefined;
 
     const projectData: PreviewProjectData = {
       version: 1,
@@ -1032,6 +1038,7 @@ export function Editor() {
                                         onNewGame={openNewGameDialog}
                                         onOpenGame={openOpenGameDialog}
                                         onSaveGame={handleSaveGame}
+                                        onExportJson={handlePublish}
                                         onManagePlugins={() => setPluginsDialogOpen(true)}
                                         projectLoaded={projectLoaded}
                                       />
@@ -1091,7 +1098,7 @@ export function Editor() {
                                         }}
                                       >
                                         <Tabs.List>
-                                          {TABS.map((tab) => (
+                                          {tabs.map((tab) => (
                                             <Tabs.Tab key={tab.value} value={tab.value}>
                                               <Group gap={6}>
                                                 <span>{tab.icon}</span>
@@ -1122,22 +1129,7 @@ export function Editor() {
                                         ▶ Preview
                                       </Button>
 
-                                      {/* Export game.json snapshot button */}
-                                      <Button
-                                        variant="subtle"
-                                        disabled={!isEditorEnabled}
-                                        onClick={handlePublish}
-                                        styles={{
-                                          root: {
-                                            background: '#cba6f722',
-                                            color: '#cba6f7',
-                                            '&:hover': { background: '#cba6f744' },
-                                            '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
-                                          },
-                                        }}
-                                      >
-                                        🚀 Export JSON
-                                      </Button>
+
                                     </Group>
                                   </AppShell.Header>
 
