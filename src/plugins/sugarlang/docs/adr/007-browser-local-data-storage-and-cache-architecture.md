@@ -49,6 +49,14 @@ This ADR follows ADR-SL-001:
 - authored scenario and language overlay files are canonical
 - local DBs are derived or operational
 
+At the logical level, any operational indexes or caches should key data by the shared Sugarlang domain model:
+
+- `questId`
+- `scenarioId`
+- `interactionId`
+- `turnId`
+- `lexicalEntryId`
+
 This distinction is critical for portability and source control.
 
 ### 2. Use the Right Store for the Right Class of Data

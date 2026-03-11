@@ -19,6 +19,7 @@ import {
   Select,
   Switch,
 } from '@mantine/core';
+import { CompactIdDisplay } from '../../components';
 import {
   QuestEntry,
   QuestStage,
@@ -574,9 +575,7 @@ export function QuestDetail({
                 <Badge size="sm" variant="light" color="blue">
                   {quest.stages.length} stages
                 </Badge>
-                <Text size="xs" c="dimmed" ff="monospace">
-                  {quest.id.slice(0, 8)}
-                </Text>
+                <CompactIdDisplay value={quest.id} />
               </Group>
             </Stack>
           </Group>

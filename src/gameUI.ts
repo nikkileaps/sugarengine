@@ -40,8 +40,10 @@ import {
   ResonanceGameUI,
   ControlsHint,
   AgentConversationUI,
-  SugarlangConversationUI,
+  SupportStrip,
+  ResponseModeUI,
 } from './engine';
+import type { DialogueNode, DialogueNext, ConversationTurnEnvelope } from './engine';
 
 export function setupGameUI(game: Game, container: HTMLElement) {
   // ========================================
@@ -56,23 +58,123 @@ export function setupGameUI(game: Game, container: HTMLElement) {
   const itemViewUI = new ItemViewUI(container);
   const spellMenuUI = new SpellMenuUI(container, game.caster);
   const agentConversationUI = new AgentConversationUI(container);
-  const sugarlangUI = new SugarlangConversationUI(container);
   new CasterHUD(container, game.caster);
   const resonanceGameUI = new ResonanceGameUI(container);
   const controlsHint = new ControlsHint(container);
   controlsHint.hide(); // Hidden until gameplay starts
 
+  // Sugarlang sessions use the engine-owned dialogue presenter with enrichment
+  const dialoguePresenter = game.getDialoguePresenter();
+  const slEnrichment = dialoguePresenter.getEnrichmentContainer();
+  const slSupportStrip = new SupportStrip(slEnrichment);
+
+  /**
+   * Build a synthetic DialogueNode from a sugarlang ConversationTurnEnvelope
+   * and show it through the standard dialogue presenter.
+   *
+   * Standard response modes (multiple_choice, free_form) use the presenter's
+   * built-in choices/continue. Exotic modes (chip_composition, word_bank, etc.)
+   * mount a ResponseModeUI into the presenter's actions container.
+   */
+  function handleSugarlangTurn(envelope: ConversationTurnEnvelope): void {
+    if (!envelope.utterance) return;
+
+    // Trigger world-object highlights from grounding metadata.
+    if (envelope.groundingMetadata?.references) {
+      for (const ref of envelope.groundingMetadata.references) {
+        if (ref.worldObjectId && ref.highlightAction) {
+          console.log(
+            `[Sugarlang Grounding] ${ref.highlightAction}: ${ref.worldObjectId}` +
+            `${ref.lexicalEntryId ? ` (entry: ${ref.lexicalEntryId}, form: "${ref.targetForm}")` : ''}`,
+          );
+        }
+      }
+    }
+
+    // Extract support text from middleware annotations and provider diagnostics.
+    const slAnnotations = envelope.middlewareAnnotations['sugarlang'] as
+      | { supportText?: string; showSupportStrip?: boolean }
+      | undefined;
+    const diagnostics = envelope.providerDiagnostics as
+      | { supportText?: string }
+      | undefined;
+    const supportText = slAnnotations?.supportText ?? diagnostics?.supportText;
+
+    // Update enrichment: support strip
+    const showStrip = slAnnotations ? (slAnnotations.showSupportStrip ?? true) : true;
+    if (showStrip && supportText) {
+      slSupportStrip.show(supportText);
+    } else {
+      slSupportStrip.hide();
+    }
+
+    const { responseContract } = envelope;
+    const isExoticMode = responseContract.mode !== 'multiple_choice'
+      && responseContract.mode !== 'free_form';
+
+    if (isExoticMode) {
+      // Exotic response mode (chip_composition, word_bank, short_text, etc.)
+      // Show the speaker label in the active zone with the ResponseModeUI
+      // widget — don't reveal the full text (that's the exercise answer).
+      const speakerName = envelope.speakerName ?? envelope.speakerId ?? '';
+
+      dialoguePresenter.showActiveWidget(speakerName, (container) => {
+        const responseModeUI = new ResponseModeUI(container);
+        responseModeUI.setOnSubmit((result) => {
+          // Finalize the active widget with the composed text, graduating
+          // it to history so the conversation log looks natural.
+          dialoguePresenter.finalizeActiveWidget(result.text ?? '');
+          responseModeUI.dispose();
+          void game.submitSugarlangTurn({
+            text: result.text ?? '',
+            choiceIndex: result.choiceIndex,
+          });
+        });
+        responseModeUI.show(responseContract);
+      });
+      return;
+    }
+
+    // Standard response modes: build synthetic DialogueNode.
+    const next: DialogueNext[] = [];
+
+    if (responseContract.mode === 'multiple_choice' && responseContract.choices) {
+      for (let i = 0; i < responseContract.choices.length; i++) {
+        next.push({ nodeId: String(i), text: responseContract.choices[i] });
+      }
+    } else {
+      // Linear advance (E to continue)
+      next.push({ nodeId: 'advance' });
+    }
+
+    const node: DialogueNode = {
+      id: envelope.turnId,
+      speaker: envelope.speakerName ?? envelope.speakerId,
+      text: envelope.utterance,
+      next,
+    };
+
+    dialoguePresenter.showNode(
+      node,
+      (selected?: DialogueNext) => {
+        if (selected && responseContract.mode === 'multiple_choice') {
+          const choiceIndex = parseInt(selected.nodeId, 10);
+          void game.submitSugarlangTurn({
+            choiceIndex,
+            text: selected.text ?? '',
+          });
+        } else {
+          void game.submitSugarlangTurn({ text: '' });
+        }
+      },
+      () => {
+        game.closeSugarlangConversation();
+      },
+    );
+  }
+
   agentConversationUI.setOnSubmit((message) => game.submitAgentConversationTurn(message));
   agentConversationUI.setOnClose(() => game.closeAgentConversation());
-
-  sugarlangUI.setOnSubmit((input) => {
-    void game.submitSugarlangTurn(input);
-  });
-  sugarlangUI.setOnClose(() => game.closeSugarlangConversation());
-  sugarlangUI.setOnRepair((repairId, prefillWord) => {
-    // Repair responses are submitted as special text input with a repair: prefix
-    void game.submitSugarlangTurn({ text: `repair:${repairId}${prefillWord ? `:${prefillWord}` : ''}` });
-  });
   const isPreviewRuntime = window.location.pathname.includes('preview.html');
   if (isPreviewRuntime) {
     agentConversationUI.setOnReset(async (session) => {
@@ -125,76 +227,17 @@ export function setupGameUI(game: Game, container: HTMLElement) {
       agentConversationUI.hide();
     },
     onSugarlangSessionStart: () => {
-      sugarlangUI.show();
+      dialoguePresenter.echoPlayerChoice = false;
+      dialoguePresenter.clearHistory();
+      dialoguePresenter.show();
     },
     onSugarlangSessionEnd: () => {
-      sugarlangUI.hide();
+      slSupportStrip.hide();
+      dialoguePresenter.hide();
+      dialoguePresenter.echoPlayerChoice = true;
     },
     onSugarlangTurnProduced: (envelope) => {
-      // If utterance is empty, the scene is done (close intent already fired).
-      if (!envelope.utterance) return;
-
-      // Trigger world-object highlights from grounding metadata.
-      if (envelope.groundingMetadata?.references) {
-        for (const ref of envelope.groundingMetadata.references) {
-          if (ref.worldObjectId && ref.highlightAction) {
-            // TODO: Wire to engine highlight API when visual system exists.
-            console.log(
-              `[Sugarlang Grounding] ${ref.highlightAction}: ${ref.worldObjectId}` +
-              `${ref.conceptId ? ` (concept: ${ref.conceptId}, form: "${ref.targetForm}")` : ''}`,
-            );
-          }
-        }
-      }
-
-      // Extract support text and band policy from middleware annotations.
-      const slAnnotations = envelope.middlewareAnnotations['sugarlang'] as
-        | {
-            supportText?: string;
-            resolvedBand?: string;
-            showSupportStrip?: boolean;
-            showGlosses?: boolean;
-            teachingConcepts?: string[];
-          }
-        | undefined;
-
-      // Extract repair options and tappable words from provider diagnostics.
-      const diagnostics = envelope.providerDiagnostics as
-        | {
-            supportText?: string;
-            repairOptions?: Array<{
-              repairId: string;
-              label: string;
-              type: 'fixed' | 'clarification_template';
-            }>;
-            showRepairOptions?: boolean;
-            tappableWords?: string[];
-          }
-        | undefined;
-
-      // Use supportText from annotations first, then from diagnostics
-      const supportText = slAnnotations?.supportText ?? diagnostics?.supportText;
-
-      sugarlangUI.showTurn({
-        utterance: envelope.utterance,
-        speakerName: envelope.speakerName,
-        emotion: envelope.emotion,
-        supportText,
-        responseContract: envelope.responseContract,
-        bandPolicy: slAnnotations?.resolvedBand
-          ? {
-              showSupportStrip: slAnnotations.showSupportStrip ?? true,
-              showGlosses: slAnnotations.showGlosses ?? false,
-              bandId: slAnnotations.resolvedBand,
-            }
-          : undefined,
-        // Glossary chips require real lexicon translations — not yet wired.
-        glossaryChips: undefined,
-        repairOptions: diagnostics?.repairOptions,
-        showRepairOptions: diagnostics?.showRepairOptions
-          ?? ((diagnostics?.repairOptions?.length ?? 0) > 0),
-        tappableWords: diagnostics?.tappableWords,
-      });
+      handleSugarlangTurn(envelope);
     },
   });
 
@@ -256,7 +299,6 @@ export function setupGameUI(game: Game, container: HTMLElement) {
     giftUI.isVisible() ||
     spellMenuUI.isVisible() ||
     agentConversationUI.isVisible() ||
-    sugarlangUI.isVisible() ||
     resonanceGameUI.isActive();
 
   let nearbyPickupId: string | null = null;

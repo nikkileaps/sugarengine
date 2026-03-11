@@ -11,7 +11,7 @@ They do not replace the multidimensional learner model.
 Instead:
 
 - runtime learner state remains multidimensional
-- placement and adaptation map that state into one of these scene-facing bands
+- placement and adaptation map that state into one of these interaction-facing bands
 - authoring, preview, QA, and AI generation use these bands as the stable contract
 
 ## Scope
@@ -68,7 +68,7 @@ Scenes should distinguish between:
 - initial delivery
   - how the NPC speaks before the learner asks for help or fails
 - repair delivery
-  - how the scene responds when the learner needs help
+  - how the interaction responds when the learner needs help
 
 V1 should prefer:
 
@@ -106,16 +106,20 @@ What changes is their role:
 
 ### 4. Vocabulary Load Has Two Counts
 
-Each scene should think about vocabulary in two buckets:
+Each interaction should think about vocabulary in two buckets:
 
 - `focus items`
-  - new or heavily reinforced items the scene is actively teaching
-- `recycled items`
+  - new or heavily reinforced items the interaction is actively teaching
+- `reinforcement items`
   - previously introduced items that reappear for retrieval and fluency
 
 The per-band budgets below refer to `focus items`.
 
-Recycled items should still appear, especially for retrieval, but should not overload the scene.
+Reinforcement items should still appear, especially for retrieval, but should not overload the interaction.
+
+These interaction-level `focus` and `reinforcement` budgets are not the same thing as the cumulative lexicon size for the learner's placed band.
+
+See [V1 Cumulative Banded Lexicon Contract](./v1-cumulative-banded-lexicon-contract.md) for the full tracked pool counts (`B0=60`, `B1=150`, `B2=300`, `B3=550`, `B4=850`).
 
 ### 5. Quest Progression Should Favor Communicative Success
 
@@ -148,7 +152,7 @@ CEFR remains a reporting aid only.
 | `B1` | "I can fill in a short answer with help." | mixed line with more target-language carry-through and clear grounded referents | mixed-language repair plus guided location or action phrasing | word bank, blank fill, guided assembly | not primary for full-response building | 4-6 |
 | `B2` | "I can type one short idea and still get help." | mostly target-language line with bounded task framing | shorter repair, support-language helper prompt, small insert tray on first exposure, `Show me more words` and `Say it more simply` after failure, `{supportLanguage}` paraphrase as final rescue | short constrained text | visible support scaffold | 6-8 |
 | `B3` | "I can handle a short task exchange and ask for clarification." | mostly natural target-language exchange | no visible support on first exposure, then `Show me more words` and `Say it more simply` after failure, `{supportLanguage}` paraphrase as final rescue | short multi-turn text | fallback only after failure | 8-10 |
-| `B4` | "The game treats me like a capable speaker." | naturalistic task dialogue | low-friction clarification and optional support only | open text in a bounded scene | hidden fallback | 8-12 with a smaller focus subset |
+| `B4` | "The game treats me like a capable speaker." | naturalistic task dialogue | low-friction clarification and optional support only | open text in a bounded interaction | hidden fallback | 8-12 with a smaller focus subset |
 
 ## Detailed Band Contract
 
@@ -197,7 +201,7 @@ Fallback support:
 Scene authoring rule:
 
 - 2-4 focus items
-- 1-3 recycled items maximum
+- 1-3 reinforcement items maximum
 
 ### `B1 Guided Response`
 
@@ -234,8 +238,8 @@ Primary response modes:
 Word-bank rule:
 
 - the learner fills one or more authored blanks from a bounded candidate pool
-- the pool may include a small number of plausible scene-grounded distractors
-- distractors should come from visible alternatives in the scene, not random unrelated vocabulary
+- the pool may include a small number of plausible interaction-grounded distractors
+- distractors should come from visible alternatives in the interaction, not random unrelated vocabulary
 
 Fallback support:
 
@@ -247,7 +251,7 @@ Fallback support:
 Scene authoring rule:
 
 - 4-6 focus items
-- 2-4 recycled items
+- 2-4 reinforcement items
 - start with one or two blanks in early `B1`
 - allow more blanks only as the learner is still succeeding comfortably
 
@@ -293,7 +297,7 @@ Fallback support:
 Scene authoring rule:
 
 - 6-8 focus items
-- 3-5 recycled items
+- 3-5 reinforcement items
 
 ### `B3 Independent Task Dialogue`
 
@@ -333,7 +337,7 @@ Fallback support:
 Scene authoring rule:
 
 - 8-10 focus items
-- 3-6 recycled items
+- 3-6 reinforcement items
 
 ### `B4 Natural Interaction`
 
@@ -400,7 +404,7 @@ Band-specific expectation:
 
 ## Product Rule for Response Progression
 
-The same scene should feel like a different interaction across bands.
+The same interaction should feel different across bands while still serving the same quest beat.
 
 The intended progression is:
 

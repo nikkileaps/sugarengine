@@ -24,6 +24,23 @@ interface ProjectMessage {
 }
 
 let gameInstance: Game | null = null;
+let slControlsInstance: SugarlangPreviewControls | null = null;
+
+function extractSugarlangLanguages(projectData: unknown): string[] {
+  if (!projectData || typeof projectData !== 'object') return [];
+  const slConfig = (projectData as Record<string, unknown>).sugarlang;
+  if (!slConfig || typeof slConfig !== 'object') return [];
+  const config = slConfig as { artifacts?: Record<string, string>; disabledLanguages?: string[] };
+  const artifacts = config.artifacts;
+  if (!artifacts) return [];
+  const disabled = new Set(config.disabledLanguages ?? []);
+  // Lexicon paths are like "languages/es/lexicon.json"
+  return Object.keys(artifacts)
+    .filter((key) => key.match(/^languages\/[a-z]+\/lexicon\.json$/))
+    .map((key) => key.split('/')[1]!)
+    .filter((lang) => !disabled.has(lang))
+    .sort();
+}
 
 async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
@@ -131,6 +148,14 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   // Sugarlang preview controls
   const slControls = new SugarlangPreviewControls(container);
+  slControlsInstance = slControls;
+
+  // Extract installed languages from project artifacts (lexicon-XX.json keys)
+  const slLangs = extractSugarlangLanguages(projectData);
+  if (slLangs.length > 0) {
+    slControls.setLanguages(slLangs);
+  }
+
   slControls.setOnChange((config) => {
     game.setSugarlangContext(config.targetLanguage, config.supportLanguage, config.bandOverride);
   });
@@ -203,6 +228,14 @@ if (isFromEditor) {
 
       if (gameInstance) {
         gameInstance.updateProjectData(event.data.project);
+      }
+
+      // Refresh preview controls with updated languages
+      if (slControlsInstance) {
+        const langs = extractSugarlangLanguages(event.data.project);
+        if (langs.length > 0) {
+          slControlsInstance.setLanguages(langs);
+        }
       }
     }
   });

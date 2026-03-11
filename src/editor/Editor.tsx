@@ -5,7 +5,7 @@
  * migrated here from the legacy vanilla EditorApp over time.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
@@ -32,6 +32,7 @@ import { PreviewManager } from './PreviewManager';
 import type { ProjectData as PreviewProjectData } from './PreviewManager';
 import type { PluginConfigData } from './store/useEditorStore';
 import { createGame, openGame, pickGameProjectFile, pickGameRootDirectory, saveGame } from './game-root/service';
+import { loadAllSugarlangArtifacts } from './game-root/plugin-artifacts';
 import {
   buildPreviewProjectDocument,
   buildProjectDocumentFromSnapshot,
@@ -270,6 +271,7 @@ export function Editor() {
   const [gameLifecycleBusy, setGameLifecycleBusy] = useState(false);
   const [gameLifecycleError, setGameLifecycleError] = useState<string | null>(null);
   const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
+  const [sugarAgentSettingsOpen, setSugarAgentSettingsOpen] = useState(false);
   const [resettingSugarAgentRuntime, setResettingSugarAgentRuntime] = useState(false);
   const [resettingSugarAgentSessions, setResettingSugarAgentSessions] = useState(false);
   const [reingestingSugarAgentLore, setReingestingSugarAgentLore] = useState(false);
@@ -279,6 +281,9 @@ export function Editor() {
   } | null>(null);
 
   const [saveFlashVisible, setSaveFlashVisible] = useState(false);
+  const [sugarlangDirty, setSugarlangDirty] = useState(false);
+  const sugarlangSaveHandlerRef = useRef<(() => Promise<void>) | null>(null);
+  const sugarlangOpenSettingsHandlerRef = useRef<(() => void) | null>(null);
 
   // Auto-hide the save flash after a short delay.
   useEffect(() => {
@@ -394,6 +399,7 @@ export function Editor() {
       projectVersion: project.meta.version,
       defaultEpisodeId: project.defaultEpisode ?? resolvedEpisodeId,
     });
+    setSugarlangDirty(false);
     setDirty(false);
     setWelcomeDialogOpen(false);
     setNewGameDialogOpen(false);
@@ -428,25 +434,60 @@ export function Editor() {
     });
   };
 
+  const handleSugarlangDirtyChange = useCallback((dirty: boolean) => {
+    setSugarlangDirty(dirty);
+  }, []);
+
+  const handleSugarlangSaveHandlerChange = useCallback((handler: (() => Promise<void>) | null) => {
+    sugarlangSaveHandlerRef.current = handler;
+  }, []);
+
+  const handleSugarlangOpenSettingsHandlerChange = useCallback((handler: (() => void) | null) => {
+    sugarlangOpenSettingsHandlerRef.current = handler;
+  }, []);
+
   // Open preview
-  const handlePreview = () => {
+  const handlePreview = async () => {
     if (!previewManagerRef.current) return;
 
-    // Only include sugarlang in preview when the plugin is explicitly enabled
-    const sugarlangEnabled = enabledPluginIds.has('sugarlang');
-    const sugarlangConfig = sugarlangEnabled ? { enabled: true } : undefined;
+    try {
+      if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
+        await sugarlangSaveHandlerRef.current();
+        setSugarlangDirty(false);
+      }
 
-    const projectData: PreviewProjectData = {
-      version: 1,
-      ...buildPreviewProjectDocument(
-        buildCurrentProjectDocument(),
-        `__sugarengine/game-assets/${resolvedGameId}/`,
-      ),
-      sugarlang: sugarlangConfig,
-    };
+      const sugarlangEnabled = enabledPluginIds.has('sugarlang');
+      let sugarlangConfig: PreviewProjectData['sugarlang'];
 
-    console.log('[Editor] handlePreview: playerCaster =', playerCaster);
-    previewManagerRef.current.openPreviewWithData(projectData, currentEpisodeId || undefined);
+      if (sugarlangEnabled) {
+        const artifactFiles = gameRootPath
+          ? await loadAllSugarlangArtifacts(gameRootPath, resolvedGameId)
+          : new Map<string, string>();
+
+        const slPlugin = plugins.find((p) => p.id === 'sugarlang');
+        const slDisabled = Array.isArray(slPlugin?.disabledLanguages) ? slPlugin.disabledLanguages as string[] : [];
+
+        sugarlangConfig = artifactFiles.size > 0
+          ? { enabled: true, artifacts: Object.fromEntries(artifactFiles), disabledLanguages: slDisabled }
+          : { enabled: true, disabledLanguages: slDisabled };
+      }
+
+      const projectData: PreviewProjectData = {
+        version: 1,
+        ...buildPreviewProjectDocument(
+          buildCurrentProjectDocument(),
+          `__sugarengine/game-assets/${resolvedGameId}/`,
+        ),
+        sugarlang: sugarlangConfig,
+      };
+
+      console.log('[Editor] handlePreview: playerCaster =', playerCaster);
+      previewManagerRef.current.openPreviewWithData(projectData, currentEpisodeId || undefined);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setGameLifecycleError(message);
+      alert(`Preview failed: ${message}`);
+    }
   };
 
   // Create new episode
@@ -631,6 +672,9 @@ export function Editor() {
     setGameLifecycleBusy(true);
     setGameLifecycleError(null);
     try {
+      if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
+        await sugarlangSaveHandlerRef.current();
+      }
       const project = buildCurrentProjectDocument();
       await saveGame({
         rootPath: gameRootPath,
@@ -647,6 +691,7 @@ export function Editor() {
         projectVersion: project.meta.version,
         defaultEpisodeId: project.defaultEpisode ?? currentEpisodeId,
       });
+      setSugarlangDirty(false);
       setDirty(false);
       console.log(`[Editor] Project saved to ${projectFilePath}`);
       setSaveFlashVisible(true);
@@ -907,6 +952,19 @@ export function Editor() {
     }
   };
 
+  const handleOpenPluginSettings = useCallback((pluginId: string) => {
+    setPluginsDialogOpen(false);
+
+    if (pluginId === 'sugaragent') {
+      setSugarAgentSettingsOpen(true);
+      return;
+    }
+
+    if (pluginId === 'sugarlang') {
+      sugarlangOpenSettingsHandlerRef.current?.();
+    }
+  }, []);
+
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
       {/* All panels are rendered to maintain hook consistency - they use render props */}
@@ -988,6 +1046,9 @@ export function Editor() {
                                       gameId={resolvedGameId}
                                       plugins={plugins}
                                       onPluginsChange={setPlugins}
+                                      onDirtyChange={handleSugarlangDirtyChange}
+                                      onRegisterSaveHandler={handleSugarlangSaveHandlerChange}
+                                      onRegisterOpenSettingsHandler={handleSugarlangOpenSettingsHandlerChange}
                                       projectInput={{
                                         quests: quests as any,
                                         dialogues: dialogues as any,
@@ -1084,13 +1145,6 @@ export function Editor() {
                                           },
                                           tab: {
                                             color: '#6c7086',
-                                            '&[data-active]': {
-                                              color: '#cdd6f4',
-                                              background: '#1e1e2e',
-                                            },
-                                            '&:hover': {
-                                              background: '#313244',
-                                            },
                                           },
                                           list: {
                                             borderBottom: 'none',
@@ -1099,7 +1153,15 @@ export function Editor() {
                                       >
                                         <Tabs.List>
                                           {tabs.map((tab) => (
-                                            <Tabs.Tab key={tab.value} value={tab.value}>
+                                            <Tabs.Tab
+                                              key={tab.value}
+                                              value={tab.value}
+                                              c={activeTab === tab.value ? '#cdd6f4' : '#6c7086'}
+                                              style={{
+                                                background: activeTab === tab.value ? '#1e1e2e' : undefined,
+                                                borderRadius: 6,
+                                              }}
+                                            >
                                               <Group gap={6}>
                                                 <span>{tab.icon}</span>
                                                 <span>{tab.label}</span>
@@ -1285,86 +1347,113 @@ export function Editor() {
                   <Text size="sm" fw={600}>{plugin.name}</Text>
                   <Text size="xs" c="dimmed">{plugin.description}</Text>
                 </Stack>
-                <Switch
-                  checked={isPluginEnabled(plugins, plugin.id)}
-                  onChange={(event) => handleSetPluginEnabled(plugin.id, event.currentTarget.checked)}
-                  disabled={!projectLoaded}
-                />
+                <Group gap="xs" align="center">
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={() => handleOpenPluginSettings(plugin.id)}
+                    disabled={
+                      !projectLoaded
+                      || !isPluginEnabled(plugins, plugin.id)
+                      || (plugin.id === 'sugarlang' && !sugarlangOpenSettingsHandlerRef.current)
+                    }
+                  >
+                    Settings
+                  </Button>
+                  <Switch
+                    checked={isPluginEnabled(plugins, plugin.id)}
+                    onChange={(event) => handleSetPluginEnabled(plugin.id, event.currentTarget.checked)}
+                    disabled={!projectLoaded}
+                  />
+                </Group>
               </Group>
-
-              {plugin.id === 'sugaragent' && (
-                <Stack gap={8}>
-                  <Textarea
-                    label="Global Safety Bounds"
-                    description="Baseline safety policy applied to all SugarAgent NPCs (one per line or comma-separated)."
-                    value={sugarAgentGlobalSafetyBounds.join('\n')}
-                    onChange={(event) => handleSetSugarAgentGlobalSafetyBounds(event.currentTarget.value)}
-                    placeholder={'No profanity\nNo legal advice\nNo medical advice'}
-                    minRows={3}
-                    autosize
-                    disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
-                  />
-                  <Select
-                    label="Local Runtime Mode"
-                    description="Default is llama. Use mock only for deterministic testing."
-                    data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
-                    value={sugarAgentRuntimeMode}
-                    onChange={handleSetSugarAgentRuntimeMode}
-                    allowDeselect={false}
-                    disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
-                  />
-                  <Group justify="space-between" align="center">
-                    <Text size="xs" c="dimmed">
-                      Clear preview runtime cache after lore updates.
-                    </Text>
-                    <Group gap={8}>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={handleReingestSugarAgentLore}
-                        loading={reingestingSugarAgentLore}
-                        disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
-                      >
-                        Re-ingest Lore + Reset
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={handleResetSugarAgentSessions}
-                        loading={resettingSugarAgentSessions}
-                        disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
-                      >
-                        Reset All NPC Sessions (Game)
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={handleResetSugarAgentRuntime}
-                        loading={resettingSugarAgentRuntime}
-                        disabled={!projectLoaded || !isPluginEnabled(plugins, plugin.id)}
-                      >
-                        Reset Runtime (Preview)
-                      </Button>
-                    </Group>
-                  </Group>
-                  {sugarAgentRuntimeMessage && (
-                    <Text
-                      size="xs"
-                      c={
-                        sugarAgentRuntimeMessage.kind === 'success'
-                          ? 'green'
-                          : sugarAgentRuntimeMessage.kind === 'error'
-                            ? 'red'
-                            : 'dimmed'
-                      }
-                    >
-                      {sugarAgentRuntimeMessage.text}
-                    </Text>
-                  )}
-                </Stack>
-              )}
             </Group>
           ))}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={sugarAgentSettingsOpen}
+        onClose={() => setSugarAgentSettingsOpen(false)}
+        title="SugarAgent Settings"
+        centered
+        size="lg"
+        styles={{
+          header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
+          title: { color: '#cdd6f4', fontWeight: 600 },
+          body: { background: '#1e1e2e', padding: '20px' },
+          content: { background: '#1e1e2e' },
+          close: { color: '#6c7086', '&:hover': { background: '#313244' } },
+        }}
+      >
+        <Stack gap={8}>
+          <Textarea
+            label="Global Safety Bounds"
+            description="Baseline safety policy applied to all SugarAgent NPCs (one per line or comma-separated)."
+            value={sugarAgentGlobalSafetyBounds.join('\n')}
+            onChange={(event) => handleSetSugarAgentGlobalSafetyBounds(event.currentTarget.value)}
+            placeholder={'No profanity\nNo legal advice\nNo medical advice'}
+            minRows={3}
+            autosize
+            disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+          />
+          <Select
+            label="Local Runtime Mode"
+            description="Default is llama. Use mock only for deterministic testing."
+            data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+            value={sugarAgentRuntimeMode}
+            onChange={handleSetSugarAgentRuntimeMode}
+            allowDeselect={false}
+            disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+          />
+          <Group justify="space-between" align="center">
+            <Text size="xs" c="dimmed">
+              Clear preview runtime cache after lore updates.
+            </Text>
+            <Group gap={8}>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={handleReingestSugarAgentLore}
+                loading={reingestingSugarAgentLore}
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              >
+                Re-ingest Lore + Reset
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={handleResetSugarAgentSessions}
+                loading={resettingSugarAgentSessions}
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              >
+                Reset All NPC Sessions (Game)
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={handleResetSugarAgentRuntime}
+                loading={resettingSugarAgentRuntime}
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              >
+                Reset Runtime (Preview)
+              </Button>
+            </Group>
+          </Group>
+          {sugarAgentRuntimeMessage && (
+            <Text
+              size="xs"
+              c={
+                sugarAgentRuntimeMessage.kind === 'success'
+                  ? 'green'
+                  : sugarAgentRuntimeMessage.kind === 'error'
+                    ? 'red'
+                    : 'dimmed'
+              }
+            >
+              {sugarAgentRuntimeMessage.text}
+            </Text>
+          )}
         </Stack>
       </Modal>
 

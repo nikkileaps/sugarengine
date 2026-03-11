@@ -3,7 +3,7 @@
  * Sugarlang scenes in different language/band configurations.
  *
  * Provides:
- *   - Language direction toggle (en→es / es→en)
+ *   - Language direction toggle (dynamic, based on installed languages)
  *   - Band selector (B0, B1, B2, B3, B4)
  */
 
@@ -23,6 +23,8 @@ export class SugarlangPreviewControls {
     supportLanguage: 'en',
     bandOverride: 'B0',
   };
+  private langBtnsContainer: HTMLDivElement;
+  private langBtnEls: HTMLButtonElement[] = [];
 
   constructor(parent: HTMLElement) {
     this.injectStyles();
@@ -38,23 +40,13 @@ export class SugarlangPreviewControls {
 
     // Language direction
     const langGroup = this.createGroup('Language');
-    const langBtns = document.createElement('div');
-    langBtns.className = 'sl-preview-btn-row';
-
-    const esBtn = this.createToggleBtn('en → es', () => this.setLanguage('es', 'en'));
-    const enBtn = this.createToggleBtn('es → en', () => this.setLanguage('en', 'es'));
-    esBtn.classList.add('sl-active');
-
-    this.container.addEventListener('click', () => {
-      // Re-highlight active buttons after any click
-      esBtn.classList.toggle('sl-active', this.config.targetLanguage === 'es');
-      enBtn.classList.toggle('sl-active', this.config.targetLanguage === 'en');
-    });
-
-    langBtns.appendChild(esBtn);
-    langBtns.appendChild(enBtn);
-    langGroup.appendChild(langBtns);
+    this.langBtnsContainer = document.createElement('div');
+    this.langBtnsContainer.className = 'sl-preview-btn-row';
+    langGroup.appendChild(this.langBtnsContainer);
     this.container.appendChild(langGroup);
+
+    // Build default language buttons
+    this.rebuildLanguageButtons(['es', 'it']);
 
     // Band selector
     const bandGroup = this.createGroup('Band');
@@ -79,6 +71,23 @@ export class SugarlangPreviewControls {
     parent.appendChild(this.container);
   }
 
+  /** Update the set of available target languages (e.g. from installed bundle languages). */
+  setLanguages(languages: string[]): void {
+    // Filter out the support language ('en') since that's not a target
+    const targets = languages.filter((lang) => lang !== 'en');
+    if (targets.length === 0) return;
+
+    this.rebuildLanguageButtons(targets);
+
+    // If current target is no longer available, switch to first available
+    if (!targets.includes(this.config.targetLanguage)) {
+      this.config.targetLanguage = targets[0]!;
+      this.config.supportLanguage = 'en';
+      this.updateLangHighlight();
+      this.emitChange();
+    }
+  }
+
   setOnChange(handler: ConfigChangeHandler): void {
     this.changeHandler = handler;
   }
@@ -95,9 +104,30 @@ export class SugarlangPreviewControls {
     this.container.style.display = 'none';
   }
 
+  private rebuildLanguageButtons(targets: string[]): void {
+    this.langBtnsContainer.innerHTML = '';
+    this.langBtnEls = [];
+
+    for (const lang of targets) {
+      const btn = this.createToggleBtn(`en → ${lang}`, () => this.setLanguage(lang, 'en'));
+      this.langBtnEls.push(btn);
+      this.langBtnsContainer.appendChild(btn);
+    }
+
+    this.updateLangHighlight();
+  }
+
+  private updateLangHighlight(): void {
+    for (const btn of this.langBtnEls) {
+      const lang = btn.textContent?.replace('en → ', '') ?? '';
+      btn.classList.toggle('sl-active', lang === this.config.targetLanguage);
+    }
+  }
+
   private setLanguage(target: string, support: string): void {
     this.config.targetLanguage = target;
     this.config.supportLanguage = support;
+    this.updateLangHighlight();
     this.emitChange();
   }
 
@@ -166,6 +196,7 @@ export class SugarlangPreviewControls {
       .sl-preview-btn-row {
         display: flex;
         gap: 4px;
+        flex-wrap: wrap;
       }
 
       .sl-preview-btn {

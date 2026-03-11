@@ -42,6 +42,7 @@ The key decisions are:
 
 Each turn should be traceable across:
 
+- quest, scenario, interaction, and turn identity
 - provider selection
 - middleware execution
 - evaluator path
@@ -66,6 +67,15 @@ That allows:
 - Spanish-support/English-target runs
 
 to all be replayed and scored using the same evaluation harness.
+
+At minimum, replay bundles should preserve:
+
+- quest -> scenario -> interaction resolution
+- source quest-node and dialogue-beat refs
+- active quest binding refs
+- active vocabulary-entry roles
+- player response and evaluation outcome
+- any quest-completion recommendation emitted by Sugarlang
 
 ### 3. Separate Learning Telemetry from Generic Game Telemetry
 

@@ -16,6 +16,8 @@ export type {
   ResponseContractMode,
   GroundingReference,
   GroundingMetadata,
+  TeachingSubset,
+  AmbientHaloAllowance,
   ProviderConstraintBundle,
   ConversationTurnEnvelope,
   ConversationProvider,

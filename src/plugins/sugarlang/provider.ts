@@ -1,13 +1,18 @@
 /**
  * Sugarlang Scripted Provider.
  *
- * A ConversationProvider that produces turns from scene language packs.
- * Reads the target language and learner band from the constraint bundle
- * (set by sugarlang middleware) and walks through the pre-authored turns
- * for the resolved band realization.
+ * A ConversationProvider that handles sugarlang-enabled NPCs. Two modes:
  *
- * This provider handles sugarlang-enabled NPCs that have a scenario
- * mapped in the content bundle. It does NOT require SugarAgent or any LLM.
+ * 1. **Tree-walking** (primary): when the content bundle has a dialogue tree
+ *    for the interaction, walks the tree per-node with band-specific lexical
+ *    substitution. Preserves branching — player choices route to the correct
+ *    dialogue branch via DialogueNext.
+ *
+ * 2. **Flat turns** (fallback): when no dialogue tree is available (e.g., demo
+ *    bundles with hand-authored scene packs), walks pre-generated SceneTurn[]
+ *    with the existing cursor-based approach.
+ *
+ * This provider does NOT require SugarAgent or any LLM.
  */
 
 import type {
@@ -20,10 +25,22 @@ import type {
   PlayerInput,
   ResponseContract,
 } from '../../engine/conversation/types';
-import type { SugarlangContentBundle, SceneTurn, LearnerBandId, TurnEvidence } from './types';
+import type { DialogueNode, DialogueNext, DialogueTree } from '../../engine/dialogue/types';
+import { PLAYER, PLAYER_VO, NARRATOR, EXCERPT } from '../../engine/dialogue/types';
+import type {
+  SugarlangContentBundle,
+  SceneTurn,
+  LearnerBandId,
+  LexiconEntry,
+} from './types';
 import { resolveSceneBandContent } from './content/loader';
-import { evaluateTurn } from './evaluator';
-import type { EvaluationResult } from './evaluator';
+import {
+  matchVocabulary,
+  assignVocabularyRoles,
+  renderLineForBand,
+  type RolePlan,
+  type VocabMatch,
+} from './content/generate-banded-turns';
 
 // ---------------------------------------------------------------------------
 // Session-local state (stored on session.middlewareState)
@@ -31,28 +48,33 @@ import type { EvaluationResult } from './evaluator';
 
 const PROVIDER_KEY = 'sugarlang-provider';
 
-interface ProviderSessionState {
+/** Tree-walking session state (primary path). */
+interface TreeWalkState {
+  mode: 'tree';
   scenarioId: string;
-  /** The resolved band's turns for this session. */
-  turns: SceneTurn[];
-  /** Current turn position (next turn to produce). */
-  turnCursor: number;
-  /** Attempt count for the current turn (for recovery logic). */
-  attemptCount: number;
-  /** The last evaluation result. */
-  lastEvaluation?: EvaluationResult;
-  /** Whether the scene is complete. */
+  nodeMap: Map<string, DialogueNode>;
+  currentNodeId: string | null;
+  /** The DialogueNext[] from the last rendered node (for resolving player choice). */
+  pendingChoices: DialogueNext[];
+  rolePlan: RolePlan;
+  vocabMatches: VocabMatch[];
+  bandId: LearnerBandId;
+  targetLanguage: string;
+  /** Speaker UUID → display name map built from scenario npcIds/npcNames. */
+  speakerNameMap: Map<string, string>;
   complete: boolean;
-  /** Last turn evidence captured (for middleware analysis stage). */
-  lastTurnEvidence?: TurnEvidence;
-  /** When set, the next player input is a recovery choice, not a real answer. */
-  pendingRecovery?: {
-    originalTurn: SceneTurn;
-    bandId: LearnerBandId;
-  };
-  /** Deferred correction feedback to show on the next turn (for 'delayed' correctionPosture). */
-  deferredCorrection?: string;
 }
+
+/** Flat-turn session state (fallback for demo/hand-authored content). */
+interface FlatTurnState {
+  mode: 'flat';
+  scenarioId: string;
+  turns: SceneTurn[];
+  turnCursor: number;
+  complete: boolean;
+}
+
+type ProviderSessionState = TreeWalkState | FlatTurnState;
 
 function getProviderState(session: ConversationSession): ProviderSessionState | undefined {
   return session.middlewareState[PROVIDER_KEY] as ProviderSessionState | undefined;
@@ -63,265 +85,270 @@ function setProviderState(session: ConversationSession, state: ProviderSessionSt
 }
 
 // ---------------------------------------------------------------------------
-// Turn → ResponseContract mapping
+// Speaker classification
+// ---------------------------------------------------------------------------
+
+function isNarratorOrExcerpt(speakerId?: string, speaker?: string): boolean {
+  return (
+    speakerId === NARRATOR.id ||
+    speakerId === EXCERPT.id ||
+    speaker === 'Narrator' ||
+    speaker === 'Excerpt'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Player line response contract
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the response contract for a player delivery node based on the
+ * learner band. At low bands the player composes the line from word chips;
+ * at higher bands they type it.
+ */
+/**
+ * Build a sentence template with ___ blanks for the given target entries,
+ * returning the template string, blank definitions, and the unique chip forms.
+ */
+function buildBlankTemplate(
+  renderedText: string,
+  targetEntries: LexiconEntry[],
+): {
+  template: string;
+  blanks: Array<{ id: string; acceptedAnswers: string[] }>;
+  correctChips: string[];
+} {
+  let template = renderedText;
+  const blanks: Array<{ id: string; acceptedAnswers: string[] }> = [];
+  const correctChips: string[] = [];
+
+  for (const entry of targetEntries) {
+    const form = entry.targetForm;
+    const regex = new RegExp(`\\b${form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+    template = template.replace(regex, (match) => {
+      const blankId = `blank_${blanks.length}`;
+      blanks.push({ id: blankId, acceptedAnswers: [match] });
+      if (!correctChips.includes(form)) correctChips.push(form);
+      return '___';
+    });
+  }
+
+  return { template, blanks, correctChips };
+}
+
+function buildPlayerLineContract(
+  renderedText: string,
+  bandId: LearnerBandId,
+  rolePlan: RolePlan,
+): ResponseContract {
+  switch (bandId) {
+    case 'B0':
+    case 'B1': {
+      // Word bank fill-in — sentence with ___ blanks, player taps chips to fill.
+      // B0 = focus only, B1 = focus + reinforcement.
+      const targetEntries = bandId === 'B0'
+        ? rolePlan.focus
+        : [...rolePlan.focus, ...rolePlan.reinforcement];
+
+      const { template, blanks, correctChips } = buildBlankTemplate(renderedText, targetEntries);
+
+      if (blanks.length === 0) return { mode: 'free_form' };
+
+      // Add a few ambient distractors so it's not trivially obvious.
+      const distractors = rolePlan.ambient
+        .filter((e) => !correctChips.includes(e.targetForm))
+        .slice(0, Math.max(2, correctChips.length))
+        .map((e) => e.targetForm);
+
+      // Merge and deterministically shuffle.
+      const allChips = [...correctChips, ...distractors];
+      for (let i = allChips.length - 1; i > 0; i--) {
+        const j = (i * 7 + renderedText.length) % (i + 1);
+        [allChips[i], allChips[j]] = [allChips[j]!, allChips[i]!];
+      }
+
+      return {
+        mode: 'word_bank',
+        wordBank: allChips,
+        blanks,
+        hintText: template,
+      };
+    }
+    case 'B2':
+    case 'B3': {
+      // Typed fill-in — same sentence template with blanks, but the player
+      // types each word instead of picking from a chip bank.
+      const targetEntries = rolePlan.focus;
+      const { template, blanks } = buildBlankTemplate(renderedText, targetEntries);
+
+      if (blanks.length === 0) return { mode: 'free_form' };
+
+      return {
+        mode: 'blank_fill',
+        blanks,
+        hintText: template,
+      };
+    }
+    case 'B4':
+      // Open text — player types freely
+      return {
+        mode: 'open_text',
+        maxLength: renderedText.length + 80,
+      };
+    default:
+      return { mode: 'free_form' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Flat turn helpers (kept for fallback path)
 // ---------------------------------------------------------------------------
 
 function turnToResponseContract(turn: SceneTurn): ResponseContract {
   const contract: ResponseContract = {
     mode: turn.responseMode,
   };
-
-  if (turn.responseData?.choices) {
-    contract.choices = turn.responseData.choices;
-  }
-  if (turn.responseData?.blanks) {
-    contract.blanks = turn.responseData.blanks;
-  }
-  // For chip_composition, use chips as the wordBank in the contract
+  if (turn.responseData?.choices) contract.choices = turn.responseData.choices;
+  if (turn.responseData?.blanks) contract.blanks = turn.responseData.blanks;
   if (turn.responseMode === 'chip_composition' && turn.responseData?.chips) {
     contract.wordBank = turn.responseData.chips;
   } else if (turn.responseData?.wordBank) {
     contract.wordBank = turn.responseData.wordBank;
   }
-  if (turn.responseData?.maxLength) {
-    contract.maxLength = turn.responseData.maxLength;
-  }
-  if (turn.responseData?.hintText) {
-    contract.hintText = turn.responseData.hintText;
-  }
-
+  if (turn.responseData?.maxLength) contract.maxLength = turn.responseData.maxLength;
+  if (turn.responseData?.hintText) contract.hintText = turn.responseData.hintText;
   return contract;
 }
 
 // ---------------------------------------------------------------------------
-// Band-specific recovery
+// Tree-walking helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Build a recovery turn after max retries, based on the band's recovery strategy.
- * Returns a ProviderTurnOutput that shows the recovery path, or null to just advance.
+ * Collect all reachable text from a dialogue tree (BFS).
+ * Used for vocabulary matching against the lexicon.
  */
-function buildRecoveryTurn(
-  turn: SceneTurn,
-  evalResult: EvaluationResult,
+function collectAllDialogueText(tree: DialogueTree): string {
+  const nodeMap = new Map(tree.nodes.map((n) => [n.id, n]));
+  const visited = new Set<string>();
+  const queue = [tree.startNode];
+  const texts: string[] = [];
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const node = nodeMap.get(id);
+    if (!node) continue;
+    if (node.text) texts.push(node.text);
+    // Also collect choice labels
+    if (node.next) {
+      for (const conn of node.next) {
+        if (conn.text) texts.push(conn.text);
+        if (!visited.has(conn.nodeId)) queue.push(conn.nodeId);
+      }
+    }
+  }
+
+  return texts.join(' ');
+}
+
+/**
+ * Render a dialogue node into a ProviderTurnOutput using band-specific
+ * lexical substitution.
+ */
+function renderNodeForBand(
+  node: DialogueNode,
+  rolePlan: RolePlan,
+  lexicon: { targetLanguage: string; entries: unknown[] },
   bandId: LearnerBandId,
-): ProviderTurnOutput | null {
-  switch (bandId) {
-    case 'B0':
-    case 'B1':
-      // B0/B1: reveal answer and advance (already handled by evaluator feedback)
-      return {
-        utterance: evalResult.feedback ?? 'Let me show you the answer.',
-        speakerId: turn.speakerId,
-        speakerName: turn.speakerName,
-        emotion: 'encouraging',
-        responseContract: { mode: 'yes_no' }, // Simple acknowledgment
-      };
+  targetLanguage: string,
+  constraints: ProviderConstraintBundle,
+  speakerNameMap: Map<string, string>,
+): ProviderTurnOutput {
+  // Apply lexical substitution
+  const renderedText = renderLineForBand(
+    node.text,
+    targetLanguage,
+    bandId,
+    rolePlan,
+    lexicon as import('./types').LexiconPack,
+  );
 
-    case 'B2': {
-      // B2: downgrade to multiple_choice with human-readable intent labels
-      const intents = turn.evaluation?.intents;
-      const choices: string[] = [];
-      if (intents) {
-        for (const intent of intents) {
-          choices.push(intent.label);
-        }
-      }
-      if (choices.length === 0) {
-        choices.push('sí', 'no');
-      }
-      // Include the word bank as a hint in the recovery contract
-      const wordBank = turn.responseData?.wordBank;
-      return {
-        utterance: evalResult.feedback ?? 'Let me give you some options.',
-        speakerId: turn.speakerId,
-        speakerName: turn.speakerName,
-        emotion: 'encouraging',
-        responseContract: {
-          mode: 'multiple_choice',
-          choices,
-          wordBank,
-          hintText: wordBank ? `Words you can use: ${wordBank.join(', ')}` : undefined,
-        },
-      };
-    }
+  // Also generate the full target-language text for diagnostics
+  const targetText = renderLineForBand(
+    node.text,
+    targetLanguage,
+    bandId,
+    rolePlan,
+    lexicon as import('./types').LexiconPack,
+    true,
+  );
 
-    case 'B3': {
-      // B3: after the authored repair ladder is exhausted, keep the learner on
-      // the same scene turn and reveal the full insert bank as a last guided
-      // typing attempt instead of switching to meta UI copy.
-      const wordBank = turn.responseData?.wordBank ?? [];
-      return {
-        utterance: turn.initialDelivery ?? turn.targetText,
-        speakerId: turn.speakerId,
-        speakerName: turn.speakerName,
-        emotion: 'patient',
-        responseContract: {
-          mode: 'short_text',
-          maxLength: turn.responseData?.maxLength ?? 80,
-          wordBank,
-          hintText: wordBank.length > 0
-            ? 'Use these words if they help you respond.'
-            : 'Try one short reply.',
-        },
-      };
-    }
+  // Detect choices (branching node): multiple connections = player choice
+  const connections = node.next ?? [];
+  const hasChoices = connections.length > 1;
 
-    case 'B4': {
-      // B4: offer clarify/repeat/simplify/temporary structure
-      return {
-        utterance: evalResult.feedback ?? 'Would you like me to clarify, repeat, or simplify?',
-        speakerId: turn.speakerId,
-        speakerName: turn.speakerName,
-        emotion: 'patient',
-        responseContract: {
-          mode: 'multiple_choice',
-          choices: ['Clarify', 'Repeat', 'Simplify'],
-        },
-      };
-    }
+  let responseContract: ResponseContract;
 
-    default:
-      return null;
-  }
-}
+  // Detect player speaker for band-specific response modes
+  const isPlayerLine =
+    node.speaker === PLAYER.id ||
+    node.speaker === PLAYER_VO.id ||
+    node.speakerId === PLAYER.id ||
+    node.speakerId === PLAYER_VO.id;
 
-/**
- * Handle the player's response to a recovery menu (B3/B4).
- * Returns a turn that fulfills the recovery action, or null to just advance.
- */
-function handleRecoveryChoice(
-  input: PlayerInput,
-  originalTurn: SceneTurn,
-  bandId: LearnerBandId,
-): ProviderTurnOutput | null {
-  const choice = (input.text ?? '').toLowerCase().trim();
+  if (hasChoices) {
+    // Branching choices — always multiple_choice (player picks a branch).
+    // Choice labels use allVocab=true so short labels get target-language treatment.
+    const translatedChoices = connections.map((c, i) => {
+      const label = c.text || `Choice ${i + 1}`;
+      return renderLineForBand(
+        label,
+        targetLanguage,
+        bandId,
+        rolePlan,
+        lexicon as import('./types').LexiconPack,
+        false,
+        true,
+      );
+    });
 
-  if (bandId === 'B4') {
-    switch (choice) {
-      case 'clarify':
-        // Re-show the NPC line with support text revealed
-        return {
-          utterance: originalTurn.targetText,
-          speakerId: originalTurn.speakerId,
-          speakerName: originalTurn.speakerName,
-          emotion: 'patient',
-          responseContract: {
-            mode: 'open_text',
-            maxLength: originalTurn.responseData?.maxLength ?? 200,
-            hintText: originalTurn.supportText || originalTurn.responseData?.hintText,
-          },
-          diagnostics: {
-            supportText: originalTurn.supportText,
-            turnId: originalTurn.turnId,
-            teachingConcepts: originalTurn.teachingConcepts,
-          },
-        };
-
-      case 'repeat':
-        // Re-show the same turn with the original contract
-        return {
-          utterance: originalTurn.targetText,
-          speakerId: originalTurn.speakerId,
-          speakerName: originalTurn.speakerName,
-          emotion: originalTurn.emotion,
-          responseContract: turnToResponseContract(originalTurn),
-          diagnostics: {
-            supportText: originalTurn.supportText,
-            turnId: originalTurn.turnId,
-            teachingConcepts: originalTurn.teachingConcepts,
-          },
-        };
-
-      case 'simplify': {
-        // Downgrade to short_text with word bank and support text
-        const wordBank = originalTurn.responseData?.wordBank ?? [];
-        const intents = originalTurn.evaluation?.intents ?? [];
-        // Add intent keywords as hints if no word bank exists
-        const hints = wordBank.length > 0
-          ? wordBank
-          : intents.flatMap((i) => i.keywordPatterns.slice(0, 2));
-        return {
-          utterance: originalTurn.supportText || originalTurn.targetText,
-          speakerId: originalTurn.speakerId,
-          speakerName: originalTurn.speakerName,
-          emotion: 'encouraging',
-          responseContract: {
-            mode: 'short_text',
-            maxLength: originalTurn.responseData?.maxLength ?? 80,
-            wordBank: hints,
-            hintText: originalTurn.responseData?.hintText ?? 'Use the hints above.',
-          },
-          diagnostics: {
-            supportText: originalTurn.supportText,
-            turnId: originalTurn.turnId,
-            teachingConcepts: originalTurn.teachingConcepts,
-          },
-        };
-      }
-    }
+    responseContract = {
+      mode: 'multiple_choice',
+      choices: translatedChoices,
+    };
+  } else if (isPlayerLine) {
+    // Player delivery node — band-specific language exercise.
+    // The player composes/types the rendered text instead of just reading it.
+    responseContract = buildPlayerLineContract(renderedText, bandId, rolePlan);
+  } else {
+    // NPC delivery or end node — E to advance
+    responseContract = { mode: 'free_form' };
   }
 
-  if (bandId === 'B3') {
-    // B3 recovery is a downgraded short_text — evaluate the player's response
-    // with the original turn's intents. If it matches, great. If not, just advance.
-    const evalResult = evaluateTurn(input, originalTurn, 4);
-    if (evalResult.correct) {
-      return null; // Success — advance to next turn
-    }
-    // Still failing — just advance so the player isn't stuck
-    return null;
-  }
+  // Resolve speaker name: UUID → display name via scenario npcIds/npcNames
+  const speakerId = node.speakerId ?? node.speaker;
+  const speakerName = speakerNameMap.get(node.speaker ?? '')
+    ?? speakerNameMap.get(speakerId ?? '')
+    ?? node.speakerLabel
+    ?? node.name
+    ?? node.speaker;
 
-  // Unknown choice — advance
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Extract target-language words from a turn's teaching concepts that appear
- * in the rendered utterance. Used for tap-to-prefill clarification.
- */
-function extractTappableWords(turn: SceneTurn): string[] {
-  const text = turn.initialDelivery ?? turn.targetText;
-  const words: string[] = [];
-  // Use the chips or word bank as the source of tappable words at low bands
-  const candidates = turn.responseData?.chips ?? turn.responseData?.wordBank ?? [];
-  for (const word of candidates) {
-    if (text.toLowerCase().includes(word.toLowerCase())) {
-      words.push(word);
-    }
-  }
-  // If no candidates found from response data, try extracting from targetText
-  if (words.length === 0) {
-    const targetWords = turn.targetText.split(/\s+/);
-    for (const w of targetWords) {
-      const clean = w.replace(/[¿?¡!.,]/g, '');
-      if (clean.length > 2 && text.toLowerCase().includes(clean.toLowerCase())) {
-        words.push(clean);
-      }
-    }
-  }
-  return words;
-}
-
-function isRepairOptionVisible(
-  attemptCount: number,
-  option: NonNullable<SceneTurn['repairOptions']>[number],
-): boolean {
-  if (option.minAttempt != null && attemptCount < option.minAttempt) return false;
-  if (option.maxAttempt != null && attemptCount > option.maxAttempt) return false;
-  return true;
-}
-
-function getVisibleRepairOptions(
-  attemptCount: number,
-  turn: SceneTurn,
-): NonNullable<SceneTurn['repairOptions']> {
-  return (turn.repairOptions ?? []).filter((option) => isRepairOptionVisible(attemptCount, option));
+  return {
+    utterance: renderedText,
+    speakerId,
+    speakerName,
+    responseContract,
+    groundingMetadata: constraints.groundingScope
+      ? { references: constraints.groundingScope }
+      : undefined,
+    diagnostics: {
+      targetText,
+      nodeId: node.id,
+      focusLexicalEntryIds: rolePlan.focus.map((e) => e.lexicalEntryId),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +359,8 @@ export interface SugarlangProviderConfig {
   contentBundle: SugarlangContentBundle;
   /** Resolve the scenario ID for a given NPC (by id or name). */
   getScenarioForNpc(npcId: string, npcName?: string): string | undefined;
+  /** Resolve a dialogue tree by ID from the game's loaded dialogues. */
+  getDialogueTree(dialogueId: string): DialogueTree | undefined;
 }
 
 export function createSugarlangScriptedProvider(
@@ -341,16 +370,12 @@ export function createSugarlangScriptedProvider(
 
   const descriptor: ConversationProviderDescriptor = {
     id: 'sugarlang-scripted',
-    // Between scripted dialogue (10) and SugarAgent (100).
-    // Scripted quest/BT dialogues take precedence; sugarlang takes precedence over agent.
-    priority: 50,
+    // Below scripted dialogue (10) so sugarlang wins when it has content.
+    // Above SugarAgent (100). NPCs without a scenario fall through to scripted dialogue.
+    priority: 5,
   };
 
   function canHandle(npcId: string, context: ProviderSelectionContext): boolean {
-    // Only handle when there's NO pre-resolved dialogueId (quest/BT/default dialogues
-    // go to ScriptedDialogueProvider instead).
-    if (context.dialogueId) return false;
-    // Must have a sugarlang scenario for this NPC.
     const scenarioId = config.getScenarioForNpc(npcId, context.npcName);
     if (!scenarioId) return false;
 
@@ -372,6 +397,97 @@ export function createSugarlangScriptedProvider(
     return true;
   }
 
+  /**
+   * Try to set up tree-walking mode by finding a dialogue tree for this NPC's
+   * scenario. Returns the state if successful, or null to fall back to flat turns.
+   */
+  function tryInitTreeWalk(
+    session: ConversationSession,
+    scenarioId: string,
+  ): TreeWalkState | null {
+    const scenario = contentBundle.scenarios.get(scenarioId);
+    if (!scenario?.interactions || scenario.interactions.length === 0) {
+      console.warn(
+        `[SL·provider] tryInitTreeWalk: no interactions for scenario "${scenarioId}"` +
+        ` (scenarios in bundle: ${Array.from(contentBundle.scenarios.keys()).join(', ')})`,
+      );
+      return null;
+    }
+
+    // Find the first interaction with a dialogue tree resolvable from the game
+    for (const interaction of scenario.interactions) {
+      if (!interaction.sourceDialogueId) {
+        console.log(`[SL·provider] tryInitTreeWalk: interaction "${interaction.interactionId}" has no sourceDialogueId, skipping`);
+        continue;
+      }
+      const tree = config.getDialogueTree(interaction.sourceDialogueId);
+      if (!tree || tree.nodes.length === 0) {
+        console.warn(
+          `[SL·provider] tryInitTreeWalk: dialogue tree "${interaction.sourceDialogueId}" not found via getDialogueTree`,
+        );
+        continue;
+      }
+
+      const targetLang = session.targetLanguage ?? 'es';
+      const bandId = (session.learnerBandOverride ?? 'B0') as LearnerBandId;
+      const lexicon = contentBundle.lexicons.get(targetLang);
+      if (!lexicon) {
+        console.warn(
+          `[SL·provider] tryInitTreeWalk: no lexicon for "${targetLang}"` +
+          ` (available: ${Array.from(contentBundle.lexicons.keys()).join(', ')})`,
+        );
+        continue;
+      }
+
+      // Collect all reachable text for vocabulary matching
+      const allText = collectAllDialogueText(tree);
+      const vocabMatches = matchVocabulary(allText, lexicon);
+      const rolePlan = assignVocabularyRoles(vocabMatches, bandId);
+
+      // Build node map
+      const nodeMap = new Map(tree.nodes.map((n) => [n.id, n]));
+
+      // Build speaker name map from scenario npcIds/npcNames + session npc
+      const speakerNameMap = new Map<string, string>();
+      const npcNames = scenario.npcNames ?? [];
+      for (let i = 0; i < scenario.npcIds.length; i++) {
+        const id = scenario.npcIds[i];
+        const name = npcNames[i];
+        if (id && name) {
+          speakerNameMap.set(id, name);
+        }
+      }
+      // Session NPC as fallback
+      if (session.npcId && session.npcName) {
+        speakerNameMap.set(session.npcId, session.npcName);
+      }
+      // "Player" for any speaker matching typical player conventions
+      speakerNameMap.set('Player', 'Player');
+
+      console.log(
+        `[SL·provider] tree-walk mode for "${scenarioId}" dialogue=${interaction.sourceDialogueId}` +
+        ` nodes=${tree.nodes.length} vocabMatches=${vocabMatches.length} band=${bandId}` +
+        ` speakerNames=[${Array.from(speakerNameMap.entries()).map(([k, v]) => `${k.substring(0, 8)}→${v}`).join(', ')}]`,
+      );
+
+      return {
+        mode: 'tree',
+        scenarioId,
+        nodeMap,
+        currentNodeId: tree.startNode,
+        pendingChoices: [],
+        rolePlan,
+        vocabMatches,
+        bandId,
+        targetLanguage: targetLang,
+        speakerNameMap,
+        complete: false,
+      };
+    }
+
+    return null;
+  }
+
   async function startSession(
     session: ConversationSession,
     _context: ProviderSelectionContext,
@@ -379,34 +495,177 @@ export function createSugarlangScriptedProvider(
     const scenarioId = config.getScenarioForNpc(session.npcId, session.npcName);
     if (!scenarioId) return;
 
-    // Resolve band and language — these may be set by middleware, but we also
-    // need them here for turn resolution. Use session values as defaults.
+    // Try tree-walking mode first
+    const treeState = tryInitTreeWalk(session, scenarioId);
+    if (treeState) {
+      setProviderState(session, treeState);
+      return;
+    }
+
+    // Fall back to flat turns from scene language packs
     const targetLang = session.targetLanguage ?? 'es';
     const band = (session.learnerBandOverride ?? 'B0') as LearnerBandId;
-
     const bandContent = resolveSceneBandContent(contentBundle, scenarioId, targetLang, band);
 
+    console.log(
+      `[SL·provider] flat-turn mode for "${scenarioId}" band=${band} turns=${bandContent?.turns.length ?? 0}`,
+    );
+
     setProviderState(session, {
+      mode: 'flat',
       scenarioId,
       turns: bandContent?.turns ?? [],
       turnCursor: 0,
-      attemptCount: 0,
       complete: false,
     });
   }
 
-  async function produceTurn(
+  // -------------------------------------------------------------------------
+  // Tree-walking produceTurn
+  // -------------------------------------------------------------------------
+
+  function produceTreeTurn(
     session: ConversationSession,
+    state: TreeWalkState,
     constraints: ProviderConstraintBundle,
     playerInput?: PlayerInput,
-  ): Promise<ProviderTurnOutput> {
-    let state = getProviderState(session);
+  ): ProviderTurnOutput {
+    // Re-resolve band if middleware changed it
+    if (constraints.learnerBand && constraints.learnerBand !== state.bandId) {
+      const newBand = constraints.learnerBand as LearnerBandId;
+      const lexicon = contentBundle.lexicons.get(state.targetLanguage);
+      if (lexicon) {
+        state.bandId = newBand;
+        state.rolePlan = assignVocabularyRoles(state.vocabMatches, newBand);
+        console.log(`[SL·provider] band re-resolved to ${newBand}`);
+      }
+    }
 
-    // If middleware resolved a different band/language than what we initialized with,
-    // re-resolve the turns. This handles the case where middleware sets the band
-    // after startSession.
-    if (state && constraints.learnerBand && constraints.targetLanguage) {
-      const currentBand = (constraints.learnerBand ?? 'B0') as LearnerBandId;
+    // Handle player input → advance to next node
+    if (playerInput && state.pendingChoices.length > 0) {
+      let selectedNext: DialogueNext | undefined;
+
+      if (state.pendingChoices.length > 1) {
+        // Player picked a choice — resolve by index or text matching
+        const choiceIndex = playerInput.choiceIndex ?? -1;
+        if (choiceIndex >= 0 && choiceIndex < state.pendingChoices.length) {
+          selectedNext = state.pendingChoices[choiceIndex];
+        } else {
+          // Try text matching as fallback
+          const inputText = (playerInput.text ?? '').trim().toLowerCase();
+          selectedNext = state.pendingChoices.find((c) =>
+            c.text?.toLowerCase() === inputText,
+          );
+        }
+      }
+
+      // Default to first connection (linear advance or fallback)
+      if (!selectedNext) {
+        selectedNext = state.pendingChoices[0];
+      }
+
+      if (selectedNext) {
+        state.currentNodeId = selectedNext.nodeId;
+      } else {
+        // No next — end
+        state.complete = true;
+        state.currentNodeId = null;
+      }
+    } else if (playerInput) {
+      // Player advanced past an end node (no pending choices) — close
+      state.complete = true;
+      state.currentNodeId = null;
+    }
+
+    // If complete or no current node, signal end
+    if (state.complete || !state.currentNodeId) {
+      state.complete = true;
+      setProviderState(session, state);
+      return {
+        utterance: '',
+        responseContract: { mode: 'free_form' },
+        hostActionProposals: [{ type: 'closeConversation' }],
+      };
+    }
+
+    // Get the current node
+    const node = state.nodeMap.get(state.currentNodeId);
+    if (!node) {
+      state.complete = true;
+      setProviderState(session, state);
+      return {
+        utterance: '',
+        responseContract: { mode: 'free_form' },
+        hostActionProposals: [{ type: 'closeConversation' }],
+      };
+    }
+
+    // Skip narrator/excerpt nodes — auto-advance to next
+    if (isNarratorOrExcerpt(node.speakerId, node.speaker)) {
+      const nextConn = node.next?.[0];
+      if (nextConn) {
+        state.currentNodeId = nextConn.nodeId;
+        state.pendingChoices = [];
+        setProviderState(session, state);
+        // Recurse to produce the next non-narrator node
+        return produceTreeTurn(session, state, constraints);
+      }
+      // No next after narrator — end
+      state.complete = true;
+      setProviderState(session, state);
+      return {
+        utterance: '',
+        responseContract: { mode: 'free_form' },
+        hostActionProposals: [{ type: 'closeConversation' }],
+      };
+    }
+
+    // Store pending choices for next player input resolution
+    state.pendingChoices = node.next ?? [];
+
+    console.log(
+      `[SL·provider] rendering node "${node.id}" speaker="${node.speaker}"` +
+      ` text="${node.text?.substring(0, 40)}..."` +
+      ` next=${JSON.stringify(state.pendingChoices.map(c => ({ nodeId: c.nodeId?.substring(0, 8), text: c.text })))}`,
+    );
+
+    // If no connections, this is the last node — mark for end after this turn
+    if (state.pendingChoices.length === 0) {
+      // Will complete on next produceTurn call
+    }
+
+    const lexicon = contentBundle.lexicons.get(state.targetLanguage);
+    const output = renderNodeForBand(
+      node,
+      state.rolePlan,
+      lexicon ?? { targetLanguage: state.targetLanguage, entries: [] },
+      state.bandId,
+      state.targetLanguage,
+      constraints,
+      state.speakerNameMap,
+    );
+
+    // End nodes (no next) show their text first — closeConversation fires
+    // on the subsequent advance when produceTurn is called with playerInput
+    // and no pendingChoices.
+
+    setProviderState(session, state);
+    return output;
+  }
+
+  // -------------------------------------------------------------------------
+  // Flat-turn produceTurn (fallback)
+  // -------------------------------------------------------------------------
+
+  function produceFlatTurn(
+    session: ConversationSession,
+    state: FlatTurnState,
+    constraints: ProviderConstraintBundle,
+    playerInput?: PlayerInput,
+  ): ProviderTurnOutput {
+    // Re-resolve turns if middleware changed band/language
+    if (constraints.learnerBand && constraints.targetLanguage) {
+      const currentBand = constraints.learnerBand as LearnerBandId;
       const currentLang = constraints.targetLanguage;
       const bandContent = resolveSceneBandContent(
         contentBundle,
@@ -416,15 +675,11 @@ export function createSugarlangScriptedProvider(
       );
       if (bandContent && state.turns !== bandContent.turns) {
         state.turns = bandContent.turns;
-        // Don't reset cursor — only re-resolve if it's the first turn
-        if (session.turnIndex === 0) {
-          state.turnCursor = 0;
-        }
+        if (session.turnIndex === 0) state.turnCursor = 0;
       }
     }
 
-    if (!state || state.turns.length === 0) {
-      // No content — signal completion
+    if (state.turns.length === 0) {
       return {
         utterance: '',
         responseContract: { mode: 'free_form' },
@@ -432,321 +687,13 @@ export function createSugarlangScriptedProvider(
       };
     }
 
-    // --- Handle pending recovery choice (B3/B4 recovery menu response) ---
-    if (playerInput && state.pendingRecovery) {
-      const { originalTurn, bandId } = state.pendingRecovery;
-      state.pendingRecovery = undefined;
-
-      if (bandId === 'B2') {
-        // B2 recovery: player picked an intent label from multiple_choice.
-        // Match by label and accept as taskSuccess.
-        const choiceText = (playerInput.text ?? '').trim();
-        const intents = originalTurn.evaluation?.intents;
-        const matchedIntent = intents?.find(
-          (i) => i.label.toLowerCase() === choiceText.toLowerCase(),
-        );
-        if (matchedIntent) {
-          // Build evidence for the successful recovery
-          const bandUsed = (session.learnerBandOverride ?? 'B0') as LearnerBandId;
-          state.lastTurnEvidence = {
-            turnId: originalTurn.turnId,
-            timestamp: new Date().toISOString(),
-            playerInput: choiceText,
-            responseMode: 'multiple_choice',
-            bandUsed,
-            policyUsed: 'recovery',
-            supportShown: true,
-            supportRequested: true,
-            groundingShown: false,
-            groundingUsed: false,
-            retries: 3,
-            deliveryType: originalTurn.initialDelivery ? 'initialDelivery' : 'targetText',
-            teachingConcepts: originalTurn.teachingConcepts,
-            taskSuccess: true,
-            formAccuracy: 0.3,
-            supportDependence: 1,
-          };
-          console.log(`[SL·P2] B2 recovery → matched intent="${matchedIntent.intentId}" via label`);
-        }
-        // Advance to next turn regardless (fall through below)
-      } else if (bandId === 'B4') {
-        const choice = (playerInput.text ?? '').toLowerCase().trim();
-
-        if (choice === 'clarify' || choice === 'repeat' || choice === 'simplify') {
-          // This is the menu selection — produce the recovery turn and
-          // keep pendingRecovery so the NEXT input evaluates against the original.
-          const recoveryResult = handleRecoveryChoice(playerInput, originalTurn, bandId);
-          if (recoveryResult) {
-            state.pendingRecovery = { originalTurn, bandId: 'B3' }; // B3 = "evaluate next input against original, advance on fail"
-            setProviderState(session, state);
-            return recoveryResult;
-          }
-        } else {
-          // Player typed a real answer after Clarify/Repeat/Simplify — evaluate it
-          const evalResult = evaluateTurn(playerInput, originalTurn, 4);
-          if (evalResult.correct) {
-            // Advance to next turn (fall through below)
-          } else {
-            // Still failing after support — just advance so player isn't stuck
-          }
-        }
-      } else {
-        // B3: evaluate the response against the original turn
-        const recoveryResult = handleRecoveryChoice(playerInput, originalTurn, bandId);
-        if (recoveryResult) {
-          setProviderState(session, state);
-          return recoveryResult;
-        }
-        // null = advance to next turn (fall through below)
-      }
+    // With player input, advance past the current turn
+    if (playerInput && state.turnCursor > 0) {
+      // Simple advance — evaluation deferred per plan
     }
 
-    // --- Handle repair response (player tapped a repair option) ---
-    else if (playerInput?.text?.startsWith('repair:') && state.turnCursor > 0) {
-      const previousTurn = state.turns[state.turnCursor - 1];
-      if (previousTurn?.repairOptions) {
-        const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, previousTurn);
-        const parts = playerInput.text.substring(7).split(':');
-        const repairId = parts[0]!;
-        const prefillWord = parts[1];
-        const repairOpt = visibleRepairOptions.find((r) => r.repairId === repairId);
-        if (repairOpt) {
-          // Build the NPC repair reply
-          let repairReply = repairOpt.repairReply;
-          if (repairOpt.type === 'clarification_template' && prefillWord) {
-            repairReply = repairReply.replace('__', prefillWord);
-          }
-          const responseContract = turnToResponseContract(previousTurn);
-          // If the repair option has a response contract override, use it
-          if (repairOpt.responseContractOverride) {
-            responseContract.mode = repairOpt.responseContractOverride.mode;
-            if ('choices' in repairOpt.responseContractOverride) responseContract.choices = repairOpt.responseContractOverride.choices;
-            if ('wordBank' in repairOpt.responseContractOverride) responseContract.wordBank = repairOpt.responseContractOverride.wordBank;
-            if ('hintText' in repairOpt.responseContractOverride) responseContract.hintText = repairOpt.responseContractOverride.hintText;
-          }
-
-          // Build repair-specific evidence record
-          const bandUsed = (session.learnerBandOverride ?? 'B0') as LearnerBandId;
-          const repairEvidence: TurnEvidence = {
-            turnId: previousTurn.turnId,
-            timestamp: new Date().toISOString(),
-            playerInput: `repair:${repairId}${prefillWord ? `:${prefillWord}` : ''}`,
-            responseMode: previousTurn.responseMode,
-            bandUsed,
-            policyUsed: 'repair',
-            supportShown: true,
-            supportRequested: true,
-            groundingShown: !!repairOpt.groundingAction,
-            groundingUsed: !!repairOpt.groundingAction,
-            retries: 0,
-            deliveryType: previousTurn.initialDelivery ? 'initialDelivery' : 'targetText',
-            repairId,
-            repairType: repairOpt.type,
-            teachingConcepts: previousTurn.teachingConcepts,
-            taskSuccess: false,
-            formAccuracy: 0,
-            supportDependence: 1,
-          };
-          state.lastTurnEvidence = repairEvidence;
-
-          console.log(
-            `[SL·P2] repair → id=${repairId} type=${repairOpt.type}` +
-            ` grounding=${repairOpt.groundingAction ? repairOpt.groundingAction.worldObjectId : 'none'}`,
-          );
-
-          setProviderState(session, state);
-          return {
-            utterance: repairReply,
-            speakerId: previousTurn.speakerId,
-            speakerName: previousTurn.speakerName,
-            emotion: 'helpful',
-            responseContract,
-            groundingMetadata: repairOpt.groundingAction
-              ? {
-                  references: [{
-                    conceptId: repairOpt.repairId,
-                    targetForm: prefillWord ?? '',
-                    worldObjectId: repairOpt.groundingAction.worldObjectId,
-                    highlightAction: repairOpt.groundingAction.type === 'point' ? 'highlight' : repairOpt.groundingAction.type,
-                  }],
-                }
-              : undefined,
-            turnEvidence: repairEvidence,
-            diagnostics: {
-              supportText: previousTurn.supportText,
-              targetText: previousTurn.targetText,
-              turnId: previousTurn.turnId,
-              teachingConcepts: previousTurn.teachingConcepts,
-              repairOptions: visibleRepairOptions,
-              showRepairOptions: visibleRepairOptions.length > 0,
-              tappableWords: extractTappableWords(previousTurn),
-              repairUsed: repairId,
-            },
-          };
-        }
-      }
-    }
-
-    // --- Evaluate previous turn's response if player input is provided ---
-    else if (playerInput && state.turnCursor > 0) {
-      const previousTurn = state.turns[state.turnCursor - 1];
-      if (previousTurn) {
-        state.attemptCount++;
-        const evalResult = evaluateTurn(playerInput, previousTurn, state.attemptCount);
-        state.lastEvaluation = evalResult;
-
-        // Build turn evidence
-        const bandUsed = (constraints.learnerBand ?? 'B0') as LearnerBandId;
-        const correctionPosture = (constraints.hardConstraints['correctionPosture'] as string | undefined) ?? 'immediate';
-        const bandId = (constraints.learnerBand ?? 'B0') as LearnerBandId;
-        // Resolve the band-variant object ID from grounding scope
-        const bandVariantObjectId = constraints.groundingScope?.find(
-          (ref) => ref.conceptId === 'object.suitcase',
-        )?.worldObjectId;
-
-        state.lastTurnEvidence = {
-          turnId: previousTurn.turnId,
-          timestamp: new Date().toISOString(),
-          playerInput: playerInput.text ?? playerInput.objectId ?? String(playerInput.choiceIndex ?? ''),
-          responseMode: previousTurn.responseMode,
-          bandUsed,
-          policyUsed: constraints.supportLanguagePolicy ?? 'unknown',
-          supportShown: !!constraints.groundingScope,
-          supportRequested: false,
-          groundingShown: !!constraints.groundingScope,
-          groundingUsed: !!playerInput.objectId,
-          retries: state.attemptCount - 1,
-          deliveryType: previousTurn.initialDelivery ? 'initialDelivery' : 'targetText',
-          teachingConcepts: previousTurn.teachingConcepts,
-          shownGroundingRefs: constraints.groundingScope?.map((ref) => ref.worldObjectId).filter((id): id is string => !!id),
-          bandVariantObjectId,
-          taskSuccess: evalResult.taskSuccess,
-          formAccuracy: evalResult.formAccuracy,
-          supportDependence: state.attemptCount > 1 ? Math.min(1, (state.attemptCount - 1) * 0.33) : 0,
-        };
-
-        console.log(
-          `[SL·P2] eval → turn=${previousTurn.turnId} correct=${evalResult.correct} formAccuracy=${evalResult.formAccuracy}` +
-          ` taskSuccess=${evalResult.taskSuccess} attempt=${state.attemptCount} posture=${correctionPosture}`,
-        );
-        console.log(
-          `[SL·P2] evidence → delivery=${state.lastTurnEvidence.deliveryType}` +
-          ` concepts=[${state.lastTurnEvidence.teachingConcepts.join(', ')}]` +
-          ` bandVariant=${state.lastTurnEvidence.bandVariantObjectId ?? 'none'}` +
-          ` groundingRefs=[${(state.lastTurnEvidence.shownGroundingRefs ?? []).join(', ')}]`,
-        );
-
-        // --- Advancement decision: based on taskSuccess, not correct ---
-        // taskSuccess=true means the player communicated the right thing.
-        // correct=false just means form wasn't perfect (e.g. wrong word order).
-        // When taskSuccess=true but correct=false, advance but record lower formAccuracy.
-
-        if (evalResult.taskSuccess) {
-          // Player communicated successfully — advance (reset attempt counter)
-          state.attemptCount = 0;
-          // Fall through to produce next turn below
-        } else if (correctionPosture === 'none') {
-          // B4: never show correction — always advance on failure
-          state.attemptCount = 0;
-          console.log(`[SL·P2] posture=none → advancing without correction`);
-          // Fall through to produce next turn below
-        } else {
-          const recoveryThreshold = (bandId === 'B2' || bandId === 'B3') ? 4 : 3;
-
-          if (state.attemptCount >= recoveryThreshold) {
-            // Recovery threshold reached — apply band-specific hard recovery.
-            const recoveryOutput = buildRecoveryTurn(previousTurn, evalResult, bandId);
-            state.attemptCount = 0;
-
-            if (recoveryOutput) {
-              // Mark pending so next input is handled as a recovery choice,
-              // not evaluated against the turn.
-              if (bandId === 'B2' || bandId === 'B4' || (bandId === 'B3' && recoveryOutput.responseContract.mode === 'short_text')) {
-                state.pendingRecovery = { originalTurn: previousTurn, bandId };
-              }
-              setProviderState(session, state);
-              return recoveryOutput;
-            }
-            // null recovery = just advance (fall through)
-          } else if (correctionPosture === 'delayed') {
-            // B2: don't show correction immediately — store it for the next turn
-            state.deferredCorrection = evalResult.feedback ?? 'Check your previous answer.';
-            console.log(`[SL·P2] posture=delayed → deferring correction to next turn`);
-            // Retry the same turn without correction feedback shown
-            const retryContract = turnToResponseContract(previousTurn);
-            // On attempt 2+, restore word bank for B3 scaffold gating
-            if (state.attemptCount >= 2 && previousTurn.responseData?.wordBank) {
-              retryContract.wordBank = previousTurn.responseData.wordBank;
-            }
-
-            const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, previousTurn);
-
-            setProviderState(session, state);
-            return {
-              utterance: previousTurn.initialDelivery ?? previousTurn.targetText,
-              speakerId: previousTurn.speakerId,
-              speakerName: previousTurn.speakerName,
-              emotion: previousTurn.emotion,
-              responseContract: retryContract,
-              diagnostics: {
-                supportText: previousTurn.supportText,
-                targetText: previousTurn.targetText,
-                turnId: previousTurn.turnId,
-                teachingConcepts: previousTurn.teachingConcepts,
-                repairOptions: visibleRepairOptions,
-                showRepairOptions: visibleRepairOptions.length > 0,
-                tappableWords: extractTappableWords(previousTurn),
-              },
-            };
-          } else if (correctionPosture === 'on_request') {
-            // B3: don't auto-correct — re-show the same turn and reveal the
-            // next stage of authored repair options after failure. The typed
-            // surface stays clean until the learner explicitly asks for more
-            // production help via a repair action.
-            const retryContract = turnToResponseContract(previousTurn);
-            // Keep the first-response surface clean; B3 support should be
-            // revealed through authored repair actions, not auto-shown hints.
-            delete retryContract.wordBank;
-
-            const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, previousTurn);
-            setProviderState(session, state);
-            return {
-              utterance: previousTurn.initialDelivery ?? previousTurn.targetText,
-              speakerId: previousTurn.speakerId,
-              speakerName: previousTurn.speakerName,
-              emotion: previousTurn.emotion,
-              responseContract: retryContract,
-              diagnostics: {
-                supportText: previousTurn.supportText,
-                targetText: previousTurn.targetText,
-                turnId: previousTurn.turnId,
-                teachingConcepts: previousTurn.teachingConcepts,
-                repairOptions: visibleRepairOptions,
-                showRepairOptions: visibleRepairOptions.length > 0,
-                tappableWords: extractTappableWords(previousTurn),
-              },
-            };
-          } else {
-            // immediate (B0/B1): current behavior — show feedback and retry immediately
-            const retryContract = turnToResponseContract(previousTurn);
-            retryContract.hintText = evalResult.feedback ?? retryContract.hintText;
-
-            setProviderState(session, state);
-            return {
-              utterance: evalResult.feedback ?? 'Try again!',
-              speakerId: previousTurn.speakerId,
-              speakerName: previousTurn.speakerName,
-              emotion: 'encouraging',
-              responseContract: retryContract,
-            };
-          }
-        }
-      }
-    }
-
-    // --- Produce the next turn ---
+    // Produce the next turn
     if (state.turnCursor >= state.turns.length) {
-      // All turns exhausted — end the scene
       state.complete = true;
       setProviderState(session, state);
       return {
@@ -758,43 +705,16 @@ export function createSugarlangScriptedProvider(
 
     const currentTurn = state.turns[state.turnCursor]!;
     state.turnCursor++;
-    state.attemptCount = 0;
-
-    // Consume any deferred correction from the previous turn (delayed posture)
-    const deferredNote = state.deferredCorrection;
-    state.deferredCorrection = undefined;
 
     setProviderState(session, state);
 
     const responseContract = turnToResponseContract(currentTurn);
-
-    // B3 scaffold gating: strip wordBank from initial turn (shown on retry only)
-    const bandId = (constraints.learnerBand ?? 'B0') as LearnerBandId;
-    if (bandId === 'B3' && responseContract.wordBank) {
-      delete responseContract.wordBank;
-      console.log(`[SL·P2] B3 scaffold gating → wordBank stripped from initial turn ${currentTurn.turnId}`);
-    }
-
-    // Render initialDelivery if authored, otherwise fall back to targetText
-    let renderedUtterance = currentTurn.initialDelivery ?? currentTurn.targetText;
-
-    // Prepend deferred correction note if present (delayed posture from previous turn)
-    if (deferredNote) {
-      renderedUtterance = `[Note: ${deferredNote}] ${renderedUtterance}`;
-      console.log(`[SL·P2] deferred correction shown: "${deferredNote}"`);
-    }
+    const renderedUtterance = currentTurn.initialDelivery ?? currentTurn.targetText;
 
     console.log(
-      `[SL·P2] turn → id=${currentTurn.turnId} delivery=${currentTurn.initialDelivery ? 'initialDelivery' : 'targetText'}` +
-      ` mode=${currentTurn.responseMode} concepts=[${currentTurn.teachingConcepts.join(', ')}]`,
+      `[SL·provider] flat turn → id=${currentTurn.turnId}` +
+      ` mode=${currentTurn.responseMode}`,
     );
-
-    // Extract tappable target-language words for clarification prefill
-    const visibleRepairOptions = getVisibleRepairOptions(state.attemptCount, currentTurn);
-    const tappableWords = currentTurn.teachingConcepts.length > 0 && visibleRepairOptions.some((r) => r.type === 'clarification_template')
-      ? extractTappableWords(currentTurn)
-      : undefined;
-    const showRepairOptions = visibleRepairOptions.length > 0;
 
     return {
       utterance: renderedUtterance,
@@ -805,24 +725,40 @@ export function createSugarlangScriptedProvider(
       groundingMetadata: constraints.groundingScope
         ? { references: constraints.groundingScope }
         : undefined,
-      turnEvidence: state.lastTurnEvidence,
       diagnostics: {
         supportText: currentTurn.supportText,
         targetText: currentTurn.targetText,
         turnId: currentTurn.turnId,
-        teachingConcepts: currentTurn.teachingConcepts,
-        lastTurnEvidence: state.lastTurnEvidence,
-        repairOptions: visibleRepairOptions,
-        showRepairOptions,
-        tappableWords,
-        deferredCorrection: deferredNote,
-        correctionPosture: constraints.hardConstraints['correctionPosture'],
       },
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Main produceTurn dispatcher
+  // -------------------------------------------------------------------------
+
+  async function produceTurn(
+    session: ConversationSession,
+    constraints: ProviderConstraintBundle,
+    playerInput?: PlayerInput,
+  ): Promise<ProviderTurnOutput> {
+    const state = getProviderState(session);
+
+    if (!state) {
+      return {
+        utterance: '',
+        responseContract: { mode: 'free_form' },
+        hostActionProposals: [{ type: 'closeConversation' }],
+      };
+    }
+
+    if (state.mode === 'tree') {
+      return produceTreeTurn(session, state, constraints, playerInput);
+    }
+    return produceFlatTurn(session, state, constraints, playerInput);
+  }
+
   async function endSession(session: ConversationSession): Promise<void> {
-    // Clean up session state
     delete session.middlewareState[PROVIDER_KEY];
   }
 

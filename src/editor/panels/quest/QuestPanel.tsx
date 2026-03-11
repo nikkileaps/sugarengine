@@ -14,8 +14,9 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useEditorStore } from '../../store';
+import { CompactIdDisplay } from '../../components';
 import { QuestDetail } from './QuestDetail';
-import { generateUUID, shortId } from '../../utils';
+import { generateUUID } from '../../utils';
 import type {
   BeatNodeType,
   NarrativeSubtype,
@@ -368,10 +369,13 @@ export function QuestPanel({
                     <Text size="sm" fw={500}>
                       {quest.name}
                     </Text>
-                    <Text size="xs" c="dimmed">
-                      {quest.stages.length} stage{quest.stages.length !== 1 ? 's' : ''} ·{' '}
-                      {shortId(quest.id)}
-                    </Text>
+                    <Group gap={6} wrap="nowrap">
+                      <Text size="xs" c="dimmed">
+                        {quest.stages.length} stage{quest.stages.length !== 1 ? 's' : ''}
+                      </Text>
+                      <Text size="xs" c="dimmed">·</Text>
+                      <CompactIdDisplay value={quest.id} />
+                    </Group>
                   </Stack>
                   {warnings.length > 0 && (
                     <Badge size="xs" color="red">

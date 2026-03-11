@@ -237,7 +237,7 @@ describe('pedagogyContext on PluginAgentContext', () => {
         communicativeTask: 'Find the luggage',
         correctionPosture: 'delayed',
         responseContract: { mode: 'short_text' },
-        groundingScope: [{ conceptId: 'object.suitcase', targetForm: 'maleta' }],
+        groundingScope: [{ lexicalEntryId: 'object.suitcase', targetForm: 'maleta' }],
       },
     };
     expect(ctx.pedagogyContext.learnerBand).toBe('B2');

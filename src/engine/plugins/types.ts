@@ -72,9 +72,22 @@ export interface PluginPedagogyContext {
     maxLength?: number;
     hintText?: string;
   };
+  availableTrackedLexicalEntryIds?: string[];
+  teachingSubset?: {
+    focusLexicalEntryIds: string[];
+    reinforcementLexicalEntryIds: string[];
+    ambientLexicalEntryIds: string[];
+    protectedLexicalEntryIds: string[];
+  };
+  ambientHaloAllowance?: {
+    allowHigherBandTracked: boolean;
+    allowUntrackedFlavor: boolean;
+    maxTrackedLookahead?: number;
+    maxUntrackedPhrases?: number;
+  };
   /** Grounding references available for this turn. */
   groundingScope?: Array<{
-    conceptId: string;
+    lexicalEntryId: string;
     targetForm: string;
     worldObjectId?: string;
     worldAttribute?: string;

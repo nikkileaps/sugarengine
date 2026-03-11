@@ -25,7 +25,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b0-es-01',
           targetText: '¿Ves la maleta roja?',
           initialDelivery: 'Do you see la maleta roja?',
-          teachingConcepts: ['object.suitcase', 'color.red'],
+          focusLexicalEntryIds: ['object.suitcase', 'color.red'],
           responseMode: 'chip_composition',
           responseData: {
             chips: ['Sí', 'I see', 'la', 'maleta', 'roja'],
@@ -75,7 +75,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b0-es-02',
           targetText: 'Bien. Toca la maleta roja.',
           initialDelivery: 'Good! Now tap la maleta roja.',
-          teachingConcepts: ['object.suitcase', 'color.red'],
+          focusLexicalEntryIds: ['object.suitcase', 'color.red'],
           responseMode: 'object_selection',
           responseData: {
             hintText: 'Tap the red suitcase in the scene.',
@@ -104,7 +104,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b0-es-03',
           targetText: 'Aquí está la maleta roja.',
           initialDelivery: 'You found it! Now say: here is la maleta roja.',
-          teachingConcepts: ['object.suitcase', 'color.red'],
+          focusLexicalEntryIds: ['object.suitcase', 'color.red'],
           responseMode: 'chip_composition',
           responseData: {
             chips: ['Here', 'is', 'la', 'maleta', 'roja'],
@@ -132,7 +132,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b1-es-01',
           targetText: 'Necesito la maleta azul. ¿Puedes mostrarme dónde está?',
           initialDelivery: 'Necesito la maleta azul. Can you show me where it is?',
-          teachingConcepts: ['object.suitcase', 'color.blue', 'location.there'],
+          focusLexicalEntryIds: ['object.suitcase', 'color.blue', 'location.there'],
           responseMode: 'single_blank',
           responseData: {
             blanks: [{ id: 'blank1', acceptedAnswers: ['allí', 'alli', 'aquí', 'aqui'] }],
@@ -179,7 +179,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b1-es-02',
           targetText: 'Muéstrame la maleta azul.',
           initialDelivery: 'Show me la maleta azul.',
-          teachingConcepts: ['object.suitcase', 'color.blue'],
+          focusLexicalEntryIds: ['object.suitcase', 'color.blue'],
           responseMode: 'object_selection',
           responseData: {
             hintText: 'Tap the blue suitcase in the scene.',
@@ -208,7 +208,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b1-es-03',
           targetText: 'Aquí está la maleta azul.',
           initialDelivery: 'Great! Now tell me: here is the blue suitcase.',
-          teachingConcepts: ['location.here', 'verb.is_located', 'object.suitcase', 'color.blue'],
+          focusLexicalEntryIds: ['location.here', 'verb.is_located', 'object.suitcase', 'color.blue'],
           responseMode: 'phrase_assembly',
           responseData: {
             wordBank: ['Aquí', 'está', 'la', 'maleta', 'azul'],
@@ -233,7 +233,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b2-es-01',
           targetText: 'Perdí mi maleta. Es negra. ¿Puedes ayudarme?',
           supportText: 'I lost my suitcase. It is black. Can you help me?',
-          teachingConcepts: ['object.suitcase', 'color.black', 'verb.help'],
+          focusLexicalEntryIds: ['object.suitcase', 'color.black', 'verb.help'],
           responseMode: 'short_text',
           responseData: {
             maxLength: 80,
@@ -248,7 +248,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 keywordPatterns: ['ayud', 'sí', 'si', 'claro', 'puedo'],
                 requiredSlots: [],
                 optionalSlots: [
-                  { conceptId: 'verb.help', keywords: ['ayud', 'ayudar', 'ayudo'] },
+                  { lexicalEntryId: 'verb.help', keywords: ['ayud', 'ayudar', 'ayudo'] },
                 ],
               },
             ] satisfies IntentFamily[],
@@ -330,7 +330,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b2-es-02',
           targetText: 'Gracias. ¿Dónde está la maleta negra?',
           supportText: 'Thanks. Where is the black suitcase?',
-          teachingConcepts: ['phrase.where_is', 'object.suitcase', 'color.black'],
+          focusLexicalEntryIds: ['phrase.where_is', 'object.suitcase', 'color.black'],
           responseMode: 'short_text',
           responseData: {
             maxLength: 80,
@@ -344,11 +344,11 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 label: 'Report suitcase location',
                 keywordPatterns: ['está', 'esta', 'aquí', 'aqui', 'allí', 'alli', 'puerta'],
                 requiredSlots: [
-                  { conceptId: 'object.suitcase', keywords: ['maleta'] },
+                  { lexicalEntryId: 'object.suitcase', keywords: ['maleta'] },
                 ],
                 optionalSlots: [
-                  { conceptId: 'color.black', keywords: ['negra', 'negro'] },
-                  { conceptId: 'object.door', keywords: ['puerta'] },
+                  { lexicalEntryId: 'color.black', keywords: ['negra', 'negro'] },
+                  { lexicalEntryId: 'object.door', keywords: ['puerta'] },
                 ],
               },
             ] satisfies IntentFamily[],
@@ -432,7 +432,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b2-es-03',
           targetText: '¡Perfecto! La veo cerca de la puerta. ¡Gracias!',
           supportText: 'Perfect! I see it near the door. Thanks!',
-          teachingConcepts: ['object.door'],
+          focusLexicalEntryIds: ['object.door'],
           responseMode: 'yes_no',
           evaluation: {
             expectedYesNo: true,
@@ -454,7 +454,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b3-es-01',
           targetText: 'Estoy buscando una maleta pequeña que dejé al lado del mostrador. Tiene una cinta verde.',
           supportText: '',
-          teachingConcepts: ['verb.look_for', 'adjective.small', 'object.counter', 'location.beside', 'object.ribbon_green'],
+          focusLexicalEntryIds: ['verb.look_for', 'adjective.small', 'object.counter', 'location.beside', 'object.ribbon_green'],
           responseMode: 'short_text',
           responseData: {
             maxLength: 120,
@@ -468,10 +468,10 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 label: 'Ask about an attribute',
                 keywordPatterns: ['es', 'tiene', 'color', 'pequeña', 'pequena', 'cinta', 'verde'],
                 requiredSlots: [
-                  { conceptId: 'adjective.small', keywords: ['pequeña', 'pequena', 'pequeño', 'pequeno', 'chica'] },
+                  { lexicalEntryId: 'adjective.small', keywords: ['pequeña', 'pequena', 'pequeño', 'pequeno', 'chica'] },
                 ],
                 optionalSlots: [
-                  { conceptId: 'object.ribbon_green', keywords: ['cinta', 'verde'] },
+                  { lexicalEntryId: 'object.ribbon_green', keywords: ['cinta', 'verde'] },
                 ],
               },
               {
@@ -479,10 +479,10 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 label: 'Ask about location',
                 keywordPatterns: ['dónde', 'donde', 'mostrador', 'lado', 'cerca'],
                 requiredSlots: [
-                  { conceptId: 'object.counter', keywords: ['mostrador'] },
+                  { lexicalEntryId: 'object.counter', keywords: ['mostrador'] },
                 ],
                 optionalSlots: [
-                  { conceptId: 'location.beside', keywords: ['lado', 'al lado', 'cerca'] },
+                  { lexicalEntryId: 'location.beside', keywords: ['lado', 'al lado', 'cerca'] },
                 ],
               },
             ] satisfies IntentFamily[],
@@ -564,7 +564,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b3-es-02',
           targetText: 'Sí, es pequeña y tiene una cinta verde en el asa. ¿La ves al lado del mostrador?',
           supportText: '',
-          teachingConcepts: ['adjective.small', 'object.ribbon_green', 'location.beside', 'object.counter'],
+          focusLexicalEntryIds: ['adjective.small', 'object.ribbon_green', 'location.beside', 'object.counter'],
           responseMode: 'short_text',
           responseData: {
             maxLength: 120,
@@ -578,8 +578,8 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 keywordPatterns: ['sí', 'si', 'veo', 'encuentro', 'encontré', 'encontre', 'aquí', 'aqui', 'allí', 'alli'],
                 requiredSlots: [],
                 optionalSlots: [
-                  { conceptId: 'object.suitcase', keywords: ['maleta'] },
-                  { conceptId: 'object.counter', keywords: ['mostrador'] },
+                  { lexicalEntryId: 'object.suitcase', keywords: ['maleta'] },
+                  { lexicalEntryId: 'object.counter', keywords: ['mostrador'] },
                 ],
               },
               {
@@ -587,10 +587,10 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 label: 'Report where it is',
                 keywordPatterns: ['está', 'esta', 'aquí', 'aqui', 'allí', 'alli', 'mostrador', 'lado'],
                 requiredSlots: [
-                  { conceptId: 'object.suitcase', keywords: ['maleta'] },
+                  { lexicalEntryId: 'object.suitcase', keywords: ['maleta'] },
                 ],
                 optionalSlots: [
-                  { conceptId: 'location.beside', keywords: ['lado', 'cerca'] },
+                  { lexicalEntryId: 'location.beside', keywords: ['lado', 'cerca'] },
                 ],
               },
             ] satisfies IntentFamily[],
@@ -672,7 +672,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b3-es-03',
           targetText: '¡Muchas gracias! La encontré gracias a tu ayuda.',
           supportText: '',
-          teachingConcepts: ['verb.find'],
+          focusLexicalEntryIds: ['verb.find'],
           responseMode: 'yes_no',
           evaluation: {
             expectedYesNo: true,
@@ -695,7 +695,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b4-es-01',
           targetText: 'Creo que alguien movió mi equipaje cuando anunciaron el cambio de andén. Era una maleta de cuero bastante gastada, con una cinta verde en el asa.',
           supportText: '',
-          teachingConcepts: ['location.platform', 'adjective.leather', 'adjective.worn', 'object.ribbon_green'],
+          focusLexicalEntryIds: ['location.platform', 'adjective.leather', 'adjective.worn', 'object.ribbon_green'],
           responseMode: 'open_text',
           responseData: {
             maxLength: 200,
@@ -709,8 +709,8 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 keywordPatterns: ['ayud', 'busc', 'encontr', 'veo', 'vi', 'puedo'],
                 requiredSlots: [],
                 optionalSlots: [
-                  { conceptId: 'object.suitcase', keywords: ['maleta', 'equipaje'] },
-                  { conceptId: 'adjective.leather', keywords: ['cuero'] },
+                  { lexicalEntryId: 'object.suitcase', keywords: ['maleta', 'equipaje'] },
+                  { lexicalEntryId: 'adjective.leather', keywords: ['cuero'] },
                 ],
               },
               {
@@ -719,7 +719,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 keywordPatterns: ['cómo', 'como', 'qué', 'que', 'color', 'grande', 'tamaño'],
                 requiredSlots: [],
                 optionalSlots: [
-                  { conceptId: 'adjective.worn', keywords: ['gastada', 'gastado', 'vieja'] },
+                  { lexicalEntryId: 'adjective.worn', keywords: ['gastada', 'gastado', 'vieja'] },
                 ],
               },
               {
@@ -727,10 +727,10 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 label: 'Report seeing the suitcase',
                 keywordPatterns: ['veo', 'vi', 'está', 'esta', 'aquí', 'aqui', 'allí', 'alli', 'puerta', 'lateral'],
                 requiredSlots: [
-                  { conceptId: 'object.suitcase', keywords: ['maleta', 'equipaje'] },
+                  { lexicalEntryId: 'object.suitcase', keywords: ['maleta', 'equipaje'] },
                 ],
                 optionalSlots: [
-                  { conceptId: 'object.side_door', keywords: ['puerta lateral', 'puerta del lado', 'lateral'] },
+                  { lexicalEntryId: 'object.side_door', keywords: ['puerta lateral', 'puerta del lado', 'lateral'] },
                 ],
               },
             ] satisfies IntentFamily[],
@@ -748,7 +748,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b4-es-02',
           targetText: 'La última vez la vi cerca de la puerta lateral. ¿Podrías ir a mirar?',
           supportText: '',
-          teachingConcepts: ['object.side_door', 'verb.look_for'],
+          focusLexicalEntryIds: ['object.side_door', 'verb.look_for'],
           responseMode: 'open_text',
           responseData: {
             maxLength: 200,
@@ -762,7 +762,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 keywordPatterns: ['sí', 'si', 'claro', 'voy', 'vamos', 'busc', 'miro', 'mirar'],
                 requiredSlots: [],
                 optionalSlots: [
-                  { conceptId: 'object.side_door', keywords: ['puerta lateral', 'lateral'] },
+                  { lexicalEntryId: 'object.side_door', keywords: ['puerta lateral', 'lateral'] },
                 ],
               },
               {
@@ -770,7 +770,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
                 label: 'Report finding the suitcase',
                 keywordPatterns: ['encontr', 'veo', 'vi', 'está', 'esta', 'aquí', 'aqui'],
                 requiredSlots: [
-                  { conceptId: 'object.suitcase', keywords: ['maleta', 'equipaje'] },
+                  { lexicalEntryId: 'object.suitcase', keywords: ['maleta', 'equipaje'] },
                 ],
                 optionalSlots: [],
               },
@@ -789,7 +789,7 @@ export const SCENE_PACK_ES: SceneLanguagePack = {
           turnId: 'b4-es-03',
           targetText: '¡Excelente! Esa es mi maleta. Muchas gracias por tu ayuda.',
           supportText: '',
-          teachingConcepts: ['verb.help', 'verb.find'],
+          focusLexicalEntryIds: ['verb.help', 'verb.find'],
           responseMode: 'yes_no',
           evaluation: {
             expectedYesNo: true,

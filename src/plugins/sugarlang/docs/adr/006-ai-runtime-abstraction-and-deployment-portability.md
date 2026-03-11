@@ -50,6 +50,13 @@ The architecture should think in capabilities such as:
 - transcription
 - explanation
 
+Those capabilities should operate over the shared Sugarlang domain model:
+
+- quest-linked scenarios
+- derived interactions
+- target-language interaction overlays
+- shared vocabulary entries and grounding links
+
 Those capabilities may be served by:
 
 - local browser models
@@ -206,7 +213,7 @@ The architecture should remain portable across all of them.
 
 A provider can move from local runtime to commercial API without changing:
 
-- scene semantics
+- scenario and interaction semantics
 - response contracts
 - learner-state contracts
 - Sugarlang overlay storage

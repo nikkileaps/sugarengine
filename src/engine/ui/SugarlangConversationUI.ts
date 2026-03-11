@@ -62,6 +62,7 @@ export class SugarlangConversationUI {
   private closeHandler: SugarlangCloseHandler | null = null;
   private repairHandler: RepairHandler | null = null;
   private visible = false;
+  private awaitingAdvance = false;
 
   constructor(parent: HTMLElement) {
     this.injectStyles();
@@ -107,6 +108,13 @@ export class SugarlangConversationUI {
       if (event.code === 'Escape') {
         event.preventDefault();
         this.closeHandler?.();
+        return;
+      }
+      // Advance past NPC-only delivery turns (free_form with no response widget)
+      if (this.awaitingAdvance && (event.code === 'KeyE' || event.code === 'Enter' || event.code === 'Space')) {
+        event.preventDefault();
+        this.awaitingAdvance = false;
+        this.submitHandler?.({ text: '' });
       }
     });
   }
@@ -183,8 +191,13 @@ export class SugarlangConversationUI {
     this.feedbackEl.textContent = '';
     this.feedbackEl.style.display = 'none';
 
-    // Response widget
-    this.responseModeUI.show(turn.responseContract);
+    // Response widget — for free_form NPC-only turns, hide the widget and let E/Enter advance
+    this.awaitingAdvance = turn.responseContract.mode === 'free_form';
+    if (this.awaitingAdvance) {
+      this.responseModeUI.hide();
+    } else {
+      this.responseModeUI.show(turn.responseContract);
+    }
   }
 
   /**

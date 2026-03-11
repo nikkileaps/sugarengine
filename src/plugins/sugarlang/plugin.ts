@@ -28,6 +28,8 @@ export interface SugarlangPluginOptions {
   contentBundle?: SugarlangContentBundle;
   /** Map from NPC ID to the scenario ID that NPC belongs to. */
   npcScenarioMap?: Map<string, string>;
+  /** Resolve a dialogue tree by ID from the game's loaded dialogues. */
+  getDialogueTree?: (dialogueId: string) => import('../../engine/dialogue/types').DialogueTree | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +96,7 @@ export function createSugarlangPlugin(options: SugarlangPluginOptions = {}): Eng
   const provider = createSugarlangScriptedProvider({
     contentBundle,
     getScenarioForNpc,
+    getDialogueTree: options.getDialogueTree ?? (() => undefined),
   });
 
   // -------------------------------------------------------------------------

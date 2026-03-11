@@ -55,6 +55,7 @@ The host is responsible for:
 
 - session lifecycle
 - provider selection
+- active quest -> scenario -> interaction resolution
 - middleware execution
 - normalized turn envelopes
 - response contract rendering
@@ -82,7 +83,7 @@ Middleware order must not be a side effect of plugin registration order.
 
 The host should own a stage model similar to:
 
-1. scene context hydration
+1. quest, scenario, and interaction context hydration
 2. learner and policy contribution
 3. provider invocation
 4. output validation or downgrade
@@ -103,7 +104,7 @@ Whether the turn came from:
 
 the rest of the system should receive a normalized turn envelope with:
 
-- scene semantics
+- scenario and interaction semantics
 - stable scenario referent and optional grounded band variant
 - rendered utterance payload
 - rendered surface classification such as initial delivery, repair, or happy-path response frame
@@ -122,18 +123,22 @@ The middleware-to-provider channel is part of the architecture, not a follow-on 
 
 The engine-mediated provider input bundle should be able to carry:
 
-- scene semantics and communicative task
+- quest, scenario, and interaction identity
+- source quest-node and dialogue-beat refs
+- communicative task
 - target language and support language
 - learner-band context and support dependence
 - support-language policy
 - mixed-language surface policy for initial delivery, repair, and response scaffolds
-- protected target-language teaching units that must remain visible
+- protected target-language vocabulary entries that must remain visible
+- tracked teaching subset intent and any ambient-halo allowance
 - natural mixed-language rendering requirements
 - response-contract requirements
 - clarification-entry policy
 - word-bank or scaffold policy, including whether distractors are allowed
 - grounding scope and prioritized referents
 - stable scenario referent and optional grounded band variant
+- active quest binding and any allowed objective-completion hook
 - failure and recovery posture
 - trace identity and diagnostics context
 

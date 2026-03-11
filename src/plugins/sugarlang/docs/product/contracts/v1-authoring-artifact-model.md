@@ -19,14 +19,16 @@ It is the content contract the editor, AI assistant, and future implementation s
 
 ## Product Decision
 
-V1 Sugarlang content should be organized around reusable teaching artifacts, not ad hoc translated scene files.
+V1 Sugarlang content should be organized around reusable teaching artifacts, not ad hoc translated interaction files.
 
 That means:
 
 - shared lexicon lives once per target language
 - shared band defaults live once per product
-- scenario-owned grounding and quest binding live with the semantic scene
-- scene language packs reference those shared assets and add band-specific behavior, including how mixed language appears in initial delivery, repair, and happy-path response frames
+- one scenario is associated to one quest
+- interactions live inside the scenario as the learner-facing communicative beats derived from that quest
+- scenario-owned grounding and quest binding live with that quest overlay
+- target-language scenario overlays reference those shared assets and add band-specific behavior, including how mixed language appears in initial delivery, repair, and happy-path response frames
 
 ## Base Rule
 
@@ -42,19 +44,37 @@ Those overlay artifacts are the canonical authored product content for language 
 
 Purpose:
 
-- define the semantic learning scenario for one authored scene or objective
+- define the semantic Sugarlang overlay for one authored quest
 
 Should answer:
 
-- what is the communicative task
-- what counts as task success
-- which learner bands the scene supports
+- which quest this scenario belongs to
+- what the quest-level communicative arc is
+- what stable grounded referents matter across the quest
+- which learner bands and target languages this scenario supports
 
 Logical home:
 
 - `plugins/sugarlang/scenarios/`
 
-### 2. Grounding Map
+### 2. Interaction Set
+
+Purpose:
+
+- define the learner-facing communicative beats inside the scenario
+
+Should answer:
+
+- which interactions were derived from the quest graph
+- which quest nodes and dialogue beats each interaction came from
+- which NPCs and world objects each interaction binds to
+- what success semantics and quest-completion hook each interaction owns
+
+Logical home:
+
+- `plugins/sugarlang/scenarios/`
+
+### 3. Grounding Map
 
 Purpose:
 
@@ -70,7 +90,7 @@ Logical home:
 
 - `plugins/sugarlang/scenarios/`
 
-### 3. Grounded Quest Binding
+### 4. Grounded Quest Binding
 
 Purpose:
 
@@ -92,7 +112,7 @@ Product rule:
 
 - grounded quest binding is scenario-owned because it expresses quest truth, not language-pack surface text
 
-### 4. Shared Lexicon Pack
+### 5. Shared Lexicon Pack
 
 Purpose:
 
@@ -100,7 +120,7 @@ Purpose:
 
 Should answer:
 
-- what the stable teachable concepts and chunks are
+- what the stable shared lexicon rows and chunks are
 - what the preferred target-language forms are
 - what the glosses are
 - when the item is normally introduced
@@ -110,7 +130,7 @@ Logical home:
 - `plugins/sugarlang/languages/en/lexicon/`
 - `plugins/sugarlang/languages/es/lexicon/`
 
-### 5. Grammar and Chunk Ladder Pack
+### 6. Grammar and Chunk Ladder Pack
 
 Purpose:
 
@@ -127,7 +147,7 @@ Logical home:
 - `plugins/sugarlang/languages/en/grammar/`
 - `plugins/sugarlang/languages/es/grammar/`
 
-### 6. Band Policy Pack
+### 7. Band Policy Pack
 
 Purpose:
 
@@ -144,36 +164,44 @@ Should answer:
 Product rule:
 
 - the band policy pack defines the default posture
-- it does not own the final wording of scene-specific mixed-language lines or response frames
+- it does not own the final wording of interaction-specific mixed-language lines or response frames
 
 Logical home:
 
 - `plugins/sugarlang/defaults/`
 
-### 7. Scene Language Pack
+### 8. Scenario Language Overlay
 
 Purpose:
 
-- define the target-language realization of one scenario
+- define the target-language realization of one scenario and its interactions
 
 Should answer:
 
-- what initial-delivery lines or candidate lines exist in the target language
-- what the focus and recycled teaching units are
-- what repair variants exist in the target language
+- which interaction overlays exist for that scenario
+- what initial-delivery lines or candidate lines exist for each interaction in the target language
+- what the `focus`, `reinforcement`, and `ambient` vocabulary roles are for each interaction
+- what repair variants exist for each interaction
 - how support language is mixed in the initial line, repair, and happy-path response frames
 - what response frames exist for chip composition, blank fill, guided assembly, or typed support
 - which target-language items must remain visible in mixed-language delivery
 - which support-language glue or helper chunks are allowed around those target-language items
 - what response scaffolds and fallback scaffolds exist
 - what evaluation and recovery rules apply
+- what quest-success hooks are allowed for each interaction
+
+Product rule:
+
+- for bounded scripted dialogue beats, the first pass may be generated deterministically via band-based lexical substitution
+- that first pass should still persist the full banded interaction bundle, not just translated NPC text
+- later human or optional LLM surface polish may improve line phrasing without silently changing interaction identity, source bindings, vocabulary roles, response contracts, evaluation targets, or quest hooks
 
 Logical home:
 
 - `plugins/sugarlang/languages/en/scenes/`
 - `plugins/sugarlang/languages/es/scenes/`
 
-### 8. Preview and Eval Fixtures
+### 9. Preview and Eval Fixtures
 
 Purpose:
 
@@ -214,11 +242,13 @@ The important product decision here is the ownership split within that canonical
 
 ### Authored per scenario
 
+- quest association
 - semantic task
 - referents
+- interaction set
 - grounding map
 - grounded quest binding
-- scene success model
+- scenario success model
 
 Product note:
 
@@ -226,14 +256,37 @@ Product note:
 
 ### Authored per scenario per target language
 
-- learner-band scene variants
-- focus and recycled teaching units
+- interaction overlays
+- learner-band interaction variants
+- `focus`, `reinforcement`, and `ambient` vocabulary roles per interaction
 - initial-delivery variants
 - happy-path response frames
 - repair variants
-- mixed-language policy for that scene's initial line, repair, and happy-path responses
+- mixed-language policy for that interaction's initial line, repair, and happy-path responses
 - response scaffolds and fallback scaffolds
 - evaluation rules
+- quest-success hooks
+
+### Authored per interaction per target language per band
+
+Each persisted band variant should be reviewable as one structured interaction bundle.
+
+At minimum, that bundle should capture:
+
+- the interaction identity
+- source quest-node refs
+- source dialogue-beat refs
+- involved NPC refs
+- involved world-object refs
+- the band-specific NPC line
+- the `focus`, `reinforcement`, and `ambient` vocabulary-entry ids
+- the primary response contract
+- the visible response scaffold
+- the repair ladder
+- the evaluation target
+- the allowed quest-success hook
+
+See [Deterministic Banded Turn Generation](../../api/deterministic-banded-turn-generation.md).
 
 ## Product Rule for Vocabulary Storage
 
@@ -241,7 +294,18 @@ Vocabulary lives in two places with different roles.
 
 ### Shared language lexicon
 
-This is the canonical reusable home of the teaching unit.
+This is the canonical reusable home of the vocabulary entry.
+
+It is one shared per-target-language teaching dictionary for the whole game, not a separate lexicon per scenario or per band.
+
+It should own:
+
+- stable lexical entry id
+- preferred target-language form
+- gloss
+- category
+- first or introduction band
+- default usage or teaching priority
 
 Examples:
 
@@ -250,20 +314,32 @@ Examples:
 - `repair.i_dont_understand -> I don't understand`
 - `repair.i_dont_understand -> no entiendo`
 
-### Scene language pack
+### Scenario language overlay
 
-This is the home of the scene's use of that teaching unit.
+This is the home of the scenario's and interaction's use of that vocabulary entry.
+
+It should own:
+
+- which interactions use the entry
+- which interactions treat it as `focus`
+- which interactions treat it as `reinforcement`
+- which interactions allow it as `ambient`
+- which items stay protected or highlighted in mixed-language delivery
 
 Examples:
 
-- this scene introduces `maleta`
-- this scene recycles `roja`
-- this scene uses the `B0` initial line `Do you see la maleta roja?`
-- this scene uses the `B1` response frame `La maleta ____ está ____ .`
-- this scene allows a B0 clarification repair response rendered in the target language, such as Spanish-target `¿Qué significa "__" en inglés?`, optionally prefilled from visible target tokens such as `maleta` or `roja`
-- this scene protects `maleta` and `roja` during mixed-language initial delivery, repair, and happy-path response building
+- the `greeting` interaction uses `hola` as `focus`
+- the `describe_target_luggage` interaction uses `maleta` as `focus`
+- the `describe_target_luggage` interaction uses `roja` as `reinforcement`
+- the `return_target_luggage` interaction allows a few higher-band words as `ambient`
+- the `describe_target_luggage` interaction uses the `B0` initial line `Do you see la maleta roja?`
+- the `describe_target_luggage` interaction uses the `B1` response frame `La maleta ____ está ____ .`
+- the interaction allows a B0 clarification repair response rendered in the target language, such as Spanish-target `¿Qué significa "__" en inglés?`, optionally prefilled from visible target tokens such as `maleta` or `roja`
+- the interaction protects `maleta` and `roja` during mixed-language initial delivery, repair, and happy-path response building
 
 The product needs both.
+
+See [V1 Lexicon and Interaction Curriculum Model](./v1-lexicon-and-scene-curriculum-model.md).
 
 ## Product Rule for Mixed-Language Ownership
 
@@ -273,12 +349,12 @@ Mixed-language behavior lives in more than one layer, but those layers have diff
 
 These define:
 
-- what the reusable teaching units are
+- what reusable vocabulary entries and chunks exist
 - what their preferred target-language forms are
 - when they are normally introduced
 - what kinds of structures are appropriate by band
 
-They do not decide the final scene-specific mixed wording.
+They do not decide the final interaction-specific mixed wording.
 
 ### Band policy pack
 
@@ -288,17 +364,17 @@ This defines:
 - when mixed language should move from initial delivery into repair-only support
 - when response scaffolds should shift from chips to word banks to typing
 
-It does not decide the actual mixed line the learner sees in a specific scene.
+It does not decide the actual mixed line the learner sees in a specific interaction.
 
-### Scene language pack
+### Scenario language overlay
 
-This is the canonical home of the actual mixed-language realization for that scene and band.
+This is the canonical home of the actual mixed-language realization for that interaction and band.
 
 It should own:
 
-- the initial NPC line for that band
-- the repair variants for that band
-- the happy-path response frame for that band
+- the initial NPC line for that interaction and band
+- the repair variants for that interaction and band
+- the happy-path response frame for that interaction and band
 - the response scaffold attached to that frame
 - the set of target-language items that must remain visible
 - the allowed support-language glue around those items
@@ -310,13 +386,13 @@ Examples:
 - `B1` initial line: `Necesito la maleta azul. Can you show me where it is?`
 - `B1` response frame: `La maleta ____ está ____ .`
 
-Scenario briefs, grounding maps, and grounded quest bindings should not own those surface lines.
+Scenario briefs, interaction sets, grounding maps, and grounded quest bindings should not own those surface lines.
 
-They own scene meaning and quest truth, not the mixed-language wording.
+They own interaction meaning and quest truth, not the mixed-language wording.
 
 ## Product Rule for Grounded Quest Binding
 
-If a scene teaches a quest-relevant referent, the product should try to bind that referent through the whole quest loop:
+If an interaction teaches a quest-relevant referent, the product should try to bind that referent through the whole quest loop:
 
 - description
 - world object
@@ -326,19 +402,19 @@ If a scene teaches a quest-relevant referent, the product should try to bind tha
 
 That contract is defined in [V1 Grounded Quest Binding Model](./v1-grounded-quest-binding-model.md).
 
-## Product Rule for Scene-Local Vocabulary
+## Product Rule for Interaction-Local Vocabulary
 
-Some scenes will need a word or chunk that is not yet in the shared lexicon.
+Some interactions will need a word or chunk that is not yet in the shared lexicon.
 
 V1 should allow:
 
-- `scene-local provisional vocabulary`
+- `interaction-local provisional vocabulary`
 
 But repeated or stable items should be promoted into the shared lexicon.
 
 ## Product Rule for English and Spanish
 
-English and Spanish should be parallel target-language packs over the same scenario model.
+English and Spanish should be parallel target-language overlays over the same scenario and interaction model.
 
 That means:
 
@@ -348,34 +424,39 @@ That means:
 - both use the same band semantics
 - both can have different surface lines and language-specific evaluation details
 
+The same ownership split should also extend cleanly to additional target-language packs such as Italian.
+
 ## AI Generation Contract
 
-When the AI assistant generates a scene draft, it should produce or update:
+When the AI assistant generates a scenario draft, it should produce or update:
 
 - the scenario brief if missing
+- the interaction set if missing or stale
 - the grounding map if missing or stale
 - the grounded quest binding if missing or stale
-- the target-language scene pack for English
-- the target-language scene pack for Spanish
+- the target-language scenario overlay for English
+- the target-language scenario overlay for Spanish
 
 It may also suggest:
 
-- new lexicon items
-- promotions of scene-local vocabulary into the shared lexicon
+- new vocabulary entries
+- promotions of interaction-local vocabulary into the shared lexicon
+- per-interaction `focus`, `reinforcement`, and `ambient` role suggestions
 - grammar or chunk tags
 
 ## Product Review Questions
 
-For every new scene, product review should be able to answer:
+For every new scenario, product review should be able to answer:
 
-- which teaching units are focus versus recycled
+- which interactions were derived from the quest
+- which vocabulary entries are `focus`, `reinforcement`, or `ambient` in each interaction
 - which repair variants exist
-- what the initial mixed-language delivery is for each supported band
-- what the happy-path response frame is for each supported band
+- what the initial mixed-language delivery is for each interaction and supported band
+- what the happy-path response frame is for each interaction and supported band
 - which referents carry the meaning
-- whether the scene uses one stable referent with per-band concrete variants
+- whether the interaction uses one stable referent with per-band concrete variants
 - how those referents bind to the real quest loop
 - how support language behaves in each band
-- whether English and Spanish packs are parallel enough to compare meaningfully
+- whether English and Spanish overlays are parallel enough to compare meaningfully
 
 If those answers are unclear, the content model is not concrete enough.

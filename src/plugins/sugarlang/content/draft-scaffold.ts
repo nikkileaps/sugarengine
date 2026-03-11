@@ -35,6 +35,7 @@ import {
   serializeSceneLanguagePack,
   artifactPaths,
 } from './artifacts';
+import { getSharedLexicon } from './lexicons';
 
 // ---------------------------------------------------------------------------
 // Input types — simplified game content from the editor
@@ -113,8 +114,8 @@ export interface ScaffoldOptions {
   bands?: LearnerBandId[];
 }
 
-const DEFAULT_TARGET_LANGUAGES = ['en', 'es'];
-const DEFAULT_SUPPORT_MAP: Record<string, string> = { en: 'es', es: 'en' };
+const DEFAULT_TARGET_LANGUAGES = ['es'];
+const DEFAULT_SUPPORT_MAP: Record<string, string> = { es: 'en' };
 const DEFAULT_BANDS: LearnerBandId[] = ['B0', 'B1', 'B2', 'B3', 'B4'];
 
 // ---------------------------------------------------------------------------
@@ -207,6 +208,7 @@ export function generateDraftScaffold(
     // Build scenario brief
     const scenario: ScenarioBrief = {
       scenarioId,
+      associatedQuestId: quest.id,
       communicativeTask: `[TODO: Describe the communicative task for "${quest.name}"]`,
       successCriteria: quest.stages.flatMap((s) =>
         s.objectives.map((o) => o.description || `Complete: ${o.type} ${o.target}`),
@@ -232,7 +234,7 @@ export function generateDraftScaffold(
         const item = itemMap.get(pickup.itemId);
         if (item) {
           groundingEntries.push({
-            conceptId: `object.${toSlug(item.name)}`,
+            lexicalEntryId: `object.${toSlug(item.name)}`,
             worldObjectId: pickup.id,
             highlightActions: ['highlight', 'tap_inspect'],
           });
@@ -241,7 +243,7 @@ export function generateDraftScaffold(
       }
       for (const insp of region.inspectables ?? []) {
         groundingEntries.push({
-          conceptId: `inspectable.${toSlug(insp.id)}`,
+          lexicalEntryId: `inspectable.${toSlug(insp.id)}`,
           worldObjectId: insp.id,
           highlightActions: ['highlight', 'tap_inspect'],
         });
@@ -264,7 +266,7 @@ export function generateDraftScaffold(
         const bandVariants: QuestBindingBandVariant[] = bands.map((bandId) => ({
           bandId,
           worldObjectId: pickup.id,
-          teachingConcepts: [`object.${toSlug(item.name)}`],
+          highlightedLexicalEntryIds: [`object.${toSlug(item.name)}`],
         }));
 
         questBindings.push({
@@ -301,7 +303,7 @@ export function generateDraftScaffold(
               turnId: `${bandId.toLowerCase()}-${lang}-01`,
               targetText: `[TODO: Target-language NPC line for ${quest.name}, band ${bandId}]`,
               initialDelivery: `[TODO: Initial delivery line, may be mixed-language at low bands]`,
-              teachingConcepts: [],
+              focusLexicalEntryIds: [],
               responseMode: bandId === 'B0' ? 'chip_composition'
                 : bandId === 'B1' ? 'blank_fill'
                 : 'short_text',
@@ -320,12 +322,9 @@ export function generateDraftScaffold(
     }
   }
 
-  // Generate empty lexicon shells
+  // Generate bundle-level starter lexicons for each target language.
   for (const lang of targetLanguages) {
-    const lexicon: LexiconPack = {
-      targetLanguage: lang,
-      entries: [],
-    };
+    const lexicon: LexiconPack = getSharedLexicon(lang);
     files.set(artifactPaths.lexicon(lang), serializeLexiconPack(lexicon, 'draft'));
   }
 

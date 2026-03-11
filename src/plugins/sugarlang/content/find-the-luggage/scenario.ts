@@ -45,60 +45,60 @@ export const FIND_THE_LUGGAGE_GROUNDING: GroundingMap = {
   scenarioId: 'find-the-luggage',
   entries: [
     {
-      conceptId: 'object.suitcase',
+      lexicalEntryId: 'object.suitcase',
       worldObjectId: 'suitcase-red',
       highlightActions: ['highlight', 'tap_inspect'],
     },
     {
-      conceptId: 'object.suitcase',
+      lexicalEntryId: 'object.suitcase',
       worldObjectId: 'suitcase-blue',
       highlightActions: ['highlight', 'tap_inspect'],
     },
     {
-      conceptId: 'object.suitcase',
+      lexicalEntryId: 'object.suitcase',
       worldObjectId: 'suitcase-black',
       highlightActions: ['highlight', 'tap_inspect'],
     },
     {
-      conceptId: 'color.red',
+      lexicalEntryId: 'color.red',
       worldObjectId: 'suitcase-red',
       worldAttribute: 'color',
       highlightActions: ['highlight'],
     },
     {
-      conceptId: 'color.blue',
+      lexicalEntryId: 'color.blue',
       worldObjectId: 'suitcase-blue',
       worldAttribute: 'color',
       highlightActions: ['highlight'],
     },
     {
-      conceptId: 'color.black',
+      lexicalEntryId: 'color.black',
       worldObjectId: 'suitcase-black',
       worldAttribute: 'color',
       highlightActions: ['highlight'],
     },
     {
-      conceptId: 'object.door',
+      lexicalEntryId: 'object.door',
       worldObjectId: 'station-door',
       highlightActions: ['highlight', 'camera_focus'],
     },
     {
-      conceptId: 'object.counter',
+      lexicalEntryId: 'object.counter',
       worldObjectId: 'service-counter',
       highlightActions: ['highlight', 'camera_focus'],
     },
     {
-      conceptId: 'object.ribbon_green',
+      lexicalEntryId: 'object.ribbon_green',
       worldObjectId: 'suitcase-ribbon',
       highlightActions: ['highlight', 'tap_inspect'],
     },
     {
-      conceptId: 'location.platform',
+      lexicalEntryId: 'location.platform',
       worldObjectId: 'station-platform',
       highlightActions: ['highlight', 'camera_focus'],
     },
     {
-      conceptId: 'object.side_door',
+      lexicalEntryId: 'object.side_door',
       worldObjectId: 'side-door',
       highlightActions: ['highlight', 'camera_focus'],
     },
@@ -109,11 +109,11 @@ export const FIND_THE_LUGGAGE_QUEST_BINDINGS: GroundedQuestBinding[] = [
   {
     scenarioReferentId: 'target_luggage_primary',
     bandVariants: [
-      { bandId: 'B0', worldObjectId: 'suitcase-red', teachingConcepts: ['object.suitcase', 'color.red'] },
-      { bandId: 'B1', worldObjectId: 'suitcase-blue', teachingConcepts: ['object.suitcase', 'color.blue'] },
-      { bandId: 'B2', worldObjectId: 'suitcase-black', teachingConcepts: ['object.suitcase', 'color.black'] },
-      { bandId: 'B3', worldObjectId: 'suitcase-ribbon', teachingConcepts: ['object.suitcase', 'object.ribbon_green', 'adjective.leather'] },
-      { bandId: 'B4', worldObjectId: 'suitcase-ribbon', teachingConcepts: ['object.suitcase', 'object.ribbon_green', 'adjective.leather', 'adjective.worn'] },
+      { bandId: 'B0', worldObjectId: 'suitcase-red', highlightedLexicalEntryIds: ['object.suitcase', 'color.red'] },
+      { bandId: 'B1', worldObjectId: 'suitcase-blue', highlightedLexicalEntryIds: ['object.suitcase', 'color.blue'] },
+      { bandId: 'B2', worldObjectId: 'suitcase-black', highlightedLexicalEntryIds: ['object.suitcase', 'color.black'] },
+      { bandId: 'B3', worldObjectId: 'suitcase-ribbon', highlightedLexicalEntryIds: ['object.suitcase', 'object.ribbon_green', 'adjective.leather'] },
+      { bandId: 'B4', worldObjectId: 'suitcase-ribbon', highlightedLexicalEntryIds: ['object.suitcase', 'object.ribbon_green', 'adjective.leather', 'adjective.worn'] },
     ],
     affordances: {
       tapInspect: true,

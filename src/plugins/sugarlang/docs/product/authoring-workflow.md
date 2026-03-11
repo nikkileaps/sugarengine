@@ -6,7 +6,7 @@ This document defines the intended creator workflow for Sugarlang authoring.
 
 The central requirement is:
 
-the creator should be able to author the game in English first and then ask Sugarlang, through the editor, an external AI assistant in chat, or direct structured-file editing, to generate and refine the immersive language-learning overlay.
+the creator should be able to author the game in English first and then ask Sugarlang, through the editor, an external workspace assistant operating on generated packets and files, or direct structured-file editing, to generate and refine the immersive language-learning overlay.
 
 ## Core Authoring Model
 
@@ -16,7 +16,7 @@ The workflow is:
 
 1. create quests, dialogue, NPCs, regions, world objects, pickups, and quest objectives as a normal game
 2. keep that authored content in English
-3. ask Sugarlang to infer the learning scenario, repair behavior, mixed-language support, grounding, and scene variants
+3. ask Sugarlang to run `Sync From Quest` and derive the scenario, interactions, grounding, quest bindings, and target-language overlays
 4. refine the generated overlay through review, playtest, and regeneration
 
 This keeps the creator focused on:
@@ -24,10 +24,36 @@ This keeps the creator focused on:
 - narrative design
 - quest structure
 - world setup
-- scene intent
+- interaction intent
 - game feel
 
 instead of forcing them to manually author pedagogical structure from scratch.
+
+The shared lexicon should be treated as cumulative by band for each supported target language.
+
+That means:
+
+- a learner placed at `B2` should immediately have the cumulative `B0 + B1 + B2` tracked vocabulary pool
+- a learner placed at `B4` should have the full tracked vocabulary pool for the supported slice
+- scenes then choose smaller `focus`, `reinforcement`, and `ambient` subsets from that cumulative pool
+
+See [V1 Cumulative Banded Lexicon Contract](./contracts/v1-cumulative-banded-lexicon-contract.md).
+
+For bounded scripted dialogue beats, `Sync From Quest` should also be able to do a deterministic first pass from the English quest dialogue beat itself.
+
+That first pass should persist, per band:
+
+- the NPC line
+- `focus`, `reinforcement`, and `ambient`
+- the response contract
+- the visible response scaffold
+- the repair ladder
+- the evaluation target
+- the quest-success hook
+
+The writer should then be able to review those persisted results directly and optionally do a later surface-polish pass over the NPC lines and repair phrasing without changing the interaction structure underneath.
+
+See [Deterministic Banded Turn Generation](../api/deterministic-banded-turn-generation.md).
 
 ## Runtime Language Model
 
@@ -58,10 +84,10 @@ The canonical on-disk layout is defined in [ADR-SL-001](../adr/001-english-first
 This workflow depends on that layout separating:
 
 - project-level plugin settings
-- scenario-owned semantic data
+- scenario-owned semantic data and interaction bindings
 - scenario-owned grounding and grounded quest binding data
 - shared defaults
-- per-target-language scene packs
+- per-target-language scenario overlays
 - eval artifacts
 - disposable caches or SQLite indexes
 
@@ -82,24 +108,39 @@ V1 does not require a full dedicated Sugarlang authoring suite in the editor.
 The minimum editor responsibilities are:
 
 - project-level Sugarlang enablement and language-pair configuration
+- scenario-first authoring and inspection
+- `Sync From Quest`
 - artifact-backed preview controls
 - validation/error inspection
 - opening or locating the relevant Sugarlang artifact files
 
 Later editor-specific actions may include:
 
-- `Generate Sugarlang Draft`
+- `Regenerate Interaction`
 - `Regenerate Beginner Bands`
 - `Regenerate Repair Policy`
-- `Generate English Variants`
-- `Generate Spanish Variants`
+- `Regenerate English Overlay`
+- `Regenerate Spanish Overlay`
 - `Rebuild Grounded Quest Binding`
 
 Those richer in-editor surfaces and actions are post-V1 work and belong to Phase 6 of the implementation plan, not Phase 4.
 
-### Chat Client
+### External Assistant Client
 
-The creator talks to an external AI assistant operating in the same workspace and says things like:
+The creator may also use an external workspace assistant such as Codex.
+
+The preferred flow is not ad hoc prompting.
+
+It is:
+
+1. ask SugarEngine to generate a bounded packet for one authoring operation
+2. use a generated assistant-task template
+3. let the assistant read only the packet, the relevant artifacts, and the referenced docs
+4. return to SugarEngine for validation and preview
+
+When proposing lexicon updates, the assistant should work against the cumulative band contract for the whole supported slice rather than only the currently selected quest.
+
+Typical requests still look like:
 
 - `generate the Sugarlang draft for quest find-the-luggage`
 - `rewrite the B0 and B1 variants to be more immersive and less translated`
@@ -107,7 +148,9 @@ The creator talks to an external AI assistant operating in the same workspace an
 - `bind maleta to the red suitcase pickup and the return step`
 - `regenerate only the Spanish B2 variant with stronger repair behavior`
 
-The assistant reads the English-authored game content and writes the same Sugarlang files the editor preview will use.
+But the assistant should work from the generated packet and its referenced files rather than from a manually assembled giant prompt.
+
+The assistant writes the same Sugarlang files or structured proposal artifacts the editor preview will use.
 
 ### Direct Structured-File Editing
 
@@ -128,7 +171,7 @@ Phase 4 V1 implementation should be narrower:
 1. canonical persisted Sugarlang artifacts on disk
 2. loaders, serializers, and validators for those artifacts
 3. minimal editor integration for enablement, preview, and inspection
-4. external AI-assisted drafting/refinement through direct file writes
+4. bounded packet generation and external AI-assisted drafting/refinement through those same files
 
 Phase 4 V1 does **not** require:
 
@@ -141,21 +184,47 @@ Phase 4 V1 does **not** require:
 
 The full end-state pipeline is:
 
-1. read English-authored quest, dialogue, NPC, region, object, pickup, inventory, and objective structure
-2. read visible scene context that can ground language
-3. extract stable scene and object references
-4. infer the semantic learning scenario
-5. infer communicative task, success model, and grounded referents
-6. infer a grounded quest binding chain for the scene
-7. draft learner-band variants
-8. draft repair behavior by band
-9. draft mastery-aware mixed-language policies by band
-10. draft response scaffolds, including when chips are primary versus fallback
-11. draft evaluation rules and failure recovery
-12. validate references and write round-trip-safe files
+1. read the English-authored quest, quest graph, dialogue, NPC, region, object, pickup, inventory, and objective structure
+2. traverse the quest graph and identify learner-facing communicative beats
+3. derive one Sugarlang scenario for the quest
+4. derive one or more interactions inside that scenario
+5. bind each interaction back to source quest nodes, dialogue beats, NPCs, and world objects
+6. infer or refresh grounded quest bindings for the quest-critical referents
+7. look up or draft shared lexicon rows for the needed vocabulary
+8. draft target-language interaction overlays and learner-band variants
+9. draft repair behavior by band
+10. draft mastery-aware mixed-language policies by band
+11. draft response scaffolds, including when chips are primary versus fallback
+12. draft evaluation rules and failure recovery
+13. validate references and write round-trip-safe files
 
-In V1, the implemented code path only needs to cover the structural parts of that pipeline:
+For bounded scripted dialogue beats, the first implementation path should be more concrete than "draft overlays."
 
+It should:
+
+1. read the English quest dialogue beat
+2. derive the interaction
+3. look up the needed shared vocabulary entries
+4. apply the selected band policies
+5. emit one persisted banded turn bundle per band
+
+That bundle should contain:
+
+- NPC line
+- `focus`, `reinforcement`, and `ambient`
+- response contract
+- visible scaffold
+- repair ladder
+- evaluation target
+- quest-success hook
+
+In V1, the implemented code path must at least cover the structural derive path for `Sync From Quest`:
+
+- scenario creation
+- interaction derivation from the quest graph
+- stable source bindings to quest nodes and dialogue beats
+- grounded quest binding derivation
+- deterministic first-pass banded turn generation via band-based lexical substitution
 - artifact creation
 - stable reference extraction
 - validation
@@ -163,24 +232,50 @@ In V1, the implemented code path only needs to cover the structural parts of tha
 
 Language-aware drafting, mixed-language authoring, and pedagogical refinement may still be performed by an external AI assistant or direct human editing against those same files.
 
+For V1, the important constraint is that this later pass should usually operate as surface polish over an already-persisted interaction bundle, not as the only source of the interaction's structure.
+
 This prevents the editor and external AI workflow from drifting into separate authoring systems.
 
-## What the AI Should Infer From the English Scene
+## Bounded Packet Handoff
 
-The AI should not stop at literal translation.
+When the writer wants outside AI help, SugarEngine should prepare a bounded authoring packet for one operation such as:
+
+- sync or regenerate the initial overlay for one quest
+- regenerate one interaction
+- regenerate `B0/B1` only
+- regenerate one repair ladder
+- rebuild one grounded quest binding
+
+The system should also be able to generate a starter task handoff for the external assistant so the writer does not have to explain:
+
+- what operation is in scope
+- what files are in scope
+- what product rules matter
+- what write boundaries must be respected
+
+That packet-plus-handoff model is the practical bridge between:
+
+- editor-driven authoring
+- Codex-style workspace assistance
+- direct structured-file editing
+
+## What Later AI Refinement Should Infer From the English Scene
+
+After the deterministic first pass exists, a later human or AI refinement step should not stop at literal translation.
 
 It should infer:
 
 - the communicative task
-- the likely target vocabulary
-- which words should be introduced, reinforced, or only passively visible
-- which repair moves make sense in the scene
+- the quest interaction boundaries
+- candidate vocabulary entries and chunks
+- which entries should be `focus`, `reinforcement`, or only ambient in this interaction
+- which repair moves make sense in the interaction
 - which lines should stay target-language first
 - where support-language mixing should appear during repair
 - which quest actions can reinforce the vocabulary
 - which world objects, regions, attributes, pickups, and inventory items should carry the meaning
 
-For `Find the Luggage`, that means the AI should notice things like:
+For `Find the Luggage`, that means the refinement pass should notice things like:
 
 - luggage objects
 - their colors and distinguishing features
@@ -188,9 +283,9 @@ For `Find the Luggage`, that means the AI should notice things like:
 - the pickup and inventory path for the correct suitcase
 - the return step where the player hands it back
 
-## Mixed-Language Drafting Rule
+## Mixed-Language Drafting Rule for Later Refinement
 
-The AI should draft support-language use as a repair strategy, not as a default translation strip.
+When a later human or AI pass refines the generated lines, it should draft support-language use as a repair strategy, not as a default translation strip.
 
 That means it should prefer outputs like:
 
@@ -206,7 +301,7 @@ over outputs like:
 
 ## Response Scaffold Drafting Rule
 
-When the AI drafts response scaffolds, it should prefer chip sets, prompts, and text supports that recycle active vocabulary and reflect real quest actions.
+When a later refinement pass adjusts response scaffolds, it should prefer chip sets, prompts, and text supports that recycle active vocabulary and reflect real quest actions.
 
 Examples:
 
@@ -221,11 +316,11 @@ Examples:
   - third failure: `Say it in {supportLanguage}`
 - guided return response: `Aquí está la maleta azul.`
 
-It should not default to empty acknowledgements unless the band or scene truly requires them.
+It should not default to empty acknowledgements unless the band or interaction truly requires them.
 
 ## Grounded Quest Binding Drafting Rule
 
-The AI should draft the same referent through the full quest loop whenever the authored scene supports it:
+When a later refinement pass touches grounded quest bindings, it should keep the same referent through the full quest loop whenever the authored interaction supports it:
 
 - NPC description
 - grounded world object
@@ -242,7 +337,7 @@ Generated Sugarlang files should be safe to regenerate and refine.
 That means:
 
 - stable IDs are preserved
-- scene and object references remain explicit
+- interaction and object references remain explicit
 - creator edits survive regeneration where possible
 - file formats remain diff-friendly
 - states such as `draft`, `reviewed`, and `approved` are supported
@@ -250,18 +345,18 @@ That means:
 ## Typical Creator Flow
 
 1. Author `Find the Luggage` in English, including the actual suitcase object, pickup, inventory item, and return step.
-2. Ask the AI assistant:
-   - `generate the Sugarlang draft for Find the Luggage in English and Spanish`
+2. Run `Sync From Quest` to generate the first structured Sugarlang overlay for the quest.
 3. Review the generated scenario, grounding map, grounded quest binding, and band variants.
-4. Ask follow-up refinements:
+4. Ask follow-up refinements when the generated lines or scaffolds need help:
    - `make B0 more immersive and remove the translation-strip feel`
    - `keep chips primary at B0, but make B1 a real word-bank blank-fill band`
    - `make B3 chips appear only after failure`
    - `recycle maleta and roja more aggressively in the responses`
    - `bind the red suitcase to pickup and inventory so the word stays consistent after collection`
    - `allow missing accent marks in the B2 typed response`
-5. Open the editor and preview the same scene across bands and language pairs.
-6. Ship once the overlays are validated and playtested.
+5. Use a human pass or outside AI assistant only for the scoped parts that still need refinement.
+6. Open the editor and preview the same interactions across bands and language pairs.
+7. Ship once the overlays are validated and playtested.
 
 ## Why This Workflow Matters
 

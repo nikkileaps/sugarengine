@@ -28,8 +28,9 @@ export function createDefaultLearnerState(
     repair: 0.0,
     confidence: 0.3,
     supportUsage: 0.9,
-    knownStructures: [],
-    unstableStructures: [],
+    knownLexicalEntryIds: [],
+    unstableLexicalEntryIds: [],
+    trackedLexicalEntries: {},
   };
 }
 
@@ -161,40 +162,75 @@ export class LearnerStateManager {
       this.state.repair = Math.min(1, this.state.repair + delta * 0.5);
     }
 
-    // Wire knownStructures / unstableStructures from teaching concepts
-    const concepts = evidence.teachingConcepts;
-    if (concepts && concepts.length > 0) {
-      for (const concept of concepts) {
-        if (evidence.taskSuccess && evidence.formAccuracy >= 0.8) {
-          // Strong success → known
-          if (!this.state.knownStructures.includes(concept)) {
-            this.state.knownStructures.push(concept);
-            console.log(`[SL·P2] learner → known+ "${concept}" (formAccuracy=${evidence.formAccuracy})`);
-          }
-          // Remove from unstable if it was there
-          const unstableIdx = this.state.unstableStructures.indexOf(concept);
-          if (unstableIdx !== -1) {
-            this.state.unstableStructures.splice(unstableIdx, 1);
-            console.log(`[SL·P2] learner → unstable- "${concept}" (promoted to known)`);
-          }
-        } else if (evidence.taskSuccess && evidence.formAccuracy < 0.8) {
-          // Weak success → unstable (unless already known)
-          if (!this.state.knownStructures.includes(concept) && !this.state.unstableStructures.includes(concept)) {
-            this.state.unstableStructures.push(concept);
-            console.log(`[SL·P2] learner → unstable+ "${concept}" (formAccuracy=${evidence.formAccuracy})`);
-          }
+    const roleBuckets = [
+      ...evidence.focusLexicalEntryIds,
+      ...evidence.reinforcementLexicalEntryIds,
+      ...evidence.ambientLexicalEntryIds,
+    ];
+    const lexicalEntryIds = Array.from(new Set(roleBuckets));
+
+    for (const lexicalEntryId of lexicalEntryIds) {
+      const existing = this.state.trackedLexicalEntries[lexicalEntryId];
+      const progress = existing ?? {
+        firstSeenAt: evidence.timestamp,
+        lastSeenAt: evidence.timestamp,
+        timesSeen: 0,
+        recognitionSuccesses: 0,
+        recognitionFailures: 0,
+        productionSuccesses: 0,
+        productionFailures: 0,
+        status: 'new' as const,
+      };
+
+      progress.lastSeenAt = evidence.timestamp;
+      progress.timesSeen += 1;
+
+      const productionAttempt = ['short_text', 'open_text', 'blank_fill', 'single_blank', 'phrase_assembly', 'chip_composition'].includes(evidence.responseMode);
+      if (evidence.taskSuccess) {
+        if (productionAttempt) {
+          progress.productionSuccesses += 1;
         } else {
-          // Failure → if previously known, demote to unstable
-          const knownIdx = this.state.knownStructures.indexOf(concept);
-          if (knownIdx !== -1) {
-            this.state.knownStructures.splice(knownIdx, 1);
-            if (!this.state.unstableStructures.includes(concept)) {
-              this.state.unstableStructures.push(concept);
-            }
-            console.log(`[SL·P2] learner → demoted "${concept}" (known→unstable, task failed)`);
-          }
+          progress.recognitionSuccesses += 1;
         }
+      } else if (productionAttempt) {
+        progress.productionFailures += 1;
+      } else {
+        progress.recognitionFailures += 1;
       }
+
+      if (evidence.taskSuccess && evidence.formAccuracy >= 0.8) {
+        progress.status = 'stable';
+        if (!this.state.knownLexicalEntryIds.includes(lexicalEntryId)) {
+          this.state.knownLexicalEntryIds.push(lexicalEntryId);
+          console.log(`[SL·P2] learner → known+ "${lexicalEntryId}" (formAccuracy=${evidence.formAccuracy})`);
+        }
+        const unstableIdx = this.state.unstableLexicalEntryIds.indexOf(lexicalEntryId);
+        if (unstableIdx !== -1) {
+          this.state.unstableLexicalEntryIds.splice(unstableIdx, 1);
+          console.log(`[SL·P2] learner → unstable- "${lexicalEntryId}" (promoted to known)`);
+        }
+      } else if (evidence.taskSuccess && evidence.formAccuracy < 0.8) {
+        progress.status = 'practicing';
+        if (
+          !this.state.knownLexicalEntryIds.includes(lexicalEntryId)
+          && !this.state.unstableLexicalEntryIds.includes(lexicalEntryId)
+        ) {
+          this.state.unstableLexicalEntryIds.push(lexicalEntryId);
+          console.log(`[SL·P2] learner → unstable+ "${lexicalEntryId}" (formAccuracy=${evidence.formAccuracy})`);
+        }
+      } else {
+        progress.status = 'practicing';
+        const knownIdx = this.state.knownLexicalEntryIds.indexOf(lexicalEntryId);
+        if (knownIdx !== -1) {
+          this.state.knownLexicalEntryIds.splice(knownIdx, 1);
+        }
+        if (!this.state.unstableLexicalEntryIds.includes(lexicalEntryId)) {
+          this.state.unstableLexicalEntryIds.push(lexicalEntryId);
+        }
+        console.log(`[SL·P2] learner → practicing "${lexicalEntryId}" (task failed)`);
+      }
+
+      this.state.trackedLexicalEntries[lexicalEntryId] = progress;
     }
   }
 

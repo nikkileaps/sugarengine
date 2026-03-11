@@ -6,8 +6,10 @@ This document defines the product-level language content model for V1 Sugarlang.
 
 It answers:
 
-- what counts as a teaching unit
+- what counts as a vocabulary entry or phrase
 - what the V1 lexicon should contain
+- what the V1 lexicon actually is
+- how cumulative band availability works
 - how vocabulary should progress through introduction, reinforcement, and retrieval
 - how mixed target/support language should behave
 - how English and Spanish fit the same product contract
@@ -29,6 +31,8 @@ The base game is authored in English.
 
 Sugarlang then produces per-target-language overlays from that English-authored game content.
 
+These examples use English and Spanish, but the same lexicon and interaction-role model should extend to additional target-language packs such as Italian.
+
 ## Product Decision
 
 V1 uses a curated teaching lexicon, not a purely open vocabulary model.
@@ -37,32 +41,57 @@ Frequency can inform prioritization, but frequency is not the product truth.
 
 The V1 truth is:
 
-- scene relevance
+- interaction relevance
 - visible grounding
 - quest usefulness
-- reusability across early scenes
+- reusability across early interactions
 - suitability for the available response contracts
+
+The shared lexicon is therefore the game's shared teaching dictionary for one target language.
+
+Scenario interaction overlays then consume that inventory by marking items as `focus`, `reinforcement`, or `ambient` for the current interaction and band.
+
+That shared lexicon is cumulative by band.
+
+A learner placed at `B2` should therefore immediately have the cumulative `B0 + B1 + B2` tracked pool available for the supported content slice, not just the words introduced by quest order so far.
+
+For V1 planning purposes, those cumulative pools target:
+
+- `B0 = 60`
+- `B1 = 150`
+- `B2 = 300`
+- `B3 = 550`
+- `B4 = 850`
 
 ## Core Content Layers
 
-Sugarlang content should be thought of in five layers.
+Sugarlang content should be thought of in five concrete layers.
 
-### 1. Semantic Concepts
+### 1. English-authored quest source
 
-Language-neutral concepts such as:
+The authored source is the normal SugarEngine content:
 
-- suitcase
-- red
-- door
-- counter
-- where is
-- help
+- quest graph
+- quest nodes
+- dialogue beats
+- NPCs
+- world objects
+- pickups and inventory steps
 
-### 2. Teaching Units
+### 2. Sugarlang scenario and interactions
 
-A scene can teach more than isolated dictionary words.
+Sugarlang derives:
 
-V1 teaching units may be:
+- one scenario for that quest
+- one or more interactions inside that scenario
+
+Those interactions are the learner-facing communicative beats.
+
+### 3. Vocabulary entries and phrases
+
+An interaction can teach more than isolated dictionary words.
+
+V1 vocabulary entries may be:
 
 - lexical items
   - `maleta`
@@ -75,69 +104,67 @@ V1 teaching units may be:
 - repair chunks
   - `no entiendo`
 
-### 3. Per-Target-Language Realizations
+### 4. Per-target-language realizations
 
-Each semantic concept or teaching unit has one or more target-language realizations.
+Each vocabulary entry lines up to one stable internal row so matching rows across English, Spanish, and Italian stay aligned.
 
 Examples:
 
-| Concept | English target | Spanish target |
+| Vocabulary entry | English target | Spanish target |
 | --- | --- | --- |
 | `object.suitcase` | `suitcase` | `maleta` |
 | `color.red` | `red` | `roja` |
 | `phrase.where_is` | `where is` | `dónde está` |
 | `repair.i_dont_understand` | `I don't understand` | `no entiendo` |
 
-### 4. Band-Specific Teaching Policy
+### 5. Band-specific interaction rendering
 
-The same teaching unit behaves differently by band.
+The same vocabulary entry behaves differently by band.
 
 Examples:
 
 - `maleta` may be highlighted and used in chip composition in `B0`
 - `maleta` may be assembled into a short phrase in `B1`
 - `maleta` may be expected in a typed location question in `B2`
-- `maleta` may become recycled, not newly taught, in `B3`
+- `maleta` may shift into reinforcement rather than being newly taught in `B3`
 
-### 5. Scene-Specific Teaching Selection
+Not every word in the game is active in every interaction.
 
-Not every word in the game is active in every scene.
-
-Each scene should declare:
+Each interaction should declare:
 
 - focus items
-- recycled items
-- passive items
-- support-only items
+- reinforcement items
+- ambient items
 
-## Teaching Unit States
+Support-only helper language may still exist in repair or UI, but it is not one of the three core interaction curriculum roles.
 
-V1 should classify teaching units by instructional role.
+## Lexicon Ownership vs Interaction Roles
 
-### `introduce`
+Sugarlang uses one shared lexicon per target language for the whole game.
 
-- first meaningful exposure in the product
-- strong grounding
-- strong support
+That lexicon owns stable properties such as:
 
-### `reinforce`
+- lexical entry id
+- preferred target-language form
+- gloss
+- category
+- introduction band
 
-- recently introduced and deliberately re-used
-- still visible in chips, prompts, or grounded labels
+Interactions do not own separate lexicons.
 
-### `retrieve`
+Instead, interactions assign vocabulary entries a current role:
 
-- expected to be recalled with less support
-- may still appear in fallback repair
+- `focus`
+- `reinforcement`
+- `ambient`
 
-### `passive`
+The key distinction is:
 
-- visible in the scene but not required for success
+- `introductionBand` is a stable lexicon property
+- `focus`, `reinforcement`, and `ambient` are dynamic interaction- or moment-level roles
 
-### `support-only`
-
-- appears only in help text, repair, or support-language UI
-- not a target teaching item for the scene
+See [V1 Lexicon and Interaction Curriculum Model](./v1-lexicon-and-scene-curriculum-model.md).
+See [V1 Cumulative Banded Lexicon Contract](./v1-cumulative-banded-lexicon-contract.md).
 
 ## Product Rule for Mixed-Language Rendering
 
@@ -145,7 +172,7 @@ Mixed-language rendering is not literal line-by-line translation.
 
 The rule is:
 
-- keep active target-language teaching units visible
+- keep active target-language vocabulary entries visible
 - prefer support language for non-mastered glue or repair framing
 - fade support-language use as the learner progresses
 - keep mixed lines sounding like something a helpful person would actually say
@@ -169,15 +196,15 @@ Mixed-language rendering should be:
 
 - mastery-aware
 - band-aware
-- scene-aware
+- interaction-aware
 - repair-aware
 - natural-feeling
 
-## Product Rule for Lexical Recycling
+## Product Rule for Vocabulary Reuse
 
 Sugarlang should deliberately re-encounter vocabulary over time.
 
-Each important teaching unit should ideally appear in more than one of these places:
+Each important vocabulary entry should ideally appear in more than one of these places:
 
 - NPC initial line
 - repair line
@@ -186,21 +213,53 @@ Each important teaching unit should ideally appear in more than one of these pla
 - pickup or inventory text
 - completion or report-back line
 
-This is the intended V1 model for spaced retrieval and lexical recycling.
+This is the intended V1 model for spaced retrieval and vocabulary reinforcement.
 
-## What Counts as a V1 Vocabulary Item
+## Quest, Scenario, and Interaction Binding
 
-For product purposes, a V1 vocabulary item should include:
+Language content does not hang in space.
 
-- a stable semantic concept or chunk id
+It is bound to the quest overlay model:
+
+- the quest stays engine-owned
+- the scenario is the Sugarlang overlay for that quest
+- interactions are derived from the quest graph
+- target-language overlays realize those interactions
+- bands change how those interactions are rendered
+
+See [V1 Quest, Scenario, Interaction, and Binding Model](./v1-quest-scenario-interaction-binding-model.md).
+
+For bounded scripted dialogue beats, the first pass should be concrete.
+
+`Sync From Quest` should be able to read the English-authored quest beat, derive the interaction, look up the shared vocabulary entries, and persist one banded interaction bundle per band.
+
+That bundle should include:
+
+- the NPC line
+- `focus`, `reinforcement`, and `ambient`
+- the response contract
+- the visible response scaffold
+- the repair ladder
+- the evaluation target
+- the quest-success hook
+
+Later human or optional LLM passes may improve the surface wording, but they should usually work as polish over that persisted interaction bundle rather than inventing the structure from scratch.
+
+See [Deterministic Banded Turn Generation](../../api/deterministic-banded-turn-generation.md).
+
+## What Counts as a V1 Vocabulary Entry
+
+For product purposes, a V1 vocabulary entry should include:
+
+- a stable internal row id or meaning key
 - a primary target-language form
 - optional alternate forms
 - a plain-language gloss
 - a content category
 - a first-introduction band
-- a teaching-unit type
-- a recommended instructional state
-- whether it can be grounded in the scene
+- an entry type such as word, phrase, or repair chunk
+- a default usage or teaching priority
+- whether it can be grounded in the interaction or world
 - whether it is likely to appear in repair or fallback scaffolds
 
 ## V1 Domain Scope
@@ -221,7 +280,13 @@ That means the V1 lexicon should skew toward:
 - short task verbs
 - report-back phrases
 
-## V1 Starter Teaching Inventory
+## Illustrative Inventory Excerpt
+
+The tables below are an illustrative excerpt showing the shape of the lexicon.
+
+They are not the full cumulative `60 / 150 / 300 / 550 / 850` inventory for the supported slice.
+
+Their job is to make the contract concrete, not to enumerate the entire shipped row set.
 
 ### A. Core task nouns
 
@@ -303,20 +368,18 @@ Spanish note:
 | `confirm.no` | `no` | `no` | `B0` |
 | `social.thank_you` | `thank you` | `gracias` | `B0` |
 
-## Active vs Recycled vs Passive vs Support-Only
+## Focus vs Reinforcement vs Ambient
 
-Every scene should classify teaching units as one of:
+Every interaction should classify relevant vocabulary entries as one of:
 
 - `focus`
-  - newly introduced or heavily reinforced in the scene
-- `recycled`
-  - intentionally re-used for retrieval
-- `passive`
-  - visible, but not required for success
-- `support-only`
-  - appears only in support or repair
+  - newly introduced or strongly re-taught in the interaction
+- `reinforcement`
+  - intentionally re-used because the learner should keep seeing it
+- `ambient`
+  - allowed in the language environment, but not required for low-band success
 
-This is how V1 avoids both under-teaching and overload.
+This is how V1 avoids both under-teaching and overload while still feeling immersive.
 
 ## V1 Grammar and Chunk Ladder
 
@@ -357,7 +420,7 @@ V1 needs a grammar ceiling, but the product should think in chunks as well as sy
 
 ## Product Rule for Scene Vocabulary Budgets
 
-Default focus-item budget per scene:
+Default focus-item budget per interaction:
 
 | Band | Focus items |
 | --- | --- |
@@ -367,7 +430,7 @@ Default focus-item budget per scene:
 | `B3` | 8-10 |
 | `B4` | 8-12 with a smaller explicit focus subset |
 
-Recycled items may also appear, but the scene should stay readable and playable.
+Recycled items may also appear, but the interaction should stay readable and playable.
 
 ## English Target-Language Role
 

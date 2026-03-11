@@ -26,17 +26,151 @@ Historical research context:
 
 - [Language Learning Product Roadmap](../research/LANGUAGE_LEARNING_PRODUCT_ROADMAP.md)
 
+Additional product framing:
+
+- [Wordlark Episode Writing Template](./wordlark-demo-sandbox-episode-template.md)
+
 ## V1 Pedagogical Contract Docs
 
+- [V1 Quest, Scenario, Interaction, and Binding Model](./contracts/v1-quest-scenario-interaction-binding-model.md)
 - [V1 Learner Band Matrix](./contracts/v1-learner-band-matrix.md)
 - [V1 Language Content Model](./contracts/v1-language-content-model.md)
+- [V1 Lexicon and Interaction Curriculum Model](./contracts/v1-lexicon-and-scene-curriculum-model.md)
+- [V1 Cumulative Banded Lexicon Contract](./contracts/v1-cumulative-banded-lexicon-contract.md)
 - [V1 Authoring Artifact Model](./contracts/v1-authoring-artifact-model.md)
 - [V1 Grounded Quest Binding Model](./contracts/v1-grounded-quest-binding-model.md)
 - [V1 Golden Slice: Find the Luggage](./contracts/v1-find-the-luggage-golden-slice.md)
 
 These concrete use cases are written primarily from the `English support -> Spanish target` perspective because that is the main learner-testing path.
 
-The same band and contract model must also support the opposite `Spanish support -> English target` pairing.
+The same band and contract model must also support the opposite `Spanish support -> English target` pairing and additional target-language packs such as Italian.
+
+## Core Domain Model
+
+Sugarlang sits on top of normal SugarEngine quest content.
+
+The plain-English domain model is:
+
+- `Quest`
+  - the engine-owned progression graph
+- `Scenario`
+  - the Sugarlang overlay for one quest
+- `Interaction`
+  - one learner-facing communicative beat inside that scenario
+- `Turn`
+  - one exchange inside an interaction
+
+The important ownership rule is:
+
+- quest truth stays in SugarEngine
+- Sugarlang associates one scenario to the quest
+- `Sync From Quest` traverses the quest graph and derives interactions inside that scenario
+- target languages and learner bands change how each interaction is rendered, not what the quest truth is
+
+For the full binding contract, see [V1 Quest, Scenario, Interaction, and Binding Model](./contracts/v1-quest-scenario-interaction-binding-model.md).
+
+## Deterministic First-Pass Interaction Generation
+
+For bounded scripted quest dialogue, V1 should not require the writer to hand-author every learner band.
+
+`Sync From Quest` should be able to read a simple English-authored quest beat such as:
+
+- `Hello. My name is Bippity. I am the Station Master.`
+
+and deterministically derive a full Sugarlang interaction bundle for each supported band.
+
+That bundle is not just a translated NPC line.
+
+For each band, it should persist:
+
+- the NPC line
+- `focus`, `reinforcement`, and `ambient` vocabulary roles
+- the primary response contract
+- the visible response scaffold
+- the repair ladder
+- the evaluation target
+- the quest-success hook
+
+This first pass is allowed to be simple and somewhat blunt.
+
+It should still be:
+
+- grounded
+- structurally correct
+- repair-aware
+- previewable
+- persisted in reviewable files
+
+Later, a writer or optional LLM-assisted pass may improve only the surface wording, such as:
+
+- NPC line phrasing
+- repair line phrasing
+- mixed-language glue
+
+That later polish should not silently change:
+
+- interaction identity
+- source bindings
+- vocabulary roles
+- response contract
+- evaluation target
+- quest-success hook
+
+See [Deterministic Banded Turn Generation](../api/deterministic-banded-turn-generation.md).
+
+## Lexicon and Interaction Roles
+
+Sugarlang owns one shared lexicon per target language for the whole game.
+
+That lexicon is the shared teaching dictionary for that language.
+
+It is:
+
+- not a scenario-local word list
+- not a separate lexicon per band
+- not a full dictionary of the language
+
+Each lexicon row, meaning one vocabulary entry the game tracks, has stable fields such as:
+
+- lexical entry id
+- preferred target-language form
+- gloss
+- category
+- first or introduction band
+
+Interactions then consume that shared pool by giving current items a role in the live experience:
+
+- `focus`
+- `reinforcement`
+- `ambient`
+
+The key distinction is:
+
+- `introductionBand` is a stable lexicon property
+- `focus`, `reinforcement`, and `ambient` are interaction- or moment-level roles
+
+That keeps the ownership clean:
+
+- lexicon = shared teaching dictionary
+- interaction overlay = what is active right now and how it is delivered
+
+The lexicon is also cumulative by band:
+
+- a `B2` learner gets the cumulative `B0 + B1 + B2` vocabulary pool immediately
+- a `B4` learner gets the full tracked vocabulary pool for the supported game slice
+- interaction `focus`, `reinforcement`, and `ambient` are drawn from that cumulative pool, not from quest order
+
+V1 planning targets per target language for the supported slice are:
+
+- `B0` cumulative pool: `60`
+- `B1` cumulative pool: `150`
+- `B2` cumulative pool: `300`
+- `B3` cumulative pool: `550`
+- `B4` cumulative pool: `850`
+
+See [V1 Cumulative Banded Lexicon Contract](./contracts/v1-cumulative-banded-lexicon-contract.md).
+
+For the plain-English domain/API glossary, see [Lexicon, World Object, and Grounding Glossary](../api/lexicon-world-object-and-grounding-glossary.md).
 
 ## Shared Quest Definition
 
@@ -63,7 +197,7 @@ What changes is:
 
 - how much mixed support language is present in the initial line, repair, and happy-path responses
 - which target-language words stay visible while support language carries the rest
-- how strongly the scene and UI ground meaning
+- how strongly the interaction and UI ground meaning
 - how much productive language the player is asked for
 - when chips, hints, and fallback scaffolds appear
 - how strictly language form is evaluated versus communicative success
@@ -81,7 +215,7 @@ It should model language learning as:
 - hear or read something in the target language
 - try to understand through context
 - signal confusion when needed
-- receive repair through simpler phrasing, mixed support language, and grounded scene help
+- receive repair through simpler phrasing, mixed support language, and grounded interaction help
 - act in the world
 - re-encounter the same vocabulary in meaningful quest actions
 
@@ -96,7 +230,7 @@ These docs use the following terms in a strict way:
   - used to compose a response or insert target-language material into a response
 - `word bank`
   - a bounded pool of candidate words or short chunks used to fill one or more authored blanks
-  - may include plausible scene-grounded distractors, not just correct answers
+  - may include plausible interaction-grounded distractors, not just correct answers
 - `response`
   - the utterance or action the player actually submits
 - `response mode`
@@ -152,7 +286,7 @@ The mixed-language policy should be:
 - token-aware
 - band-aware
 - mastery-aware
-- scene-aware
+- interaction-aware
 - natural-sounding
 
 Mixed-language lines should sound like believable in-world helper utterances, not arbitrary token substitution.
@@ -160,7 +294,7 @@ Mixed-language lines should sound like believable in-world helper utterances, no
 That means:
 
 - switch languages at natural clause or chunk boundaries when possible
-- preserve full target-language teaching units or noun phrases where they carry the learning goal
+- preserve full target-language vocabulary entries or noun phrases where they carry the learning goal
 - if a mixed line sounds unnatural, keep the line natural and move more support into the scaffold or repair instead of forcing the mix
 
 The progression should be explicit:
@@ -214,7 +348,7 @@ over empty acknowledgements like:
 - `Sí`
 - `No`
 
-when the scene can support richer vocabulary reuse without overloading the learner.
+when the interaction can support richer vocabulary reuse without overloading the learner.
 
 ## Progressive Bands Across Those Levers
 
@@ -288,7 +422,7 @@ For `B2`, the preferred repair ladder is:
      - `Say it more simply` drops the NPC phrasing toward the next-lower band while staying in the target language
 3. third failure
    - add `Say it in {supportLanguage}` as the last-resort rescue
-   - this should reveal a support-language paraphrase for that turn, not turn the scene into a permanent subtitle strip
+- this should reveal a support-language paraphrase for that turn, not turn the interaction into a permanent subtitle strip
 
 The product should prefer repair that uses:
 
@@ -332,9 +466,9 @@ Relevant current engine behavior:
 The creator workflow remains:
 
 1. author the game in English using normal SugarEngine tools
-2. ask Sugarlang to generate a draft directly or generate a bounded draft packet for the selected scene or quest slice
+2. ask Sugarlang to run `Sync From Quest` for the selected quest
 3. review and refine the generated overlay in SugarEngine or hand that same bounded job to an external workspace assistant such as Codex
-4. preview and validate the same scene across learner bands and language pairs
+4. preview and validate the same interactions across learner bands and language pairs
 
 This generation step should be available through one shared artifact model from:
 
@@ -348,35 +482,37 @@ All three should target the same Sugarlang files and contracts.
 
 The writer should not have to choose between:
 
-- a stable quest/world referent
+- a stable quest/world object or landmark
 - and progressive vocabulary teaching
 
 Sugarlang should model those as related but separate things.
 
 The clean authoring model is:
 
-- `world referent`
-  - the actual thing in the quest or scene
+- `world object`
+  - the actual thing in the quest or world
   - suitcase, counter, ribbon, door
-- `semantic concept`
-  - the language-learning concept attached to that thing
-  - `object.suitcase`, `color.red`, `object.counter`
-- `lexical status by band`
-  - whether that concept is:
-  - `active`
-  - `reinforced`
-  - `passive visible`
-  - `deferred`
+- `vocabulary entry` or `lexicon row`
+  - the word or phrase the game tracks and teaches
+  - `suitcase`, `maleta`, `where is`
+  - internally it may line up to a stable key such as `object.suitcase`
+- `grounding`
+  - the link between the vocabulary entry and the world object
+- `interaction role`
+  - how that lexicon row is being used right now
+  - `focus`
+  - `reinforcement`
+  - `ambient`
 
-That means the same suitcase can exist at every band, while the language foregrounded around it changes by band.
+That means the same suitcase can exist at every band, while the language foregrounded around it changes by interaction and band.
 
 For example:
 
 - the suitcase referent may exist in `B0` through `B4`
-- `maleta` may be active in `B0`
-- `roja` may be active in `B0` and reinforced later
-- `mostrador` may stay deferred until `B2` or `B3`
-- `cinta verde` may be introduced only in later bands
+- `maleta` may be introduced at `B0` and used as `focus` in an early interaction
+- `roja` may be `focus` in one interaction and later return as `reinforcement`
+- `mostrador` may not enter the shared lexicon until `B2` or `B3`
+- `cinta verde` may appear later as a higher-band vocabulary entry or as `ambient`
 
 So the quest truth stays stable.
 
@@ -386,9 +522,9 @@ The learner-facing vocabulary emphasis changes.
 
 Not every quest beat is equally good for every band.
 
-Sugarlang should therefore help the writer evaluate a scene's `lexical fit` for each band.
+Sugarlang should therefore help the writer evaluate an interaction's `lexical fit` for each band.
 
-The system should extract candidate concepts from the authored quest and score them using inputs such as:
+The system should extract candidate vocabulary entries from the authored quest and score them using inputs such as:
 
 - frequency tier
 - quest centrality
@@ -409,10 +545,10 @@ This is exactly where AI should help on the design side.
 
 The AI should:
 
-- read the authored quest and scene
-- extract candidate referents and concepts
+- read the authored quest and interaction source
+- extract candidate world objects and candidate vocabulary entries
 - score them for band suitability
-- draft per-band active/reinforced/passive/deferred concept sets
+- suggest which vocabulary entries should be `focus`, `reinforcement`, or `ambient`
 - warn when a quest beat is a poor fit for a band
 - propose simplifications, sub-beats, or variant objects when needed
 
@@ -488,18 +624,18 @@ V1 implementation note:
 
 Purpose:
 
-- bind the authored scene to a semantic learning scenario
+- bind the authored quest to a semantic learning scenario
 - declare the communicative task
-- declare scene-supported learner bands
+- declare interaction-supported learner bands
 - review candidate referents and their quest lexical fit
 
 ### 2. Learner Band Matrix
 
 Purpose:
 
-- define how the same scene behaves at `B0` through `B4`
+- define how the same interaction behaves at `B0` through `B4`
 - declare response posture, repair posture, support-language posture, and success expectations by band
-- declare which concepts are active, reinforced, passive visible, or deferred in each band
+- declare which shared vocabulary entries are `focus`, `reinforcement`, or `ambient` in each band
 
 ### 3. Repair and Support Policy Editor
 
@@ -537,12 +673,12 @@ Purpose:
 
 Purpose:
 
-- preview the same scene at different bands and language pairs
+- preview the same interaction at different bands and language pairs
 - verify that chip use, repair behavior, and grounding intensity change correctly across progression
 
 ## Product Litmus Test
 
-If a beginner scene still feels like:
+If a beginner interaction still feels like:
 
 - a translated subtitle
 - a worksheet

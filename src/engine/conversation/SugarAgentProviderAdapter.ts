@@ -70,7 +70,14 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
 
     // Bridge engine-mediated pedagogy constraints into the agent turn request
     const pedagogyContext: PluginPedagogyContext | undefined =
-      (constraints.learnerBand || constraints.supportLanguagePolicy || constraints.groundingScope)
+      (
+        constraints.learnerBand
+        || constraints.supportLanguagePolicy
+        || constraints.groundingScope
+        || constraints.availableTrackedLexicalEntryIds
+        || constraints.teachingSubset
+        || constraints.ambientHaloAllowance
+      )
         ? {
             learnerBand: constraints.learnerBand,
             supportLanguagePolicy: constraints.supportLanguagePolicy,
@@ -78,6 +85,9 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
             supportLanguage: constraints.supportLanguage,
             communicativeTask: constraints.communicativeTask,
             correctionPosture: constraints.hardConstraints['correctionPosture'] as string | undefined,
+            availableTrackedLexicalEntryIds: constraints.availableTrackedLexicalEntryIds,
+            teachingSubset: constraints.teachingSubset,
+            ambientHaloAllowance: constraints.ambientHaloAllowance,
             responseContract: constraints.responseContract
               ? {
                   mode: constraints.responseContract.mode,
@@ -88,7 +98,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
                 }
               : undefined,
             groundingScope: constraints.groundingScope?.map((ref) => ({
-              conceptId: ref.conceptId,
+              lexicalEntryId: ref.lexicalEntryId,
               targetForm: ref.targetForm,
               worldObjectId: ref.worldObjectId,
               worldAttribute: ref.worldAttribute,
@@ -102,6 +112,8 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
         `[SugarAgentAdapter] pedagogy bridged → band=${pedagogyContext.learnerBand}` +
         ` policy=${pedagogyContext.supportLanguagePolicy}` +
         ` posture=${pedagogyContext.correctionPosture ?? 'none'}` +
+        ` trackedPool=${pedagogyContext.availableTrackedLexicalEntryIds?.length ?? 0}` +
+        ` focus=${pedagogyContext.teachingSubset?.focusLexicalEntryIds.length ?? 0}` +
         ` grounding=${pedagogyContext.groundingScope?.length ?? 0} refs` +
         ` task=${pedagogyContext.communicativeTask ?? '?'}`,
       );

@@ -63,7 +63,7 @@ export interface ResponseContract {
 // ---------------------------------------------------------------------------
 
 export interface GroundingReference {
-  conceptId: string;
+  lexicalEntryId: string;
   targetForm: string;
   worldObjectId?: string;
   worldAttribute?: string;
@@ -74,6 +74,20 @@ export interface GroundingMetadata {
   references: GroundingReference[];
   /** Which references were shown to the player this turn. */
   shownReferences?: string[];
+}
+
+export interface TeachingSubset {
+  focusLexicalEntryIds: string[];
+  reinforcementLexicalEntryIds: string[];
+  ambientLexicalEntryIds: string[];
+  protectedLexicalEntryIds: string[];
+}
+
+export interface AmbientHaloAllowance {
+  allowHigherBandTracked: boolean;
+  allowUntrackedFlavor: boolean;
+  maxTrackedLookahead?: number;
+  maxUntrackedPhrases?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +120,12 @@ export interface ProviderConstraintBundle {
 
   /** Grounding scope — what referents the turn may use. */
   groundingScope?: GroundingReference[];
+  /** Full tracked vocabulary available to the learner at the current band. */
+  availableTrackedLexicalEntryIds?: string[];
+  /** Current teaching subset for this turn or scene slice. */
+  teachingSubset?: TeachingSubset;
+  /** Ambient language allowance around the tracked teaching subset. */
+  ambientHaloAllowance?: AmbientHaloAllowance;
 
   /** Failure and recovery posture. */
   failureRecoveryPosture?: {

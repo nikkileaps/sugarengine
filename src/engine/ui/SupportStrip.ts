@@ -9,7 +9,7 @@
 export interface GlossaryChipData {
   targetWord: string;
   supportWord: string;
-  conceptId?: string;
+  lexicalEntryId?: string;
 }
 
 type GlossaryChipTapHandler = (chip: GlossaryChipData) => void;

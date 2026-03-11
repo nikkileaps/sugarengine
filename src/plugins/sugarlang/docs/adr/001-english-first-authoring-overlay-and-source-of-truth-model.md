@@ -22,7 +22,8 @@ The strategic architecture and product docs already assume:
 - the base game is authored as normal SugarEngine content
 - the language-learning layer is an overlay
 - AI assistance should be a first-class authoring path
-- scene language packs own the actual mixed-language lines and response frames seen by the learner
+- quest-linked scenarios derive smaller learner-facing interactions from the quest graph
+- target-language overlays own the actual mixed-language lines and response frames seen by the learner
 
 This ADR defines the canonical authoring and persistence model that makes that workflow real.
 
@@ -37,7 +38,7 @@ That means:
 3. Sugarlang overlay files are the canonical source of truth for the language-learning layer.
 4. Those overlay files must be human-readable and round-trip-safe.
 5. AI-generated drafts are first-class authored artifacts, not ephemeral previews.
-6. The editor UI, external chat-based AI assistance, and direct structured-file editing are aligned authoring workflows over the same Sugarlang overlay model.
+6. The editor UI, external workspace-assistant help operating on bounded packets/files, and direct structured-file editing are aligned authoring workflows over the same Sugarlang overlay model.
 7. Local databases may support caches, indexes, replay lookup, or analytics, but they are not the canonical store for authored Sugarlang content.
 8. The base game content is authored in English, while Sugarlang overlays target runtime `target language` and `support language` behavior.
 
@@ -60,8 +61,10 @@ This preserves the existing engine/editor mental model and keeps the game playab
 
 Sugarlang should derive and store:
 
-- semantic learning scenarios
+- one scenario per Sugarlang-enabled quest
+- one or more derived interactions inside that scenario
 - communicative tasks
+- source bindings back to quest nodes, dialogue beats, NPCs, and world objects
 - stable scenario-level referents and any per-band concrete variant maps
 - learner-band variants
 - initial-delivery lines
@@ -71,7 +74,7 @@ Sugarlang should derive and store:
 - deterministic evaluation rules
 - support and feedback policies
 
-as a layer that references the base authored scene.
+as a layer that references the base authored quest and its derived interactions.
 
 That layer is distinct from the narrative source.
 
@@ -107,7 +110,8 @@ Intended split:
   - enabled target-language and support-language configuration
   - high-level Sugarlang configuration
 - `plugins/sugarlang/scenarios/`
-  - scene-to-scenario binding
+  - quest-to-scenario binding
+  - interaction definitions and source bindings
   - semantic task definition
   - grounding maps
   - grounded quest bindings with stable scenario referents and optional band-specific concrete variants
@@ -118,7 +122,7 @@ Intended split:
 - `plugins/sugarlang/languages/<lang>/`
   - shared lexicon packs
   - grammar ladder packs
-  - scene language packs containing learner-band variants, initial-delivery lines, repair variants, happy-path response frames, response contracts, evaluation rules, and support settings
+  - target-language scenario overlays containing interaction overlays, learner-band variants, initial-delivery lines, repair variants, happy-path response frames, response contracts, evaluation rules, and support settings
 - `plugins/sugarlang/generated/`
   - optional intermediate draft artifacts
 - `plugins/sugarlang/eval/`
@@ -131,9 +135,8 @@ Intended split:
 Every Sugarlang overlay artifact should reference stable IDs from the game content layer, such as:
 
 - `questId`
-- `objectiveId`
-- `dialogueId`
-- `nodeId`
+- interaction source objective or node refs
+- interaction source dialogue refs
 - `npcId`
 - `objectId`
 
@@ -150,13 +153,14 @@ For the initial shipped product, the first complete language packs should be `en
 
 The system should treat the following as equivalent intents:
 
-- clicking `Generate Sugarlang Draft` in the editor
-- asking an AI assistant in chat to generate the draft for a quest or scene
+- clicking `Sync From Quest` in the editor
+- asking an AI assistant in chat to derive or regenerate the overlay for a quest or one interaction
 - creating or refining the same artifact files directly when needed
 
 All three should write the same underlying Sugarlang artifacts, including:
 
 - scenario records
+- interaction records
 - grounding maps
 - grounded quest bindings
 - per-band mixed-language surface lines
@@ -167,7 +171,7 @@ For V1 implementation scope, the built product code only needs to provide:
 - persisted artifact files
 - serializers and loaders
 - validators
-- structural scaffold generation from English-authored scene references
+- structural scaffold generation from English-authored quest and interaction source references
 
 The actual language-aware drafting may still be performed by an external AI assistant operating on those same files.
 

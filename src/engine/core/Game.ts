@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { SugarEngine, EngineConfig } from './Engine';
 import { DialogueManager } from '../dialogue/DialogueManager';
+import { DialoguePanel } from '../ui/DialoguePanel';
+import type { DialoguePresenter } from '../dialogue/types';
 import { InspectionManager } from '../inspection/InspectionManager';
 import { QuestManager } from '../quests/QuestManager';
 import { InventoryManager } from '../inventory/InventoryManager';
@@ -136,6 +138,7 @@ export class Game {
   private pluginManager: PluginManager | null = null;
   private contentBasePath: string;
   private lastAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
+  private readonly dialoguePresenter: DialoguePresenter;
 
   // Conversation host (ADR-SL-002) — single orchestration point for all conversation types.
   private conversationHost: ConversationHost;
@@ -174,7 +177,8 @@ export class Game {
     });
 
     // Create systems
-    this.dialogue = new DialogueManager(container);
+    this.dialoguePresenter = new DialoguePanel(container);
+    this.dialogue = new DialogueManager(this.dialoguePresenter);
     this.inspection = new InspectionManager(container);
     this.quests = new QuestManager();
     this.inventory = new InventoryManager();
@@ -770,6 +774,15 @@ export class Game {
 
     // Other types (inspectables, etc.) are always available
     return { type, id, promptText, available: true };
+  }
+
+  /**
+   * Get the engine-owned dialogue presenter for external conversation flows.
+   * Plugins and game UI can drive this presenter directly (e.g., sugarlang
+   * building synthetic DialogueNodes from ConversationTurnEnvelopes).
+   */
+  getDialoguePresenter(): DialoguePresenter {
+    return this.dialoguePresenter;
   }
 
   /**

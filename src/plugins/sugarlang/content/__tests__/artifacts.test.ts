@@ -12,6 +12,7 @@ import {
   serializeContentBundle,
   deserializeContentBundle,
   validateContentBundle,
+  getLexiconPlanningStatus,
   artifactPaths,
   deserializeScenarioBrief,
   deserializeGroundingMap,
@@ -285,5 +286,61 @@ describe('cross-reference validation', () => {
 
     const validation = validateContentBundle(bundle);
     expect(validation.warnings.some((w) => w.includes('lonely'))).toBe(true);
+  });
+
+  it('does not warn solely because a lexicon is below the long-term planning targets', () => {
+    const { bundle } = deserializeContentBundle(new Map());
+    bundle.lexicons.set('es', {
+      targetLanguage: 'es',
+      entries: [
+        {
+          lexicalEntryId: 'object.suitcase',
+          targetForm: 'maleta',
+          gloss: 'suitcase',
+          category: 'object',
+          introductionBand: 'B0',
+          usage: 'active',
+          groundable: true,
+        },
+      ],
+    });
+
+    const validation = validateContentBundle(bundle);
+    expect(validation.warnings.some((w) => w.includes('tracked-pool target'))).toBe(false);
+  });
+});
+
+describe('lexicon planning status', () => {
+  it('computes cumulative counts against the V1 planning targets', () => {
+    const planning = getLexiconPlanningStatus({
+      targetLanguage: 'es',
+      entries: [
+        {
+          lexicalEntryId: 'object.suitcase',
+          targetForm: 'maleta',
+          gloss: 'suitcase',
+          category: 'object',
+          introductionBand: 'B0',
+          usage: 'active',
+          groundable: true,
+        },
+        {
+          lexicalEntryId: 'verb.help',
+          targetForm: 'ayudar',
+          gloss: 'help',
+          category: 'verb',
+          introductionBand: 'B2',
+          usage: 'active',
+          groundable: false,
+        },
+      ],
+    });
+
+    expect(planning.totalTracked).toBe(2);
+    expect(planning.cumulativeCounts.B0).toBe(1);
+    expect(planning.cumulativeCounts.B1).toBe(1);
+    expect(planning.cumulativeCounts.B2).toBe(2);
+    expect(planning.targets.B4).toBe(850);
+    expect(planning.deficits.B0).toBeGreaterThan(0);
   });
 });

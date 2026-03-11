@@ -88,8 +88,10 @@ Why:
 
 Each turn should preserve structured evidence like:
 
+- quest, scenario, interaction, and turn identity
 - target-language and support-language pair
 - stable scenario referent and optional grounded band variant
+- source quest-node and dialogue-beat refs
 - player input
 - expected task
 - achieved or not achieved
@@ -102,6 +104,7 @@ Each turn should preserve structured evidence like:
 - grammar/vocabulary indicators
 - support requests
 - retries
+- active `focus`, `reinforcement`, and `ambient` vocabulary entries
 - analyzer confidence
 
 This enables:
@@ -111,7 +114,7 @@ This enables:
 - eval replay
 - later re-scoring when evaluator logic improves
 
-These fields are especially important because `en -> es` and `es -> en` are different learning contexts even when the scene semantics are identical.
+These fields are especially important because `en -> es` and `es -> en` are different learning contexts even when the interaction semantics are identical.
 
 ### 5. Success Must Be Split into Multiple Axes
 

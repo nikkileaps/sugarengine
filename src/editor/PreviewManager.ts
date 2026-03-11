@@ -27,7 +27,7 @@ export interface ProjectData {
   spells?: unknown[];
   resonancePoints?: unknown[];
   vfxDefinitions?: unknown[];
-  /** Enable sugarlang language-learning overlay. `true` for demo content. */
+  /** Optional Sugarlang runtime config for preview, usually artifact-backed. */
   sugarlang?: unknown;
 }
 

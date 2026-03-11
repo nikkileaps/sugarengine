@@ -21,6 +21,8 @@ import type {
   ProviderConstraintBundle,
   ConversationTurnEnvelope,
   GroundingReference,
+  TeachingSubset,
+  AmbientHaloAllowance,
 } from '../../engine/conversation/types';
 import type {
   SugarlangContentBundle,
@@ -97,9 +99,43 @@ export function createSugarlangMiddleware(
     return contentBundle.bandPolicies.policies.find((p) => p.bandId === bandId);
   }
 
+  function buildAvailableTrackedLexicalEntryIds(
+    lexicon: LexiconPack | undefined,
+    bandId: LearnerBandId,
+  ): string[] | undefined {
+    if (!lexicon) return undefined;
+    const bandOrder: LearnerBandId[] = ['B0', 'B1', 'B2', 'B3', 'B4'];
+    const maxIndex = bandOrder.indexOf(bandId);
+    return lexicon.entries
+      .filter((entry) => bandOrder.indexOf(entry.introductionBand) <= maxIndex)
+      .map((entry) => entry.lexicalEntryId);
+  }
+
+  function buildTeachingSubset(turn: SceneBandRealization['turns'][number] | undefined): TeachingSubset | undefined {
+    if (!turn) return undefined;
+    const protectedLexicalEntryIds = Array.from(new Set([
+      ...turn.focusLexicalEntryIds,
+      ...(turn.repairOptions ?? []).flatMap((option) => option.protectedLexicalEntryIds ?? []),
+    ]));
+
+    return {
+      focusLexicalEntryIds: turn.focusLexicalEntryIds,
+      reinforcementLexicalEntryIds: turn.reinforcementLexicalEntryIds ?? [],
+      ambientLexicalEntryIds: turn.ambientLexicalEntryIds ?? [],
+      protectedLexicalEntryIds,
+    };
+  }
+
+  function buildAmbientHaloAllowance(
+    turn: SceneBandRealization['turns'][number] | undefined,
+  ): AmbientHaloAllowance | undefined {
+    if (!turn?.ambientHaloAllowance) return undefined;
+    return turn.ambientHaloAllowance;
+  }
+
   /**
    * Resolve grounding scope filtered to the active band's quest binding variants.
-   * Also resolves targetForm from the lexicon for each conceptId.
+   * Also resolves targetForm from the lexicon for each lexical entry id.
    */
   function resolveGroundingScopeForBand(
     groundingMap: GroundingMap | undefined,
@@ -121,10 +157,10 @@ export function createSugarlangMiddleware(
     }
 
     // Build a lookup for targetForm from lexicon.
-    const targetFormByConceptId = new Map<string, string>();
+    const targetFormByLexicalEntryId = new Map<string, string>();
     if (lexicon) {
       for (const entry of lexicon.entries) {
-        targetFormByConceptId.set(entry.conceptId, entry.targetForm);
+        targetFormByLexicalEntryId.set(entry.lexicalEntryId, entry.targetForm);
       }
     }
 
@@ -150,8 +186,8 @@ export function createSugarlangMiddleware(
         return true;
       })
       .map((entry) => ({
-        conceptId: entry.conceptId,
-        targetForm: targetFormByConceptId.get(entry.conceptId) ?? '',
+        lexicalEntryId: entry.lexicalEntryId,
+        targetForm: targetFormByLexicalEntryId.get(entry.lexicalEntryId) ?? '',
         worldObjectId: entry.worldObjectId,
         worldAttribute: entry.worldAttribute,
         highlightAction: entry.highlightActions[0],
@@ -246,6 +282,7 @@ export function createSugarlangMiddleware(
     const questBindingsForScenario = contentBundle.questBindings.get(state.scenarioId);
     const targetLang = session.targetLanguage ?? 'es';
     const lexicon = contentBundle.lexicons.get(targetLang);
+    constraints.availableTrackedLexicalEntryIds = buildAvailableTrackedLexicalEntryIds(lexicon, bandId);
 
     const scope = resolveGroundingScopeForBand(
       state.groundingMap,
@@ -260,6 +297,21 @@ export function createSugarlangMiddleware(
         ` (${scope.length}/${state.groundingMap?.entries.length ?? 0} entries passed filter)`,
       );
     }
+
+    const bandRealization = findBandRealization(state.scenarioId, bandId, targetLang);
+    const providerState = session.middlewareState['sugarlang-provider'] as
+      | { turns?: Array<SceneBandRealization['turns'][number]>; turnCursor?: number }
+      | undefined;
+    const activeTurn = providerState?.turns
+      ? providerState.turns[
+        providerState.turnCursor && providerState.turnCursor > 0
+          ? Math.max(0, providerState.turnCursor - 1)
+          : 0
+      ]
+      : bandRealization?.turns[0];
+
+    constraints.teachingSubset = buildTeachingSubset(activeTurn);
+    constraints.ambientHaloAllowance = buildAmbientHaloAllowance(activeTurn);
 
     // Apply band-specific constraints.
     if (state.bandPolicy) {
@@ -284,7 +336,14 @@ export function createSugarlangMiddleware(
 
     // Extract support text from the provider diagnostics.
     const providerDiag = envelope.providerDiagnostics as
-      | { supportText?: string; turnId?: string; teachingConcepts?: string[]; lastTurnEvidence?: TurnEvidence }
+      | {
+        supportText?: string;
+        turnId?: string;
+        teachingSubset?: TeachingSubset;
+        availableTrackedLexicalEntryIds?: string[];
+        ambientHaloAllowance?: AmbientHaloAllowance;
+        lastTurnEvidence?: TurnEvidence;
+      }
       | undefined;
 
     // Annotate the envelope with sugarlang metadata.
@@ -296,7 +355,9 @@ export function createSugarlangMiddleware(
       showGlosses: state.bandPolicy?.supportLanguagePolicy.showGlosses ?? false,
       supportText: providerDiag?.supportText,
       turnId: providerDiag?.turnId,
-      teachingConcepts: providerDiag?.teachingConcepts,
+      availableTrackedLexicalEntryIds: providerDiag?.availableTrackedLexicalEntryIds,
+      teachingSubset: providerDiag?.teachingSubset,
+      ambientHaloAllowance: providerDiag?.ambientHaloAllowance,
     };
   }
 

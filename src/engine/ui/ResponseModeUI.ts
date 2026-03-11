@@ -77,6 +77,9 @@ export class ResponseModeUI {
       case 'word_bank':
         this.renderWordBank(contract);
         break;
+      case 'blank_fill':
+        this.renderBlankFill(contract);
+        break;
       case 'short_text':
         this.renderShortText(contract);
         break;
@@ -286,36 +289,167 @@ export class ResponseModeUI {
     const blanks = contract.blanks ?? [];
     const wordBank = contract.wordBank ?? [];
     const fills: Record<string, string> = {};
-    let activeBlanks = [...blanks];
+    const blankQueue = [...blanks];
 
-    const template = document.createElement('div');
-    template.className = 'sl-response-template';
+    // Render the sentence template with inline blank slots.
+    // Split hintText on ___ to interleave text spans and blank elements.
+    const templateEl = document.createElement('div');
+    templateEl.className = 'sl-word-bank-template';
+
+    const blankSlots: HTMLSpanElement[] = [];
     if (contract.hintText) {
-      template.textContent = contract.hintText;
+      const parts = contract.hintText.split('___');
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) {
+          const textSpan = document.createElement('span');
+          textSpan.textContent = parts[i]!;
+          templateEl.appendChild(textSpan);
+        }
+        // Add a blank slot between parts (not after the last one)
+        if (i < parts.length - 1) {
+          const slot = document.createElement('span');
+          slot.className = 'sl-blank-slot';
+          slot.innerHTML = '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;';
+          templateEl.appendChild(slot);
+          blankSlots.push(slot);
+        }
+      }
     }
-    this.widgetArea.appendChild(template);
+    this.widgetArea.appendChild(templateEl);
 
+    // Chip tray
     const chipRow = document.createElement('div');
     chipRow.className = 'sl-chip-row';
+
+    const chipButtons: HTMLButtonElement[] = [];
+
+    const checkComplete = () => {
+      if (blankQueue.length === 0) {
+        // Reconstruct the filled sentence from template parts + filled blanks
+        const parts = (contract.hintText ?? '').split('___');
+        let result = '';
+        for (let i = 0; i < parts.length; i++) {
+          result += parts[i] ?? '';
+          if (i < blankSlots.length) {
+            result += blankSlots[i]!.textContent ?? '';
+          }
+        }
+        this.submit({ text: result, blankFills: fills });
+      }
+    };
 
     for (const word of wordBank) {
       const chip = document.createElement('button');
       chip.className = 'sl-chip';
       chip.textContent = word;
       chip.addEventListener('click', () => {
-        if (activeBlanks.length === 0) return;
-        const blank = activeBlanks.shift()!;
+        if (blankQueue.length === 0) return;
+        const blank = blankQueue.shift()!;
         fills[blank.id] = word;
+
+        // Fill the next blank slot visually
+        const slotIndex = blanks.indexOf(blank);
+        if (slotIndex >= 0 && slotIndex < blankSlots.length) {
+          blankSlots[slotIndex]!.textContent = word;
+          blankSlots[slotIndex]!.classList.add('sl-blank-filled');
+        }
+
         chip.classList.add('sl-chip-used');
         chip.disabled = true;
-
-        if (activeBlanks.length === 0) {
-          this.submit({ blankFills: fills });
-        }
+        checkComplete();
       });
       chipRow.appendChild(chip);
+      chipButtons.push(chip);
     }
     this.widgetArea.appendChild(chipRow);
+
+    // Clear button to reset fills
+    const actionRow = document.createElement('div');
+    actionRow.className = 'sl-composition-actions';
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'sl-clear-btn';
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', () => {
+      blankQueue.length = 0;
+      blankQueue.push(...blanks);
+      for (const key of Object.keys(fills)) delete fills[key];
+      for (const slot of blankSlots) {
+        slot.innerHTML = '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;';
+        slot.classList.remove('sl-blank-filled');
+      }
+      for (const btn of chipButtons) {
+        btn.classList.remove('sl-chip-used');
+        btn.disabled = false;
+      }
+    });
+    actionRow.appendChild(clearBtn);
+    this.widgetArea.appendChild(actionRow);
+  }
+
+  private renderBlankFill(contract: ResponseContract): void {
+    const blanks = contract.blanks ?? [];
+
+    // Render sentence template with inline text inputs for each blank.
+    const templateEl = document.createElement('div');
+    templateEl.className = 'sl-word-bank-template';
+
+    const inputs: HTMLInputElement[] = [];
+    if (contract.hintText) {
+      const parts = contract.hintText.split('___');
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) {
+          const textSpan = document.createElement('span');
+          textSpan.textContent = parts[i]!;
+          templateEl.appendChild(textSpan);
+        }
+        if (i < parts.length - 1) {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'sl-inline-input';
+          // Size the input based on the expected answer length
+          const blank = blanks[inputs.length];
+          const answerLen = blank?.acceptedAnswers?.[0]?.length ?? 8;
+          input.size = Math.max(answerLen + 2, 6);
+          input.maxLength = answerLen + 10;
+          inputs.push(input);
+          templateEl.appendChild(input);
+        }
+      }
+    }
+    this.widgetArea.appendChild(templateEl);
+
+    // Submit button
+    const actionRow = document.createElement('div');
+    actionRow.className = 'sl-composition-actions';
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'sl-confirm-btn';
+    submitBtn.textContent = 'Submit';
+    submitBtn.addEventListener('click', () => {
+      const allFilled = inputs.every((inp) => inp.value.trim().length > 0);
+      if (!allFilled) return;
+
+      // Build fills and reconstruct the sentence
+      const fills: Record<string, string> = {};
+      for (let i = 0; i < inputs.length && i < blanks.length; i++) {
+        fills[blanks[i]!.id] = inputs[i]!.value.trim();
+      }
+      const parts = (contract.hintText ?? '').split('___');
+      let result = '';
+      for (let i = 0; i < parts.length; i++) {
+        result += parts[i] ?? '';
+        if (i < inputs.length) {
+          result += inputs[i]!.value.trim();
+        }
+      }
+      this.submit({ text: result, blankFills: fills });
+    });
+    actionRow.appendChild(submitBtn);
+    this.widgetArea.appendChild(actionRow);
+
+    // Focus the first input
+    if (inputs.length > 0) {
+      requestAnimationFrame(() => inputs[0]!.focus());
+    }
   }
 
   private renderShortText(contract: ResponseContract): void {
@@ -644,6 +778,48 @@ export class ResponseModeUI {
         background: rgba(136, 180, 220, 0.1);
         border: 1px solid rgba(136, 180, 220, 0.25);
         border-radius: 12px;
+      }
+
+      .sl-word-bank-template {
+        font-size: 15px;
+        color: #e8ddd0;
+        line-height: 2;
+        padding: 8px 4px;
+        margin-bottom: 8px;
+      }
+
+      .sl-blank-slot {
+        display: inline-block;
+        min-width: 60px;
+        padding: 2px 8px;
+        margin: 0 2px;
+        border-bottom: 2px dashed rgba(136, 180, 220, 0.5);
+        text-align: center;
+        transition: color 0.2s, border-color 0.2s;
+      }
+
+      .sl-blank-slot.sl-blank-filled {
+        color: #88d4ff;
+        border-bottom-color: rgba(136, 180, 220, 0.8);
+        font-weight: 600;
+      }
+
+      .sl-inline-input {
+        display: inline-block;
+        padding: 2px 6px;
+        margin: 0 2px;
+        font-size: 15px;
+        font-family: inherit;
+        font-weight: 600;
+        color: #88d4ff;
+        background: transparent;
+        border: none;
+        border-bottom: 2px dashed rgba(136, 180, 220, 0.5);
+        outline: none;
+        text-align: center;
+      }
+      .sl-inline-input:focus {
+        border-bottom-color: rgba(136, 180, 220, 0.9);
       }
     `;
     document.head.appendChild(style);

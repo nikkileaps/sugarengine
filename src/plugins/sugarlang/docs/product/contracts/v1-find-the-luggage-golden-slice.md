@@ -4,7 +4,7 @@
 
 This document freezes the first Sugarlang vertical slice as a concrete product content contract.
 
-It is the reference scene used to validate:
+It is the reference interaction bundle used to validate:
 
 - learner-band behavior
 - repair-driven interaction
@@ -47,7 +47,7 @@ Player-facing support pairings:
 
 ## Grounded World Truth
 
-The scene must include:
+The quest slice must include:
 
 - station clerk or traveler NPC
 - one red suitcase
@@ -83,9 +83,9 @@ That means:
 
 - the stable scenario referent is `target_luggage_primary`
 - the stable quest chain is talk -> identify -> pick up -> return
-- the concrete world object and attached teaching units vary by band
+- the concrete world object and attached vocabulary entries vary by band
 
-## Teachable Concepts in This Slice
+## Vocabulary Entries in This Slice
 
 `First active band` means first introduction in the slice.
 
@@ -93,7 +93,7 @@ Per-band sections below distinguish between:
 
 - `focus items`
   - new or heavily reinforced in that band
-- `recycled items`
+- `reinforcement items`
   - previously introduced items intentionally brought back
 
 | Concept | English target | Spanish target | First active band |
@@ -413,7 +413,7 @@ Completion response:
 
 Success rule:
 
-- communicative success advances the scene
+- communicative success advances the interaction and the bound quest step
 - language accuracy is tracked separately from quest success
 
 ### `B3 Independent Task Dialogue`
@@ -556,5 +556,5 @@ Completion response:
 
 Success rule:
 
-- scene remains completable with scripted delivery only
+- interaction remains completable with scripted delivery only
 - `sugaragent` may enrich turn realization but does not own correctness

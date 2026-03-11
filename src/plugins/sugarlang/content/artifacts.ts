@@ -52,6 +52,13 @@ export interface ArtifactValidationResult {
   warnings: string[];
 }
 
+export interface LexiconPlanningStatus {
+  totalTracked: number;
+  cumulativeCounts: Record<LearnerBandId, number>;
+  targets: Record<LearnerBandId, number>;
+  deficits: Record<LearnerBandId, number>;
+}
+
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
@@ -159,9 +166,39 @@ function requireString(obj: Record<string, unknown>, field: string, errors: stri
 // }
 
 const VALID_BANDS: LearnerBandId[] = ['B0', 'B1', 'B2', 'B3', 'B4'];
+export const V1_CUMULATIVE_LEXICON_TARGETS: Record<LearnerBandId, number> = {
+  B0: 60,
+  B1: 150,
+  B2: 300,
+  B3: 550,
+  B4: 850,
+};
 
 function isValidBand(b: unknown): b is LearnerBandId {
   return typeof b === 'string' && VALID_BANDS.includes(b as LearnerBandId);
+}
+
+function bandRank(band: LearnerBandId): number {
+  return VALID_BANDS.indexOf(band);
+}
+
+export function getLexiconPlanningStatus(lexicon: LexiconPack): LexiconPlanningStatus {
+  const cumulativeCounts = VALID_BANDS.reduce<Record<LearnerBandId, number>>((acc, band) => {
+    acc[band] = lexicon.entries.filter((entry) => bandRank(entry.introductionBand) <= bandRank(band)).length;
+    return acc;
+  }, { B0: 0, B1: 0, B2: 0, B3: 0, B4: 0 });
+
+  const deficits = VALID_BANDS.reduce<Record<LearnerBandId, number>>((acc, band) => {
+    acc[band] = Math.max(0, V1_CUMULATIVE_LEXICON_TARGETS[band] - cumulativeCounts[band]);
+    return acc;
+  }, { B0: 0, B1: 0, B2: 0, B3: 0, B4: 0 });
+
+  return {
+    totalTracked: lexicon.entries.length,
+    cumulativeCounts,
+    targets: V1_CUMULATIVE_LEXICON_TARGETS,
+    deficits,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +344,11 @@ export function deserializeSceneLanguagePack(json: string): {
 export function validateContentBundle(bundle: SugarlangContentBundle): ArtifactValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const lexiconEntryIdsByLanguage = new Map<string, Set<string>>();
+
+  for (const [lang, lex] of bundle.lexicons) {
+    lexiconEntryIdsByLanguage.set(lang, new Set(lex.entries.map((entry) => entry.lexicalEntryId)));
+  }
 
   // Check scene language packs reference valid scenarios
   for (const [key, pack] of bundle.sceneLanguagePacks) {
@@ -338,6 +380,32 @@ export function validateContentBundle(bundle: SugarlangContentBundle): ArtifactV
         }
         if (!turn.responseMode) {
           errors.push(`Scene pack "${key}" band "${band.bandId}" turn "${turn.turnId}": missing responseMode`);
+        }
+
+        const lexiconEntryIds = lexiconEntryIdsByLanguage.get(pack.targetLanguage);
+        const focusIds = turn.focusLexicalEntryIds ?? [];
+        const reinforcementIds = turn.reinforcementLexicalEntryIds ?? [];
+        const ambientIds = turn.ambientLexicalEntryIds ?? [];
+
+        for (const lexicalEntryId of [...focusIds, ...reinforcementIds, ...ambientIds]) {
+          if (lexiconEntryIds && !lexiconEntryIds.has(lexicalEntryId)) {
+            errors.push(
+              `Scene pack "${key}" band "${band.bandId}" turn "${turn.turnId}" references missing lexical entry "${lexicalEntryId}" for language "${pack.targetLanguage}"`,
+            );
+          }
+        }
+
+        const lexicon = bundle.lexicons.get(pack.targetLanguage);
+        if (lexicon) {
+          const bandLimit = bandRank(band.bandId);
+          for (const lexicalEntryId of [...focusIds, ...reinforcementIds]) {
+            const entry = lexicon.entries.find((candidate) => candidate.lexicalEntryId === lexicalEntryId);
+            if (entry && bandRank(entry.introductionBand) > bandLimit) {
+              warnings.push(
+                `Scene pack "${key}" band "${band.bandId}" turn "${turn.turnId}" uses lexical entry "${lexicalEntryId}" above its introduction band "${entry.introductionBand}"`,
+              );
+            }
+          }
         }
       }
     }
@@ -387,6 +455,12 @@ export function validateContentBundle(bundle: SugarlangContentBundle): ArtifactV
   for (const [lang, lex] of bundle.lexicons) {
     if (lex.entries.length === 0) {
       warnings.push(`Lexicon for "${lang}" has no entries`);
+      continue;
+    }
+
+    const uniqueIds = new Set(lex.entries.map((entry) => entry.lexicalEntryId));
+    if (uniqueIds.size !== lex.entries.length) {
+      errors.push(`Lexicon for "${lang}" contains duplicate lexicalEntryId values`);
     }
   }
 
@@ -535,6 +609,9 @@ export function deserializeContentBundle(files: Map<string, string>): {
         const key = `${result.data.scenarioId}:${result.data.targetLanguage}`;
         bundle.sceneLanguagePacks.set(key, result.data);
       }
+    } else if (path.startsWith('dialogues/') && path.endsWith('.json')) {
+      // Dialogue trees are no longer stored in the sugarlang bundle —
+      // the provider resolves them from the game's canonical dialogue data.
     } else {
       warnings.push(`Unknown artifact path: ${path}`);
     }

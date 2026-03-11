@@ -7,35 +7,30 @@
  */
 
 // ---------------------------------------------------------------------------
-// Semantic Concepts
-// ---------------------------------------------------------------------------
-
-/** Language-neutral teaching concept. */
-export interface SemanticConcept {
-  /** Stable concept ID, e.g. "object.suitcase", "color.red". */
-  conceptId: string;
-  /** Content category for organizing in the lexicon. */
-  category: 'object' | 'color' | 'location' | 'verb' | 'adjective' | 'phrase' | 'function';
-  /** Plain-English gloss. */
-  gloss: string;
-  /** Whether the concept can be grounded to a visible world object. */
-  groundable: boolean;
-}
-
-// ---------------------------------------------------------------------------
 // Lexicon
 // ---------------------------------------------------------------------------
 
-/** Per-target-language realization of a semantic concept. */
+export type LexiconCategory =
+  | 'object'
+  | 'color'
+  | 'location'
+  | 'verb'
+  | 'adjective'
+  | 'phrase'
+  | 'function';
+
+export type SceneVocabularyRole = 'focus' | 'reinforcement' | 'ambient';
+
+/** Per-target-language realization of one tracked vocabulary entry. */
 export interface LexiconEntry {
-  conceptId: string;
+  lexicalEntryId: string;
   /** Primary target-language surface form. */
   targetForm: string;
   /** Alternate forms (plural, conjugated, etc.). */
   alternates?: string[];
   /** Plain-English gloss. */
   gloss: string;
-  category: SemanticConcept['category'];
+  category: LexiconCategory;
   /** First band where this item is actively taught. */
   introductionBand: LearnerBandId;
   /** Is this for active production, passive recognition, or support-only? */
@@ -90,6 +85,8 @@ export interface BandPolicyPack {
 /** Defines the semantic learning scenario for one authored scene or objective. */
 export interface ScenarioBrief {
   scenarioId: string;
+  /** Source quest this scenario is derived from, when one exists. */
+  associatedQuestId?: string;
   /** The communicative task the learner must accomplish. */
   communicativeTask: string;
   /** What counts as task success. */
@@ -105,19 +102,66 @@ export interface ScenarioBrief {
    * when NPC ids are auto-generated UUIDs. Case-insensitive lookup.
    */
   npcNames?: string[];
+  /** Derived interactions from quest traversal (populated by Sync From Quest). */
+  interactions?: DerivedInteraction[];
+}
+
+// ---------------------------------------------------------------------------
+// Derived Interaction (ADR-014)
+// ---------------------------------------------------------------------------
+
+export type TurnRole = 'npc_delivery' | 'player_delivery' | 'learner_response';
+export type GenerationSource = 'derived' | 'polished' | 'manual';
+export type ResponseSource = 'explicit_choice' | 'generic';
+
+/** Quest-success hook: how interaction success recommends quest progression. */
+export interface QuestSuccessHook {
+  sourceNodeId: string;
+  action: 'complete_objective';
+  questId: string;
+}
+
+/** Resolved grounding context for one interaction. */
+export interface InteractionGroundingContext {
+  npcId?: string;
+  npcName?: string;
+  worldObjectRefs: Array<{ objectId: string; label: string; category?: string }>;
+  attributes: Array<{ key: string; value: string; lexicalEntryId?: string }>;
+  questBindingRefs: string[];
+}
+
+/**
+ * One derived interaction inside a scenario.
+ * Produced by Sync From Quest. One quest node = one interaction (1:1 rule).
+ */
+export interface DerivedInteraction {
+  interactionId: string;
+  sourceQuestNodeId: string;
+  sourceStageId: string;
+  sourceDialogueId?: string;
+  sourceDialogueNodeIds: string[];
+  npcId?: string;
+  npcName?: string;
+  worldObjectRefs: string[];
+  grounding: InteractionGroundingContext;
+  questSuccessHook?: QuestSuccessHook;
+  /** Original English dialogue lines (for re-sync dirty detection). */
+  sourceDialogueText: string[];
 }
 
 // ---------------------------------------------------------------------------
 // Grounding Map
 // ---------------------------------------------------------------------------
 
-/** Maps a semantic concept to a world object for scene grounding. */
+/** Persisted grounding link between one vocabulary entry and a world object. */
 export interface GroundingEntry {
-  conceptId: string;
+  lexicalEntryId: string;
   /** World object ID to highlight. */
   worldObjectId: string;
   /** Specific attribute of the object (e.g. "color"). */
   worldAttribute?: string;
+  /** Stable scenario referent resolved through this grounding link, when one exists. */
+  scenarioReferentId?: string;
   /** Allowed highlight actions for this referent. */
   highlightActions: Array<'highlight' | 'camera_focus' | 'tap_inspect'>;
 }
@@ -169,6 +213,15 @@ export interface RepairOption {
     wordBank?: string[];
     hintText?: string;
   };
+  /** Vocabulary entries this repair keeps visible or explicitly addresses. */
+  protectedLexicalEntryIds?: string[];
+}
+
+export interface AmbientHaloAllowance {
+  allowHigherBandTracked: boolean;
+  allowUntrackedFlavor: boolean;
+  maxTrackedLookahead?: number;
+  maxUntrackedPhrases?: number;
 }
 
 /** A single NPC turn in a scene language pack. */
@@ -184,8 +237,12 @@ export interface SceneTurn {
   initialDelivery?: string;
   /** Optional full support-language paraphrase / fallback helper text. No longer the primary low-band surface. */
   supportText?: string;
-  /** Active teaching concepts for this turn. */
-  teachingConcepts: string[];
+  /** Current teaching subset for this turn. */
+  focusLexicalEntryIds: string[];
+  reinforcementLexicalEntryIds?: string[];
+  ambientLexicalEntryIds?: string[];
+  /** Optional per-turn allowance for richer ambient language at the edges. */
+  ambientHaloAllowance?: AmbientHaloAllowance;
   /** Response contract mode for the player's reply. */
   responseMode: ResponseContractMode;
   /** Response contract details. */
@@ -220,6 +277,12 @@ export interface SceneTurn {
   /** Speaker NPC ID override (for multi-NPC scenarios). */
   speakerId?: string;
   speakerName?: string;
+  /** Role of this turn in the interaction sequence. */
+  turnRole?: TurnRole;
+  /** How the response options were sourced. */
+  responseSource?: ResponseSource;
+  /** How this turn was generated. */
+  generationSource?: GenerationSource;
 }
 
 /** Band-specific scene realization. */
@@ -233,6 +296,8 @@ export interface SceneBandRealization {
    * - 'agent_only': require SugarAgent (skip this band if unavailable)
    */
   providerPolicy?: 'scripted' | 'agent_preferred' | 'agent_only';
+  /** Which interaction this band realization belongs to (for generated content). */
+  interactionId?: string;
 }
 
 /** Scene language pack for one scenario + target language. */
@@ -265,10 +330,12 @@ export interface LearnerState {
   confidence: number;
   /** How much the learner depends on support-language aids (0–1 scale, lower = less dependent). */
   supportUsage: number;
-  /** Structures the learner has demonstrated reliably. */
-  knownStructures: string[];
-  /** Structures the learner has shown inconsistently. */
-  unstableStructures: string[];
+  /** Vocabulary entries the learner has demonstrated reliably. */
+  knownLexicalEntryIds: string[];
+  /** Vocabulary entries the learner has shown inconsistently. */
+  unstableLexicalEntryIds: string[];
+  /** Per-entry progress record keyed by lexicalEntryId. */
+  trackedLexicalEntries: Record<string, TrackedLexicalEntryProgress>;
 }
 
 /** Result of a placement assessment. */
@@ -306,8 +373,12 @@ export interface TurnEvidence {
   repairId?: string;
   /** If a repair was used, the type of repair. */
   repairType?: 'fixed' | 'clarification_template';
-  /** Teaching concepts active for this turn. */
-  teachingConcepts: string[];
+  /** Focus entries active for this turn. */
+  focusLexicalEntryIds: string[];
+  /** Reinforcement entries active for this turn. */
+  reinforcementLexicalEntryIds: string[];
+  /** Tracked ambient entries visible for this turn. */
+  ambientLexicalEntryIds: string[];
   /** Grounding references shown to the player this turn. */
   shownGroundingRefs?: string[];
   /** The band-variant world object ID resolved for this turn. */
@@ -317,6 +388,17 @@ export interface TurnEvidence {
   formAccuracy: number;
   /** 0 = fully independent, 1 = fully dependent on support. */
   supportDependence: number;
+}
+
+export interface TrackedLexicalEntryProgress {
+  firstSeenAt: string;
+  lastSeenAt: string;
+  timesSeen: number;
+  recognitionSuccesses: number;
+  recognitionFailures: number;
+  productionSuccesses: number;
+  productionFailures: number;
+  status: 'new' | 'practicing' | 'stable';
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +420,7 @@ export interface IntentFamily {
 
 /** A slot requirement for intent evaluation. */
 export interface SlotRequirement {
-  conceptId: string;
+  lexicalEntryId: string;
   /** Keywords that satisfy this slot (checked against normalized input). */
   keywords: string[];
 }
@@ -362,8 +444,8 @@ export interface QuestBindingBandVariant {
   bandId: LearnerBandId;
   /** World object ID the learner interacts with at this band. */
   worldObjectId: string;
-  /** Teaching concepts actively highlighted at this band. */
-  teachingConcepts: string[];
+  /** Vocabulary entries actively highlighted through this band-specific object. */
+  highlightedLexicalEntryIds: string[];
 }
 
 /** Interaction affordances for a quest binding. */

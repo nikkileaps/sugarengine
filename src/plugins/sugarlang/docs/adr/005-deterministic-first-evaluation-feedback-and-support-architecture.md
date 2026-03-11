@@ -76,6 +76,18 @@ Typical evaluator types may include:
 - intent family match under a bounded grammar
 - bounded clarification-template checks
 
+For bounded scripted interaction families, deterministic generation and deterministic evaluation should line up.
+
+If the generator emitted, for one band:
+
+- a response contract
+- a scaffold
+- a repair ladder
+- an evaluation target
+- a quest-success hook
+
+then the evaluator should consume that same structured bundle rather than trying to reverse-engineer intent from the final line alone.
+
 ### 3. Quest Progression and Language Evaluation Must Stay Distinct
 
 The player may be allowed to succeed at the quest even if their answer is imperfect.
@@ -86,6 +98,13 @@ The system should separately record:
 - grammar weakness
 - vocabulary weakness
 - support usage
+
+When Sugarlang does drive a quest beat, the evaluation result should produce:
+
+- an interaction outcome
+- an optional quest-completion recommendation tied to the allowed quest binding
+
+The engine still decides whether to apply that progression recommendation.
 
 This prevents the product from becoming punitive while still preserving useful learning signals.
 
@@ -130,6 +149,12 @@ The architecture should support:
 - delayed end-of-scene feedback
 - on-request explanation
 - silent evidence capture with no visible correction
+
+This is especially important for the first deterministic pass generated from quest dialogue beats:
+
+- the repair ladder is authored or generated as structure
+- the evaluator should score against that same structure
+- a later LLM polish pass may improve wording, but it should not become the only thing holding the interaction together
 
 ## Why This Supports the Product and Use Cases
 

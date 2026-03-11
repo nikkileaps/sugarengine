@@ -1,4 +1,4 @@
-# ADR-SL-003: Shared Scene Semantics and Response Contract Model
+# ADR-SL-003: Shared Scenario and Interaction Semantics with Response Contracts
 
 ## Status
 
@@ -21,39 +21,48 @@ It requires a shared semantic layer between narrative content and language-learn
 
 ## Decision
 
-Sugarlang will use a shared scene-semantics model and a first-class response-contract model.
+Sugarlang will use a shared scenario-and-interaction semantics model and a first-class response-contract model.
 
 The key decision is:
 
-1. Every Sugarlang-enabled scene is bound to a semantic learning scenario.
-2. That scenario defines a communicative task and a success model.
-3. The provider renders a turn, but the meaning of the turn is captured in shared semantics rather than in raw text alone.
-4. The player-facing input mode is described by a typed response contract, not inferred only from dialogue text.
-5. The engine UI renders based on the response contract rather than assuming one universal dialogue interaction model.
-6. Each semantic scenario may define grounding references that bind language to world objects, attributes, regions, and actions.
-7. Each learner-band rendering may define a support-language policy that controls how target language and support language are mixed.
-8. A semantic scenario may keep one stable scenario referent while mapping it to different concrete grounded variants by learner band.
+1. Every Sugarlang-enabled quest is bound to one semantic learning scenario.
+2. That scenario is broken into one or more interactions derived from the quest graph.
+3. Each interaction defines a communicative task and a success model.
+4. The provider renders a turn, but the meaning of the turn is captured in shared semantics rather than in raw text alone.
+5. The player-facing input mode is described by a typed response contract, not inferred only from dialogue text.
+6. The engine UI renders based on the response contract rather than assuming one universal dialogue interaction model.
+7. Each interaction may define grounding references that bind language to world objects, attributes, regions, and actions.
+8. Each learner-band rendering may define a support-language policy that controls how target language and support language are mixed.
+9. A scenario may keep one stable scenario referent while mapping it to different concrete grounded variants by learner band.
 
 ## Architectural Strategy
 
-### 1. Semantic Scenario Layer
+### 1. Scenario and Interaction Semantics Layer
 
 The semantic scenario layer should describe:
 
+- what quest this overlay belongs to
+- what stable grounded referents the quest keeps reusing
+- which interactions exist inside the scenario
+- which learner bands are supported
+
+Then each interaction should describe:
+
 - what the player is trying to accomplish communicatively
 - what counts as success
-- what the core scene references are
-- what scene referents can ground vocabulary and phrases
-- which learner bands are supported
+- what the core source quest-node and dialogue-beat refs are
+- which NPCs and world objects the interaction binds to
+- what referents can ground vocabulary and phrases
+- what response contract category the interaction expects
 
 Examples:
 
-- `identify_and_report_object_location`
-- `ask_for_directions`
-- `confirm_assistance`
-- `clarify_attribute`
+- `greeting`
+- `report_missing_luggage`
+- `describe_target_luggage`
+- `return_target_luggage`
 
-This is the stable layer that allows one narrative scene to support multiple learner experiences.
+This is the stable layer that allows one narrative quest beat to support multiple learner experiences.
 
 The scenario layer should also be able to keep one stable scenario-level referent while allowing different concrete teaching variants by band.
 
@@ -68,7 +77,7 @@ Example:
 
 Language-learning meaning in a game should be tied to visible world meaning whenever possible.
 
-That means the scenario layer should be able to identify things like:
+That means the interaction layer should be able to identify things like:
 
 - the suitcase object or object class
 - visible attributes such as red, blue, small, or worn
@@ -77,27 +86,27 @@ That means the scenario layer should be able to identify things like:
 
 Those references are not just hint metadata.
 
-They are part of how the same scene becomes learnable at beginner bands without rewriting the quest.
+They are part of how the same interaction becomes learnable at beginner bands without rewriting the quest.
 
 They should also support a stable scenario referent plus optional band-specific concrete variants.
 
 ### 3. Success Model
 
-A semantic scenario should define a success model that can be evaluated independently of the exact wording of the NPC line.
+An interaction should define a success model that can be evaluated independently of the exact wording of the NPC line.
 
 That model may include:
 
 - acceptable intent families
 - required semantic slots
 - optional semantic slots
-- scene-level completion conditions
+- interaction-level completion conditions
 - form-quality tolerances
 
 This is what allows deterministic evaluation to work even when the language surface varies by band.
 
 ### 4. Support-Language Policy Is a First-Class Runtime Concept
 
-The scene model should not reduce support language to a simple translation toggle.
+The interaction model should not reduce support language to a simple translation toggle.
 
 It should support policy choices such as:
 
@@ -107,7 +116,7 @@ It should support policy choices such as:
 - dual-language prompts
 - on-demand translation only
 
-This policy should vary by learner band and scene goal.
+This policy should vary by learner band and interaction goal.
 
 It should also govern:
 
@@ -115,7 +124,7 @@ It should also govern:
 - repair variants
 - happy-path response frames
 
-The scene model should prefer natural mixed-language helper utterances over arbitrary token substitution.
+The interaction model should prefer natural mixed-language helper utterances over arbitrary token substitution.
 
 At typed bands, the support-language policy should also govern a staged repair ladder rather than a flat set of always-visible repair actions.
 
@@ -167,7 +176,7 @@ For the `B2` product specifically:
 
 ### 6. Response Contracts Must Be Provider-Neutral
 
-The same semantic scenario should work whether the turn came from:
+The same scenario and interaction semantics should work whether the turn came from:
 
 - a scripted provider
 - `sugaragent`
@@ -178,9 +187,9 @@ It must be host-visible and middleware-visible.
 
 ### 7. Rendering Is Derived from Semantics Plus Learner State
 
-The semantic scenario answers:
+The scenario and interaction semantics answer:
 
-- what the scene means
+- what the quest beat means
 - what the player needs to do
 
 Learner state answers:
@@ -199,6 +208,39 @@ If a mixed-language surface would sound unnatural, the architecture should permi
 - a fully target-language completed response
 
 while keeping support in the scaffold or repair rather than forcing token-spliced final output.
+
+### 8. Deterministic First-Pass Turn Generation for Bounded Dialogue Beats
+
+For bounded scripted interaction families, Sugarlang should support a deterministic first-pass generation path from the English dialogue beat.
+
+That path should:
+
+1. read the source quest node and English dialogue beat
+2. classify the interaction family
+3. look up target-language vocabulary entries in the shared lexicon
+4. assign `focus`, `reinforcement`, and `ambient`
+5. apply the selected band policy
+6. emit a full banded turn bundle
+
+The emitted bundle is not only a line of text.
+
+Per band it should include:
+
+- NPC initial line
+- vocabulary roles
+- response contract
+- visible scaffold
+- repair ladder
+- evaluation target
+- quest-success hook
+
+This is what makes a simple English beat like:
+
+- `Hello. My name is Bippity. I am the Station Master.`
+
+turn into a real Sugarlang interaction instead of five unrelated translated strings.
+
+The worked example lives in [Deterministic Banded Turn Generation](../api/deterministic-banded-turn-generation.md).
 
 ## Why This Supports the Product and Use Cases
 
@@ -268,7 +310,7 @@ Why:
 This ADR does not lock exact schema design, but it does imply certain patterns:
 
 - explicit scenario records separate from dialogue text
-- explicit grounding references tied to stable scene IDs
+- explicit interaction bindings tied to stable source IDs
 - stable scenario referents plus optional band-specific concrete variant records
 - explicit support-language policy records by learner band
 - explicit response contract types
@@ -276,7 +318,7 @@ This ADR does not lock exact schema design, but it does imply certain patterns:
 - explicit clarification-entry policy
 - semantic slot definitions
 - scenario preview tooling by learner band
-- validation that every Sugarlang scene points at stable source content
+- validation that every Sugarlang interaction points at stable source content
 
 This model is equally compatible with:
 

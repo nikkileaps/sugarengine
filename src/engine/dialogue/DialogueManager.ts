@@ -1,6 +1,5 @@
 import { DialogueLoader } from './DialogueLoader';
-import { DialogueNode, DialogueNext, LoadedDialogue } from './types';
-import { DialoguePanel } from '../ui/DialoguePanel';
+import { DialogueNode, DialogueNext, DialoguePresenter, LoadedDialogue } from './types';
 import type { WorldStateCondition } from '../state';
 
 export type DialogueEventHandler = (eventName: string) => void;
@@ -12,7 +11,7 @@ export type SpeakerNameResolver = (speakerId: string) => string | undefined;
  */
 export class DialogueManager {
   private loader: DialogueLoader;
-  private dialoguePanel: DialoguePanel;
+  private presenter: DialoguePresenter;
 
   private currentDialogue: LoadedDialogue | null = null;
   private currentNode: DialogueNode | null = null;
@@ -25,9 +24,9 @@ export class DialogueManager {
   private speakerNameResolver: SpeakerNameResolver | null = null;
   private conditionChecker: ((condition: WorldStateCondition) => boolean) | null = null;
 
-  constructor(container: HTMLElement) {
+  constructor(presenter: DialoguePresenter) {
     this.loader = new DialogueLoader();
-    this.dialoguePanel = new DialoguePanel(container);
+    this.presenter = presenter;
   }
 
   /**
@@ -90,8 +89,9 @@ export class DialogueManager {
 
     this.isActive = true;
 
-    // Clear history for new dialogue
-    this.dialoguePanel.clearHistory();
+    // Clear history and show the presenter for new dialogue
+    this.presenter.clearHistory();
+    this.presenter.show();
 
     if (this.onDialogueStart) {
       this.onDialogueStart();
@@ -147,7 +147,7 @@ export class DialogueManager {
     displayNode = { ...displayNode, speakerId: originalSpeakerId };
 
     // Show in UI (with filtered connections)
-    this.dialoguePanel.show(
+    this.presenter.showNode(
       displayNode,
       (selected?: DialogueNext) => {
         this.handleAdvance(selected);
@@ -198,7 +198,7 @@ export class DialogueManager {
    * End the current dialogue
    */
   end(): void {
-    this.dialoguePanel.hide();
+    this.presenter.hide();
     this.currentDialogue = null;
     this.currentNode = null;
     this.isActive = false;
@@ -237,6 +237,8 @@ export class DialogueManager {
   }
 
   dispose(): void {
-    this.dialoguePanel.dispose();
+    if ('dispose' in this.presenter && typeof this.presenter.dispose === 'function') {
+      (this.presenter as { dispose: () => void }).dispose();
+    }
   }
 }

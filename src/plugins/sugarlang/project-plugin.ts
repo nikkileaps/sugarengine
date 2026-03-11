@@ -1,4 +1,5 @@
 import type { EnginePlugin } from '../../engine/plugins';
+import type { DialogueTree } from '../../engine/dialogue/types';
 import { loadContentFromProject, loadContentFromArtifacts } from './content/loader';
 import { createSugarlangPlugin, type SugarlangPluginOptions } from './plugin';
 import type { ConversationMiddleware, ConversationProvider } from '../../engine/conversation/types';
@@ -13,9 +14,9 @@ type SugarlangPluginResult = EnginePlugin & {
  * Sugarlang project configuration shape.
  *
  * When `sugarlang` is present in the project data, it can be:
- *   - `true` or `'demo'`: use built-in demo content
  *   - An object with `enabled: true` and optional `artifacts`: artifact file map
  *   - An object with inline `SugarlangProjectData` fields (legacy)
+ *   - `'demo'`: explicitly use built-in demo content (tests/dev only)
  */
 export interface SugarlangProjectConfig {
   enabled?: boolean;
@@ -29,8 +30,28 @@ export interface SugarlangProjectConfig {
  * Loading priority:
  *   1. If `sugarlang.artifacts` contains artifact files, load from those (V1 artifact model)
  *   2. If `sugarlang` contains inline content data, load from that (legacy inline model)
- *   3. If `sugarlang` is truthy but has no content, fall back to built-in demo bundle
+ *   3. If `sugarlang === 'demo'`, use the built-in demo bundle explicitly
  */
+/**
+ * Build a getDialogueTree resolver from the project's dialogues array.
+ * The sugarlang provider uses this to look up dialogue trees by ID from
+ * the game's canonical dialogue data — no duplication needed.
+ */
+function buildDialogueTreeResolver(
+  projectData: Record<string, unknown>,
+): (dialogueId: string) => DialogueTree | undefined {
+  const dialogues = projectData.dialogues;
+  if (!Array.isArray(dialogues)) return () => undefined;
+
+  const map = new Map<string, DialogueTree>();
+  for (const d of dialogues) {
+    if (d && typeof d === 'object' && typeof d.id === 'string') {
+      map.set(d.id, d as DialogueTree);
+    }
+  }
+  return (id) => map.get(id);
+}
+
 export function createSugarlangPluginFromProject(
   projectData: unknown,
   options: Omit<SugarlangPluginOptions, 'contentBundle'> = {},
@@ -42,6 +63,16 @@ export function createSugarlangPluginFromProject(
   if (!('sugarlang' in project)) return null;
 
   const sugarlangData = project.sugarlang;
+  const getDialogueTree = buildDialogueTreeResolver(project);
+
+  if (sugarlangData === 'demo') {
+    console.info('[sugarlang] Using explicit built-in Find the Luggage demo bundle.');
+    return createSugarlangPlugin({
+      ...options,
+      contentBundle: FIND_THE_LUGGAGE_BUNDLE,
+      getDialogueTree,
+    });
+  }
 
   // Check for V1 artifact-backed content
   if (sugarlangData && typeof sugarlangData === 'object') {
@@ -68,6 +99,7 @@ export function createSugarlangPluginFromProject(
           return createSugarlangPlugin({
             ...options,
             contentBundle: bundle,
+            getDialogueTree,
           });
         }
       }
@@ -88,16 +120,11 @@ export function createSugarlangPluginFromProject(
       return createSugarlangPlugin({
         ...options,
         contentBundle: bundle,
+        getDialogueTree,
       });
     }
   }
 
-  // Key is present but has no real data (e.g. `sugarlang: true` or `sugarlang: 'demo'`
-  // or `sugarlang: { enabled: true }` with no artifacts yet)
-  // — fall back to built-in demo content for preview testing.
-  console.info('[sugarlang] No project sugarlang data found, using built-in Find the Luggage demo.');
-  return createSugarlangPlugin({
-    ...options,
-    contentBundle: FIND_THE_LUGGAGE_BUNDLE,
-  });
+  console.info('[sugarlang] No Sugarlang artifacts or inline content found; plugin not loaded.');
+  return null;
 }

@@ -23,6 +23,8 @@ export type { Shortcut } from './KeyboardShortcuts';
 export { EpisodeSelector } from './EpisodeSelector';
 export type { EpisodeSelectorConfig, RegionOption } from './EpisodeSelector';
 
+export { CompactIdDisplay } from './CompactIdDisplay';
+
 export { ProjectManagerDialog } from './ProjectManagerDialog';
 export type { ProjectManagerConfig } from './ProjectManagerDialog';
 
