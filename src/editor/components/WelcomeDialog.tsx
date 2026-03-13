@@ -2,33 +2,21 @@
  * WelcomeDialog - Startup dialog shown when app first loads
  */
 
-import { Modal, Stack, Text, Button, Group, TextInput } from '@mantine/core';
-import { useState } from 'react';
+import { Modal, Stack, Text, Button, Group } from '@mantine/core';
 
 interface WelcomeDialogProps {
   opened: boolean;
   onClose: () => void;
-  onCreateProject: (name: string) => void;
-  onOpenProject: () => void;
+  onCreateGame: () => void;
+  onOpenGame: () => void;
 }
 
 export function WelcomeDialog({
   opened,
   onClose: _onClose,
-  onCreateProject,
-  onOpenProject,
+  onCreateGame,
+  onOpenGame,
 }: WelcomeDialogProps) {
-  const [showCreate, setShowCreate] = useState(false);
-  const [projectName, setProjectName] = useState('My Game');
-
-  const handleCreate = () => {
-    if (projectName.trim()) {
-      onCreateProject(projectName.trim());
-      setShowCreate(false);
-      setProjectName('My Game');
-    }
-  };
-
   return (
     <Modal
       opened={opened}
@@ -36,7 +24,7 @@ export function WelcomeDialog({
       withCloseButton={false}
       closeOnClickOutside={false}
       closeOnEscape={false}
-      title="Project Manager"
+      title="Game Manager"
       size="md"
       centered
       styles={{
@@ -61,72 +49,38 @@ export function WelcomeDialog({
         },
       }}
     >
-      {!showCreate ? (
-        <Stack align="center" gap="lg">
-          <Text size="48px">🍬</Text>
-          <Stack gap={4} align="center">
-            <Text size="xl" fw={500} c="white">
-              Welcome to Sugar Engine
-            </Text>
-            <Text size="sm" c="dimmed">
-              Create a new project or open an existing one to get started.
-            </Text>
-          </Stack>
-
-          <Group gap="md" mt="md">
-            <Button
-              variant="light"
-              color="green"
-              size="lg"
-              leftSection={<span>+</span>}
-              onClick={() => setShowCreate(true)}
-            >
-              New Project
-            </Button>
-            <Button
-              variant="light"
-              color="blue"
-              size="lg"
-              leftSection={<span>📂</span>}
-              onClick={onOpenProject}
-            >
-              Open Project
-            </Button>
-          </Group>
-        </Stack>
-      ) : (
-        <Stack gap="md">
-          <Text size="lg" fw={500} c="white">
-            Create New Project
+      <Stack align="center" gap="lg">
+        <Text size="48px">🍬</Text>
+        <Stack gap={4} align="center">
+          <Text size="xl" fw={500} c="white">
+            Welcome to Sugar Engine
           </Text>
-
-          <TextInput
-            label="Project Name"
-            placeholder="My Game"
-            value={projectName}
-            onChange={(e) => setProjectName(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            autoFocus
-            styles={{
-              input: {
-                background: '#181825',
-                border: '1px solid #313244',
-                color: '#cdd6f4',
-              },
-              label: { color: '#a6adc8' },
-            }}
-          />
-
-          <Group justify="flex-end" mt="md">
-            <Button variant="subtle" color="gray" onClick={() => setShowCreate(false)}>
-              Back
-            </Button>
-            <Button color="green" onClick={handleCreate}>
-              Create Project
-            </Button>
-          </Group>
+          <Text size="sm" c="dimmed">
+            Create a new game root or open an existing game to get started.
+          </Text>
         </Stack>
-      )}
+
+        <Group gap="md" mt="md">
+          <Button
+            variant="light"
+            color="green"
+            size="lg"
+            leftSection={<span>+</span>}
+            onClick={onCreateGame}
+          >
+            New Game
+          </Button>
+          <Button
+            variant="light"
+            color="blue"
+            size="lg"
+            leftSection={<span>📂</span>}
+            onClick={onOpenGame}
+          >
+            Open Game
+          </Button>
+        </Group>
+      </Stack>
     </Modal>
   );
 }

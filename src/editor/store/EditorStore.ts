@@ -4,7 +4,7 @@
 
 import { Store } from './Store';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'sugarlang';
 
 export interface EditorState {
   activeTab: EditorTab;
@@ -15,6 +15,12 @@ export interface EditorState {
   // Project context
   projectLoaded: boolean;
   projectName: string | null;
+  gameId: string | null;
+  gameRootPath: string | null;
+  projectFilePath: string | null;
+  projectCreatedAt: string | null;
+  projectVersion: string | null;
+  defaultEpisodeId: string | null;
   // Episode context
   currentSeasonId: string | null;
   currentEpisodeId: string | null;
@@ -36,6 +42,12 @@ const initialState: EditorState = {
   searchQuery: '',
   projectLoaded: false,
   projectName: null,
+  gameId: null,
+  gameRootPath: null,
+  projectFilePath: null,
+  projectCreatedAt: null,
+  projectVersion: null,
+  defaultEpisodeId: null,
   currentSeasonId: null,
   currentEpisodeId: null,
   episodeFilter: 'all',
@@ -85,6 +97,28 @@ class EditorStoreClass extends Store<EditorState> {
 
   setProjectLoaded(loaded: boolean, name: string | null = null): void {
     this.setState({ projectLoaded: loaded, projectName: name });
+  }
+
+  setProjectContext(context: {
+    loaded: boolean;
+    name?: string | null;
+    gameId?: string | null;
+    gameRootPath?: string | null;
+    projectFilePath?: string | null;
+    projectCreatedAt?: string | null;
+    projectVersion?: string | null;
+    defaultEpisodeId?: string | null;
+  }): void {
+    this.setState({
+      projectLoaded: context.loaded,
+      projectName: context.name ?? null,
+      gameId: context.gameId ?? null,
+      gameRootPath: context.gameRootPath ?? null,
+      projectFilePath: context.projectFilePath ?? null,
+      projectCreatedAt: context.projectCreatedAt ?? null,
+      projectVersion: context.projectVersion ?? null,
+      defaultEpisodeId: context.defaultEpisodeId ?? null,
+    });
   }
 }
 

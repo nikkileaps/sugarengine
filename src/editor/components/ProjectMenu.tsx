@@ -1,20 +1,24 @@
 /**
- * ProjectMenu - Dropdown menu for project operations (like a File menu)
+ * ProjectMenu - Dropdown menu for game operations (like a File menu)
  */
 
 import { Menu, Button } from '@mantine/core';
 
 interface ProjectMenuProps {
-  onNewProject: () => void;
-  onOpenProject: () => void;
-  onSaveProject: () => void;
+  onNewGame: () => void;
+  onOpenGame: () => void;
+  onSaveGame: () => void;
+  onExportJson: () => void;
+  onManagePlugins: () => void;
   projectLoaded: boolean;
 }
 
 export function ProjectMenu({
-  onNewProject,
-  onOpenProject,
-  onSaveProject,
+  onNewGame,
+  onOpenGame,
+  onSaveGame,
+  onExportJson,
+  onManagePlugins,
   projectLoaded,
 }: ProjectMenuProps) {
   return (
@@ -31,7 +35,7 @@ export function ProjectMenu({
             },
           }}
         >
-          Project
+          Game
         </Button>
       </Menu.Target>
 
@@ -45,23 +49,38 @@ export function ProjectMenu({
       >
         <Menu.Item
           leftSection={<span>+</span>}
-          onClick={onNewProject}
+          onClick={onNewGame}
         >
-          New Project
+          New Game
         </Menu.Item>
         <Menu.Item
           leftSection={<span>📂</span>}
-          onClick={onOpenProject}
+          onClick={onOpenGame}
         >
-          Open Project...
+          Open Game...
         </Menu.Item>
         <Menu.Divider />
         <Menu.Item
           leftSection={<span>💾</span>}
-          onClick={onSaveProject}
+          onClick={onSaveGame}
           disabled={!projectLoaded}
         >
-          Save Project
+          Save Game
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<span>🚀</span>}
+          onClick={onExportJson}
+          disabled={!projectLoaded}
+        >
+          Export JSON
+        </Menu.Item>
+        <Menu.Divider />
+        <Menu.Item
+          leftSection={<span>🧩</span>}
+          onClick={onManagePlugins}
+          disabled={!projectLoaded}
+        >
+          Plugins
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>

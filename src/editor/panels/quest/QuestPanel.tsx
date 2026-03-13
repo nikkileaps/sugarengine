@@ -14,8 +14,9 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useEditorStore } from '../../store';
+import { CompactIdDisplay } from '../../components';
 import { QuestDetail } from './QuestDetail';
-import { generateUUID, shortId } from '../../utils';
+import { generateUUID } from '../../utils';
 import type {
   BeatNodeType,
   NarrativeSubtype,
@@ -39,9 +40,23 @@ export interface MoveNpcAction {
 
 export type ObjectiveAction = MoveNpcAction;
 
+export interface QuestObjectiveAgentContract {
+  enabled?: boolean;
+  deliveryModeId?: string;
+  id?: string;
+  npcId?: string;
+  objective?: string;
+  requiredFacts?: string[];
+  forbiddenFacts?: string[];
+  completionRule?: 'player_ack' | 'player_action' | 'engine_flag';
+  completionTarget?: string;
+  maxTurns?: number;
+  fallbackScriptId?: string;
+}
+
 export interface QuestObjective {
   id: string;
-  type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
+  type: 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'castSpell' | 'custom';
   target: string;
   description: string;
   count?: number;
@@ -65,11 +80,16 @@ export interface QuestObjective {
   dialogueId?: string;
   eventName?: string;
 
-  // Condition-specific (ADR-016)
+  // Condition/Branch-specific (ADR-016)
   condition?: ConditionExpression;
+  failTargets?: string[];           // Node IDs activated on condition failure
 
   // Display control (ADR-016)
   showInHUD?: boolean;
+
+  // SugarAgent contract authoring metadata (editor surface).
+  // Runtime contracts are normalized into quest.agentBeatContracts.
+  agentBeatContract?: QuestObjectiveAgentContract;
 }
 
 export interface QuestStage {
@@ -98,6 +118,19 @@ export interface QuestEntry {
   stages: QuestStage[];
   rewards?: QuestReward[];
   episodeId?: string;
+  agentBeatContracts?: {
+    id: string;
+    npcId: string;
+    objective: string;
+    requiredFacts: string[];
+    forbiddenFacts?: string[];
+    completionRule: 'player_ack' | 'player_action' | 'engine_flag';
+    completionTarget?: string;
+    maxTurns?: number;
+    fallbackScriptId?: string;
+    stageId?: string;
+    objectiveId?: string;
+  }[];
 }
 
 export interface QuestPanelResult {
@@ -134,6 +167,12 @@ export function validateQuest(quest: QuestEntry): string[] {
       if (nodeType === 'objective') {
         if (!obj.target && obj.type !== 'voiceover') {
           warnings.push(`Objective ${label} has no target`);
+        }
+        if (obj.agentBeatContract?.enabled === true && obj.type !== 'talk') {
+          warnings.push(`Objective ${label} enables SugarAgent contract but is not Talk type`);
+        }
+        if (obj.agentBeatContract?.enabled === true && obj.type === 'talk' && obj.dialogue) {
+          warnings.push(`Objective ${label} has both Talk Dialogue and Agent Contract enabled; choose one`);
         }
       }
 
@@ -188,6 +227,29 @@ export function validateQuest(quest: QuestEntry): string[] {
     }
   }
 
+  if (Array.isArray(quest.agentBeatContracts) && quest.agentBeatContracts.length > 0) {
+    const seenIds = new Set<string>();
+    for (const contract of quest.agentBeatContracts) {
+      if (!contract.id || contract.id.trim().length === 0) {
+        warnings.push('A SugarAgent beat contract is missing an id');
+        continue;
+      }
+      if (seenIds.has(contract.id)) {
+        warnings.push(`Duplicate SugarAgent beat contract id "${contract.id}"`);
+      }
+      seenIds.add(contract.id);
+      if (!contract.npcId || contract.npcId.trim().length === 0) {
+        warnings.push(`Beat contract "${contract.id}" is missing npcId`);
+      }
+      if (!contract.objective || contract.objective.trim().length === 0) {
+        warnings.push(`Beat contract "${contract.id}" is missing objective text`);
+      }
+      if (!Array.isArray(contract.requiredFacts) || contract.requiredFacts.length === 0) {
+        warnings.push(`Beat contract "${contract.id}" must include at least one required fact`);
+      }
+    }
+  }
+
   return warnings;
 }
 
@@ -198,6 +260,7 @@ interface QuestPanelProps {
   items?: { id: string; name: string }[];
   dialogues?: { id: string; name: string }[];
   triggers?: { id: string; name: string }[];
+  spells?: { id: string; name: string }[];
   children: (result: QuestPanelResult) => ReactNode;
 }
 
@@ -208,6 +271,7 @@ export function QuestPanel({
   items = [],
   dialogues = [],
   triggers = [],
+  spells = [],
   children,
 }: QuestPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -305,10 +369,13 @@ export function QuestPanel({
                     <Text size="sm" fw={500}>
                       {quest.name}
                     </Text>
-                    <Text size="xs" c="dimmed">
-                      {quest.stages.length} stage{quest.stages.length !== 1 ? 's' : ''} ·{' '}
-                      {shortId(quest.id)}
-                    </Text>
+                    <Group gap={6} wrap="nowrap">
+                      <Text size="xs" c="dimmed">
+                        {quest.stages.length} stage{quest.stages.length !== 1 ? 's' : ''}
+                      </Text>
+                      <Text size="xs" c="dimmed">·</Text>
+                      <CompactIdDisplay value={quest.id} />
+                    </Group>
                   </Stack>
                   {warnings.length > 0 && (
                     <Badge size="xs" color="red">
@@ -331,6 +398,7 @@ export function QuestPanel({
         items={items}
         dialogues={dialogues}
         triggers={triggers}
+        spells={spells}
         onChange={handleUpdate}
         onDelete={() => handleDelete(selectedQuest.id)}
       />

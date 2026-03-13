@@ -7,6 +7,9 @@ export class ItemPickup implements Component {
   static readonly type = 'ItemPickup';
   readonly type = ItemPickup.type;
 
+  /** XZ collision radius — set after model loads from bounding box */
+  public collisionRadius = 0;
+
   constructor(
     public id: string,              // Unique pickup ID
     public itemId: string,          // Item definition ID

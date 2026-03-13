@@ -48,7 +48,7 @@ export function RegionInspector({ region, episodes, onChange }: RegionInspectorP
           handleChange('geometry', { ...region.geometry, path: e.currentTarget.value })
         }
         placeholder="cafe-nollie"
-        description="Folder name in public/regions/"
+        description="Folder name under the project's regions assets directory"
       />
 
       <Text size="xs" fw={500} c="dimmed" mt="sm">

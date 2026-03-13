@@ -9,17 +9,13 @@
 
 import {
   Game,
-  InteractionPrompt,
-  QuestJournal,
-  ItemNotification,
-  InventoryUI,
-  GiftUI,
   DebugHUD,
-  SpellMenuUI,
-  CasterHUD,
-  ResonanceGameUI,
   FreeCameraController,
+  LoadingScreen,
+  SugarlangPreviewControls,
 } from './engine';
+import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
+import { buildRuntimePluginsFromProject } from './plugins/runtime';
 
 interface ProjectMessage {
   type: 'LOAD_PROJECT' | 'UPDATE_PROJECT';
@@ -28,9 +24,30 @@ interface ProjectMessage {
 }
 
 let gameInstance: Game | null = null;
+let slControlsInstance: SugarlangPreviewControls | null = null;
+
+function extractSugarlangLanguages(projectData: unknown): string[] {
+  if (!projectData || typeof projectData !== 'object') return [];
+  const slConfig = (projectData as Record<string, unknown>).sugarlang;
+  if (!slConfig || typeof slConfig !== 'object') return [];
+  const config = slConfig as { artifacts?: Record<string, string>; disabledLanguages?: string[] };
+  const artifacts = config.artifacts;
+  if (!artifacts) return [];
+  const disabled = new Set(config.disabledLanguages ?? []);
+  // Lexicon paths are like "languages/es/lexicon.json"
+  return Object.keys(artifacts)
+    .filter((key) => key.match(/^languages\/[a-z]+\/lexicon\.json$/))
+    .map((key) => key.split('/')[1]!)
+    .filter((lang) => !disabled.has(lang))
+    .sort();
+}
 
 async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
+  const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(projectData);
+  const projectMeta = (projectData as { meta?: { gameId?: string; contentBasePath?: string } } | undefined)?.meta;
+  const gameId = projectMeta?.gameId || 'editor-preview';
+  const contentBasePath = projectMeta?.contentBasePath || '';
 
   const isDevelopmentMode = !!projectData;
 
@@ -69,19 +86,20 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     throw new Error('No start region configured. Set startRegion on the episode or ensure the region has a geometry.path.');
   }
 
+  // Read titleScreen override from project data if available
+  const projectTitleScreen = (projectData as { titleScreen?: Record<string, unknown> } | undefined)?.titleScreen;
+
   // Create game with all systems wired up
   const game = new Game({
     container,
-    engine: {
-      camera: {
-        style: 'isometric',
-        zoom: { min: 0.5, max: 2.0, default: 1.0 }
-      }
-    },
+    engine: DEFAULT_GAME_CONFIG.engine,
     save: {
+      ...DEFAULT_GAME_CONFIG.save,
       autoSaveEnabled: !isDevelopmentMode, // Disable auto-save in dev mode
-      autoSaveDebounceMs: 10000
+      namespace: gameId,
     },
+    gameId,
+    contentBasePath,
     startRegion: startRegionPath,
     // In dev mode, Game reads main quest from episode's completionCondition
     // In production, fall back to hardcoded quest
@@ -93,12 +111,12 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     mode: isDevelopmentMode ? 'development' : 'production',
     projectData,
     currentEpisode: episodeId,
-    // Title screen camera
+    plugins: runtimePlugins,
+    conversationMiddleware,
+    conversationProviders,
     titleScreen: {
-      cameraPosition: { x: 0.0, y: 0.0, z: 25.0 },
-      cameraLookAt: { x: 0.3, y: -40.3, z: 54.6 },
-      hidePlayer: true,
-      transitionDuration: 600,
+      ...DEFAULT_GAME_CONFIG.titleScreen,
+      ...projectTitleScreen,
     },
   });
 
@@ -106,21 +124,13 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   await game.init();
 
+  setupGameUI(game, container);
+
   // ========================================
-  // UI Components (preview-specific)
+  // Preview-only: Debug Tools
   // ========================================
 
-  const interactionPrompt = new InteractionPrompt(container);
-  const questJournal = new QuestJournal(container, game.quests);
-  const itemNotification = new ItemNotification(container);
-  const inventoryUI = new InventoryUI(container, game.inventory);
-  const giftUI = new GiftUI(container, game.inventory);
-  const spellMenuUI = new SpellMenuUI(container, game.caster);
-  // CasterHUD auto-shows when caster exists
-  new CasterHUD(container, game.caster);
-  const resonanceGameUI = new ResonanceGameUI(container);
   const debugHUD = new DebugHUD(container, game.quests);
-
   debugHUD.setPlayerPositionProvider(() => game.getPlayerPosition());
   debugHUD.setRegionInfoProvider(() => game.getRegionInfo());
   debugHUD.setRenderer(game.engine.renderer);
@@ -129,205 +139,56 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     (level) => game.engine.setForcedLOD(level),
     () => game.engine.getForcedLOD()
   );
+  const updateAgentDebugInfo = () => {
+    debugHUD.setCustomInfo(game.getAgentRuntimeDebugInfo());
+  };
+  updateAgentDebugInfo();
+  const debugInfoInterval = window.setInterval(updateAgentDebugInfo, 500);
+  window.addEventListener('beforeunload', () => window.clearInterval(debugInfoInterval), { once: true });
+
+  // Sugarlang preview controls
+  const slControls = new SugarlangPreviewControls(container);
+  slControlsInstance = slControls;
+
+  // Extract installed languages from project artifacts (lexicon-XX.json keys)
+  const slLangs = extractSugarlangLanguages(projectData);
+  if (slLangs.length > 0) {
+    slControls.setLanguages(slLangs);
+  }
+
+  slControls.setOnChange((config) => {
+    game.setSugarlangContext(config.targetLanguage, config.supportLanguage, config.bandOverride);
+  });
+  // Apply default config immediately
+  const defaultSLConfig = slControls.getConfig();
+  game.setSugarlangContext(defaultSLConfig.targetLanguage, defaultSLConfig.supportLanguage, defaultSLConfig.bandOverride);
 
   // Free camera controller for positioning title screen camera (F2 to toggle)
   const freeCam = new FreeCameraController(game.engine.getCamera(), container);
   freeCam.onEnable(() => {
-    // Disable normal camera updates when free cam is active
     game.engine.setCameraUpdateEnabled(false);
   });
   freeCam.onDisable(() => {
-    // Resume normal camera updates
     game.engine.setCameraUpdateEnabled(true);
   });
-
-  // ========================================
-  // Game Event Handlers → UI Updates
-  // ========================================
-
-  game.setEventHandlers({
-    onQuestStart: () => {
-      // Silent - no notification for immersive narrative experience
-    },
-    onQuestComplete: () => {
-      // Silent - no notification for immersive narrative experience
-      questJournal.refresh();
-    },
-    onObjectiveComplete: () => {
-      // Silent - no notification for immersive narrative experience
-      questJournal.refresh();
-    },
-    onObjectiveProgress: () => {
-      questJournal.refresh();
-    },
-    onItemAdded: (itemName, quantity) => {
-      itemNotification.show(itemName, quantity);
-    }
-  });
-
-  // Gift handler
-  giftUI.setOnGift((npcId, itemId) => {
-    game.giveItemToNpc(npcId, itemId);
-  });
-
-  // Resonance game handler
-  game.setResonanceGameHandler((config) => {
-    resonanceGameUI.start(config);
-  });
-
-  resonanceGameUI.setOnComplete((result) => {
-    game.handleResonanceGameComplete(result.success, result.resonanceGained);
-  });
-
-  // ========================================
-  // UI State Management
-  // ========================================
-
-  // Track key states for toggles
-  let journalWasPressed = false;
-  let inventoryWasPressed = false;
-  let giftWasPressed = false;
-  let spellMenuWasPressed = false;
-  let escapeWasPressed = false;
-
-  // Remove movement locks when UIs close
-  questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
-  inventoryUI.setOnClose(() => game.engine.removeMovementLock('inventory'));
-  giftUI.setOnClose(() => game.engine.removeMovementLock('gift'));
-  spellMenuUI.setOnClose(() => game.engine.removeMovementLock('spellMenu'));
-
-  // Helper to check if any UI is blocking
-  const isUIBlocking = () =>
-    game.isUIBlocking() ||
-    questJournal.isVisible() ||
-    inventoryUI.isVisible() ||
-    giftUI.isVisible() ||
-    spellMenuUI.isVisible() ||
-    resonanceGameUI.isActive();
-
-  // Show/hide interaction prompt
-  let nearbyPickupId: string | null = null;
-
-  game.onNearbyInteractionChange((interaction) => {
-    if (isUIBlocking()) {
-      interactionPrompt.hide();
-      return;
-    }
-
-    if (interaction?.available) {
-      interactionPrompt.show(interaction.promptText || 'Interact');
-      nearbyPickupId = null;
-    } else if (!nearbyPickupId) {
-      interactionPrompt.hide();
-    }
-  });
-
-  // ========================================
-  // Input Loop (preview-specific UI toggling)
-  // ========================================
-
-  const originalRun = game.engine.run.bind(game.engine);
-  game.engine.run = () => {
-    const checkInputs = () => {
-      if (game.sceneManager.getCurrentScene() !== 'gameplay') {
-        requestAnimationFrame(checkInputs);
-        return;
-      }
-
-      // Escape for pause menu
-      const escapePressed = game.engine.isEscapePressed();
-      if (escapePressed && !escapeWasPressed) {
-        if (!isUIBlocking() || game.sceneManager.getCurrentScene() === 'pause') {
-          game.sceneManager.togglePause();
-        }
-      }
-      escapeWasPressed = escapePressed;
-
-      if (isUIBlocking()) {
-        requestAnimationFrame(checkInputs);
-        return;
-      }
-
-      // Journal toggle (J)
-      const journalPressed = game.engine.isJournalPressed();
-      if (journalPressed && !journalWasPressed) {
-        if (questJournal.isVisible()) {
-          questJournal.hide();
-        } else {
-          questJournal.show();
-          game.engine.addMovementLock('journal');
-        }
-      }
-      journalWasPressed = journalPressed;
-
-      // Inventory toggle (I)
-      const inventoryPressed = game.engine.isInventoryPressed();
-      if (inventoryPressed && !inventoryWasPressed) {
-        if (inventoryUI.isVisible()) {
-          inventoryUI.hide();
-        } else {
-          inventoryUI.show();
-          game.engine.addMovementLock('inventory');
-        }
-      }
-      inventoryWasPressed = inventoryPressed;
-
-      // Gift toggle (G)
-      const giftPressed = game.engine.isGiftPressed();
-      if (giftPressed && !giftWasPressed) {
-        if (giftUI.isVisible()) {
-          giftUI.hide();
-        } else if (game.getNearbyNpcId()) {
-          giftUI.show(game.getNearbyNpcId()!);
-          game.engine.addMovementLock('gift');
-        }
-      }
-      giftWasPressed = giftPressed;
-
-      // Spell menu toggle (C)
-      const spellMenuPressed = game.engine.isSpellMenuPressed();
-      if (spellMenuPressed && !spellMenuWasPressed) {
-        if (spellMenuUI.isVisible()) {
-          spellMenuUI.hide();
-        } else {
-          spellMenuUI.show();
-          game.engine.addMovementLock('spellMenu');
-        }
-      }
-      spellMenuWasPressed = spellMenuPressed;
-
-      // Item pickup handling
-      if (!game.getNearbyNpcId()) {
-        const pickup = game.engine.getNearbyPickup();
-        if (pickup) {
-          if (nearbyPickupId !== pickup.id) {
-            nearbyPickupId = pickup.id;
-            interactionPrompt.show('Pick up item');
-          }
-
-          if (game.engine.isInteractPressed()) {
-            game.engine.collectNearbyPickup();
-            nearbyPickupId = null;
-            interactionPrompt.hide();
-          }
-        } else if (nearbyPickupId) {
-          nearbyPickupId = null;
-          interactionPrompt.hide();
-        }
-      }
-
-      requestAnimationFrame(checkInputs);
-    };
-
-    checkInputs();
-    originalRun();
-  };
 
   // ========================================
   // Start Game
   // ========================================
 
+  const loadingScreen = new LoadingScreen(container);
+  loadingScreen.show();
+
   await game.loadRegion(startRegionPath);
+
+  // Wait for all NPC/inspectable models to finish loading
+  await game.engine.waitForPendingModelLoads((loaded, total) => {
+    loadingScreen.setProgress(loaded, total);
+  });
+
+  loadingScreen.hide();
+  loadingScreen.dispose();
+
   game.run();
   game.pause();
   await game.showTitle();
@@ -367,6 +228,14 @@ if (isFromEditor) {
 
       if (gameInstance) {
         gameInstance.updateProjectData(event.data.project);
+      }
+
+      // Refresh preview controls with updated languages
+      if (slControlsInstance) {
+        const langs = extractSugarlangLanguages(event.data.project);
+        if (langs.length > 0) {
+          slControlsInstance.setLanguages(langs);
+        }
       }
     }
   });

@@ -16,7 +16,7 @@ The engine uses an **Entity-Component-System (ECS)** architecture for maximum fl
 |--------|-------------|
 | `SugarEngine` | Main engine class - rendering, input, region loading |
 | `World` | ECS world managing entities, components, and systems |
-| `DialogueManager` | Branching dialogue trees with choices |
+| `DialogueManager` | Branching dialogue trees with choices and conditional connections |
 | `QuestManager` | Multi-stage quests with objectives |
 | `InventoryManager` | Item collection and management |
 | `InspectionManager` | Examine world objects (newspapers, signs, lore) |
@@ -24,6 +24,7 @@ The engine uses an **Entity-Component-System (ECS)** architecture for maximum fl
 | `SceneManager` | Title screen, pause menu, save/load screens |
 | `WorldStateEvaluator` | Unified condition evaluation across all systems |
 | `FlagsManager` | Typed key-value flags with change notification |
+| `PluginManager` | Optional runtime plugin orchestration (ADR-024) |
 
 ## Quick Start
 
@@ -128,3 +129,7 @@ The save system automatically detects the platform and uses the appropriate stor
 - [Inspection System](./12-inspection.md) - Examining world objects
 - [NPC System](./013-npc.md) - NPC behavior trees and beat graph actions
 - [World State](./014-world-state.md) - Unified conditions, flags, and state notifications
+- [Plugin System](./15-plugins.md) - Optional runtime plugin architecture
+- [SugarAgent Plugin](./plugins/sugaragent/16-sugaragent-plugin.md) - Optional SugarAgent plugin (phase 0)
+- [SugarAgent Turn Lifecycle](./plugins/sugaragent/17-sugaragent-session-runtime.md) - In-engine turn path, grounding, and diagnostics
+- [TypeScript File Header Standard](../dev/typescript-file-header-standard.md) - Required top-of-file comment template for hand-authored `.ts` files

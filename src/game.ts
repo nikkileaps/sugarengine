@@ -1,25 +1,26 @@
 /**
  * Production Game Entry Point
  *
- * This is the published game - loads project data from game.json.
+ * This is the published game - loads project data from games/<slug>/game.json.
  * For development/editor preview, see preview.ts instead.
  */
 
-import {
-  Game,
-  InteractionPrompt,
-  QuestNotification,
-  QuestJournal,
-  ItemNotification,
-  InventoryUI,
-  GiftUI,
-  SpellMenuUI,
-  CasterHUD,
-} from './engine';
+import { Game } from './engine';
+import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
+import { buildRuntimePluginsFromProject } from './plugins/runtime';
 
 interface GameData {
+  meta?: {
+    gameId?: string;
+    name?: string;
+    contentBasePath?: string;
+  };
   title?: string;
   defaultEpisode?: string;
+  plugins?: unknown[];
+  sugaragent?: {
+    enabled?: boolean;
+  };
   episodes?: {
     id: string;
     startRegion?: string;
@@ -30,18 +31,39 @@ interface GameData {
   npcs?: unknown[];
   items?: unknown[];
   inspections?: unknown[];
+  titleScreen?: {
+    cameraPosition?: { x: number; y: number; z: number };
+    cameraLookAt?: { x: number; y: number; z: number };
+    hidePlayer?: boolean;
+    transitionDuration?: number;
+  };
 }
 
-async function loadGameData(): Promise<GameData> {
-  const response = await fetch(import.meta.env.BASE_URL + 'game.json');
-  if (!response.ok) {
-    throw new Error('Failed to load game.json - make sure to run npm run game:export first');
+function getRequestedGameSlug(): string {
+  const search = new URLSearchParams(window.location.search);
+  const fromQuery = (search.get('game') ?? '').trim();
+  const fromBuild = (import.meta.env.VITE_GAME_SLUG ?? '').trim();
+  const selected = fromQuery || fromBuild;
+  if (!selected) {
+    throw new Error('No game selected. Add ?game=<slug> to the URL or build with VITE_GAME_SLUG.');
   }
-  return response.json();
+  return selected;
 }
 
-async function runGame(gameData: GameData) {
+async function loadGameData(slug: string): Promise<GameData> {
+  const scopedPath = `${import.meta.env.BASE_URL}games/${slug}/game.json`;
+  const scopedResponse = await fetch(scopedPath);
+  if (scopedResponse.ok) {
+    return scopedResponse.json();
+  }
+  throw new Error(`Failed to load ${scopedPath}.`);
+}
+
+async function runGame(gameData: GameData, gameSlug: string) {
   const container = document.getElementById('app')!;
+  const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(gameData);
+  const gameId = gameData.meta?.gameId || gameSlug;
+  const contentBasePath = gameData.meta?.contentBasePath || `games/${gameSlug}/assets/`;
 
   // Determine start region from default episode
   const episodeId = gameData.defaultEpisode || gameData.episodes?.[0]?.id;
@@ -61,205 +83,30 @@ async function runGame(gameData: GameData) {
   // Create game
   const game = new Game({
     container,
-    engine: {
-      camera: {
-        style: 'isometric',
-        zoom: { min: 0.5, max: 2.0, default: 1.0 }
-      }
-    },
+    engine: { ...DEFAULT_GAME_CONFIG.engine, draco: true },
     save: {
+      ...DEFAULT_GAME_CONFIG.save,
       autoSaveEnabled: true,
-      autoSaveDebounceMs: 10000
+      namespace: gameId,
     },
+    gameId,
+    contentBasePath,
     startRegion: startRegionPath,
     mode: 'development', // Use 'development' to enable projectData loading
     projectData: gameData,
     currentEpisode: episodeId,
+    plugins: runtimePlugins,
+    conversationMiddleware,
+    conversationProviders,
+    titleScreen: {
+      ...DEFAULT_GAME_CONFIG.titleScreen,
+      ...gameData.titleScreen,
+    },
   });
 
   await game.init();
 
-  // ========================================
-  // UI Components
-  // ========================================
-
-  const interactionPrompt = new InteractionPrompt(container);
-  const questNotification = new QuestNotification(container);
-  const questJournal = new QuestJournal(container, game.quests);
-  const itemNotification = new ItemNotification(container);
-  const inventoryUI = new InventoryUI(container, game.inventory);
-  const giftUI = new GiftUI(container, game.inventory);
-  const spellMenuUI = new SpellMenuUI(container, game.caster);
-  // CasterHUD auto-registers event handlers and manages its own visibility
-  new CasterHUD(container, game.caster);
-
-  // ========================================
-  // Game Event Handlers → UI Updates
-  // ========================================
-
-  game.setEventHandlers({
-    onQuestStart: (questName) => {
-      questNotification.showQuestStart(questName);
-    },
-    onQuestComplete: (questName) => {
-      questNotification.showQuestComplete(questName);
-      questJournal.refresh();
-    },
-    onObjectiveComplete: (description) => {
-      questNotification.showObjectiveComplete(description);
-      questJournal.refresh();
-    },
-    onObjectiveProgress: () => {
-      questJournal.refresh();
-    },
-    onItemAdded: (itemName, quantity) => {
-      itemNotification.show(itemName, quantity);
-    }
-  });
-
-  // Gift handler
-  giftUI.setOnGift((npcId, itemId) => {
-    game.giveItemToNpc(npcId, itemId);
-  });
-
-  // ========================================
-  // UI State Management
-  // ========================================
-
-  let journalWasPressed = false;
-  let inventoryWasPressed = false;
-  let giftWasPressed = false;
-  let spellMenuWasPressed = false;
-  let escapeWasPressed = false;
-
-  questJournal.setOnClose(() => game.engine.removeMovementLock('journal'));
-  inventoryUI.setOnClose(() => game.engine.removeMovementLock('inventory'));
-  giftUI.setOnClose(() => game.engine.removeMovementLock('gift'));
-  spellMenuUI.setOnClose(() => game.engine.removeMovementLock('spellMenu'));
-
-  const isUIBlocking = () =>
-    game.isUIBlocking() ||
-    questJournal.isVisible() ||
-    inventoryUI.isVisible() ||
-    giftUI.isVisible() ||
-    spellMenuUI.isVisible();
-
-  let nearbyPickupId: string | null = null;
-
-  game.onNearbyInteractionChange((interaction) => {
-    if (isUIBlocking()) {
-      interactionPrompt.hide();
-      return;
-    }
-
-    if (interaction?.available) {
-      interactionPrompt.show(interaction.promptText || 'Interact');
-      nearbyPickupId = null;
-    } else if (!nearbyPickupId) {
-      interactionPrompt.hide();
-    }
-  });
-
-  // ========================================
-  // Input Loop
-  // ========================================
-
-  const originalRun = game.engine.run.bind(game.engine);
-  game.engine.run = () => {
-    const checkInputs = () => {
-      if (game.sceneManager.getCurrentScene() !== 'gameplay') {
-        requestAnimationFrame(checkInputs);
-        return;
-      }
-
-      // Escape for pause menu
-      const escapePressed = game.engine.isEscapePressed();
-      if (escapePressed && !escapeWasPressed) {
-        if (!isUIBlocking() || game.sceneManager.getCurrentScene() === 'pause') {
-          game.sceneManager.togglePause();
-        }
-      }
-      escapeWasPressed = escapePressed;
-
-      if (isUIBlocking()) {
-        requestAnimationFrame(checkInputs);
-        return;
-      }
-
-      // Journal toggle (J)
-      const journalPressed = game.engine.isJournalPressed();
-      if (journalPressed && !journalWasPressed) {
-        if (questJournal.isVisible()) {
-          questJournal.hide();
-        } else {
-          questJournal.show();
-          game.engine.addMovementLock('journal');
-        }
-      }
-      journalWasPressed = journalPressed;
-
-      // Inventory toggle (I)
-      const inventoryPressed = game.engine.isInventoryPressed();
-      if (inventoryPressed && !inventoryWasPressed) {
-        if (inventoryUI.isVisible()) {
-          inventoryUI.hide();
-        } else {
-          inventoryUI.show();
-          game.engine.addMovementLock('inventory');
-        }
-      }
-      inventoryWasPressed = inventoryPressed;
-
-      // Gift toggle (G)
-      const giftPressed = game.engine.isGiftPressed();
-      if (giftPressed && !giftWasPressed) {
-        if (giftUI.isVisible()) {
-          giftUI.hide();
-        } else if (game.getNearbyNpcId()) {
-          giftUI.show(game.getNearbyNpcId()!);
-          game.engine.addMovementLock('gift');
-        }
-      }
-      giftWasPressed = giftPressed;
-
-      // Spell menu toggle (C)
-      const spellMenuPressed = game.engine.isSpellMenuPressed();
-      if (spellMenuPressed && !spellMenuWasPressed) {
-        if (spellMenuUI.isVisible()) {
-          spellMenuUI.hide();
-        } else {
-          spellMenuUI.show();
-          game.engine.addMovementLock('spellMenu');
-        }
-      }
-      spellMenuWasPressed = spellMenuPressed;
-
-      // Item pickup handling
-      if (!game.getNearbyNpcId()) {
-        const pickup = game.engine.getNearbyPickup();
-        if (pickup) {
-          if (nearbyPickupId !== pickup.id) {
-            nearbyPickupId = pickup.id;
-            interactionPrompt.show('Pick up item');
-          }
-
-          if (game.engine.isInteractPressed()) {
-            game.engine.collectNearbyPickup();
-            nearbyPickupId = null;
-            interactionPrompt.hide();
-          }
-        } else if (nearbyPickupId) {
-          nearbyPickupId = null;
-          interactionPrompt.hide();
-        }
-      }
-
-      requestAnimationFrame(checkInputs);
-    };
-
-    checkInputs();
-    originalRun();
-  };
+  setupGameUI(game, container);
 
   // ========================================
   // Start Game
@@ -279,14 +126,21 @@ async function runGame(gameData: GameData) {
 // Load and Run
 // ========================================
 
-loadGameData()
-  .then(runGame)
-  .catch((err) => {
+async function startGame(): Promise<void> {
+  try {
+    const gameSlug = getRequestedGameSlug();
+    const gameData = await loadGameData(gameSlug);
+    await runGame(gameData, gameSlug);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error('Failed to start game:', err);
     document.getElementById('app')!.innerHTML = `
       <div style="color: white; padding: 2rem; font-family: sans-serif;">
         <h1>Failed to load game</h1>
-        <p>${err.message}</p>
+        <p>${message}</p>
       </div>
     `;
-  });
+  }
+}
+
+void startGame();

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "loreSchemaVersion": 2,
+  "loreArtifactVersion": "lore.7376f869bc411f6c11206df0",
+  "source": {
+    "repo": "git@github.com:nikkileaps/rackwick-lore.git",
+    "commit": "17c297a695d086d7ce3e61438b3fc6970ec9068b",
+    "ref": "refs/heads/main"
+  },
+  "generatedAt": "2026-03-05T21:59:32.098Z",
+  "toolVersion": "phase5",
+  "counts": {
+    "files": 5,
+    "chunks": 6,
+    "facts": 25,
+    "issues": 1
+  },
+  "durability": {
+    "factSchemaVersion": 1,
+    "provenanceSchemaVersion": 1,
+    "migrationSchemaVersion": 1,
+    "unresolvedOldFacts": 0
+  }
+}

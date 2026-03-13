@@ -17,7 +17,9 @@ import {
   Switch,
   NumberInput,
   ScrollArea,
+  ColorInput,
 } from '@mantine/core';
+import type { ItemView, ReadableLayout } from '../../../engine/inventory/types';
 import { ItemEntry } from './ItemPanel';
 import { useEditorStore } from '../../store';
 
@@ -284,6 +286,361 @@ export function ItemDetail({ item, quests, onChange, onDelete, onDuplicate }: It
                     checked={item.giftable}
                     onChange={(e) => handleChange('giftable', e.currentTarget.checked)}
                   />
+                </Stack>
+              </Paper>
+
+              {/* Interaction Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="md">
+                  Interaction
+                </Text>
+                <Stack gap="sm">
+                  <Select
+                    label="View Type"
+                    description="What happens when the player clicks this item in inventory"
+                    data={[
+                      { value: 'none', label: 'None (tooltip only)' },
+                      { value: 'readable', label: 'Readable' },
+                      { value: 'examine', label: 'Examine' },
+                      { value: 'consumable', label: 'Consumable' },
+                    ]}
+                    value={item.view?.type ?? 'none'}
+                    onChange={(value) => {
+                      let view: ItemView | undefined;
+                      switch (value) {
+                        case 'readable':
+                          view = { type: 'readable', content: '' };
+                          break;
+                        case 'examine':
+                          view = { type: 'examine' };
+                          break;
+                        case 'consumable':
+                          view = { type: 'consumable', action: 'Use' };
+                          break;
+                        default:
+                          view = undefined;
+                      }
+                      handleChange('view', view);
+                    }}
+                    size="sm"
+                  />
+
+                  {/* Readable-specific fields */}
+                  {item.view?.type === 'readable' && (() => {
+                    const rv = item.view as Extract<ItemView, { type: 'readable' }>;
+                    const updateReadable = (patch: Partial<Extract<ItemView, { type: 'readable' }>>) => {
+                      handleChange('view', { ...rv, ...patch } as ItemView);
+                    };
+
+                    return (
+                      <>
+                        <Select
+                          label="Layout"
+                          description="Visual presentation style"
+                          data={[
+                            { value: 'default', label: 'Default (scrollable text)' },
+                            { value: 'book', label: 'Book (paginated chapters)' },
+                            { value: 'newspaper', label: 'Newspaper (image pages)' },
+                            { value: 'letter', label: 'Letter' },
+                            { value: 'postcard', label: 'Postcard' },
+                            { value: 'flyer', label: 'Flyer' },
+                          ]}
+                          value={rv.layout ?? 'default'}
+                          onChange={(value) => {
+                            const layout = value === 'default' ? undefined : value as ReadableLayout;
+                            if (layout === 'book') {
+                              updateReadable({
+                                layout,
+                                chapters: rv.chapters?.length ? rv.chapters : [{ title: 'Chapter 1', content: '' }],
+                              });
+                            } else if (layout === 'newspaper') {
+                              updateReadable({ layout, pages: rv.pages ?? [] });
+                            } else {
+                              updateReadable({ layout });
+                            }
+                          }}
+                          size="sm"
+                        />
+
+                        {/* Default layout — simple content */}
+                        {!rv.layout && (
+                          <Textarea
+                            label="Content"
+                            value={rv.content ?? ''}
+                            onChange={(e) => updateReadable({ content: e.currentTarget.value })}
+                            placeholder="Text the player will read..."
+                            minRows={4}
+                            autosize
+                            size="sm"
+                          />
+                        )}
+
+                        {/* Book layout fields */}
+                        {rv.layout === 'book' && (
+                          <Stack gap="sm">
+                            <Group grow>
+                              <TextInput
+                                label="Title"
+                                value={rv.title ?? ''}
+                                onChange={(e) => updateReadable({ title: e.currentTarget.value || undefined })}
+                                placeholder={item.name}
+                                size="sm"
+                              />
+                              <TextInput
+                                label="Author"
+                                value={rv.author ?? ''}
+                                onChange={(e) => updateReadable({ author: e.currentTarget.value || undefined })}
+                                placeholder="Author name"
+                                size="sm"
+                              />
+                            </Group>
+                            <TextInput
+                              label="Cover Image"
+                              value={rv.cover ?? ''}
+                              onChange={(e) => updateReadable({ cover: e.currentTarget.value || undefined })}
+                              placeholder="items/book-cover.png"
+                              size="sm"
+                            />
+                            <Textarea
+                              label="Back Cover Blurb"
+                              value={rv.blurb ?? ''}
+                              onChange={(e) => updateReadable({ blurb: e.currentTarget.value || undefined })}
+                              placeholder="Synopsis or back cover text..."
+                              minRows={2}
+                              autosize
+                              size="sm"
+                            />
+
+                            {/* Chapters */}
+                            <Group justify="space-between" mt="xs">
+                              <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+                                Chapters ({rv.chapters?.length ?? 0})
+                              </Text>
+                              <Button
+                                variant="subtle"
+                                size="xs"
+                                onClick={() => {
+                                  const chapters = [...(rv.chapters ?? []), { title: `Chapter ${(rv.chapters?.length ?? 0) + 1}`, content: '' }];
+                                  updateReadable({ chapters });
+                                }}
+                              >
+                                + Add Chapter
+                              </Button>
+                            </Group>
+
+                            {(rv.chapters ?? []).map((chapter, idx) => (
+                              <Paper
+                                key={idx}
+                                p="sm"
+                                radius="sm"
+                                style={{ background: '#1e1e2e', border: '1px solid #313244' }}
+                              >
+                                <Group justify="space-between" mb="xs">
+                                  <TextInput
+                                    value={chapter.title}
+                                    onChange={(e) => {
+                                      const chapters = [...(rv.chapters ?? [])];
+                                      chapters[idx] = { ...chapter, title: e.currentTarget.value };
+                                      updateReadable({ chapters });
+                                    }}
+                                    variant="unstyled"
+                                    styles={{
+                                      input: {
+                                        fontSize: 14,
+                                        fontWeight: 600,
+                                        color: '#cdd6f4',
+                                        padding: 0,
+                                        height: 'auto',
+                                        minHeight: 'auto',
+                                      },
+                                    }}
+                                  />
+                                  <Button
+                                    variant="subtle"
+                                    color="red"
+                                    size="xs"
+                                    onClick={() => {
+                                      const chapters = (rv.chapters ?? []).filter((_, i) => i !== idx);
+                                      updateReadable({ chapters: chapters.length > 0 ? chapters : [{ title: 'Chapter 1', content: '' }] });
+                                    }}
+                                  >
+                                    Remove
+                                  </Button>
+                                </Group>
+                                <Textarea
+                                  value={chapter.content}
+                                  onChange={(e) => {
+                                    const chapters = [...(rv.chapters ?? [])];
+                                    chapters[idx] = { ...chapter, content: e.currentTarget.value };
+                                    updateReadable({ chapters });
+                                  }}
+                                  placeholder="Chapter content (markdown)..."
+                                  minRows={4}
+                                  autosize
+                                  size="sm"
+                                />
+                              </Paper>
+                            ))}
+                          </Stack>
+                        )}
+
+                        {/* Newspaper layout fields */}
+                        {rv.layout === 'newspaper' && (
+                          <Stack gap="sm">
+                            <TextInput
+                              label="Title"
+                              value={rv.title ?? ''}
+                              onChange={(e) => updateReadable({ title: e.currentTarget.value || undefined })}
+                              placeholder={item.name}
+                              size="sm"
+                            />
+                            <Group justify="space-between">
+                              <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+                                Pages ({rv.pages?.length ?? 0})
+                              </Text>
+                              <Button
+                                variant="subtle"
+                                size="xs"
+                                onClick={() => {
+                                  const pages = [...(rv.pages ?? []), ''];
+                                  updateReadable({ pages });
+                                }}
+                              >
+                                + Add Page
+                              </Button>
+                            </Group>
+                            {(rv.pages ?? []).map((page, idx) => (
+                              <Group key={idx} gap="xs">
+                                <TextInput
+                                  value={page}
+                                  onChange={(e) => {
+                                    const pages = [...(rv.pages ?? [])];
+                                    pages[idx] = e.currentTarget.value;
+                                    updateReadable({ pages });
+                                  }}
+                                  placeholder={`items/gazette/page-${idx + 1}.png`}
+                                  size="sm"
+                                  style={{ flex: 1 }}
+                                />
+                                <Button
+                                  variant="subtle"
+                                  color="red"
+                                  size="xs"
+                                  onClick={() => {
+                                    const pages = (rv.pages ?? []).filter((_, i) => i !== idx);
+                                    updateReadable({ pages });
+                                  }}
+                                >
+                                  X
+                                </Button>
+                              </Group>
+                            ))}
+                          </Stack>
+                        )}
+
+                        {/* Letter / Postcard / Flyer layout fields */}
+                        {(rv.layout === 'letter' || rv.layout === 'postcard' || rv.layout === 'flyer') && (
+                          <Stack gap="sm">
+                            {rv.layout !== 'flyer' && (
+                              <TextInput
+                                label="Author / Sender"
+                                value={rv.author ?? ''}
+                                onChange={(e) => updateReadable({ author: e.currentTarget.value || undefined })}
+                                placeholder="From..."
+                                size="sm"
+                              />
+                            )}
+                            {(rv.layout === 'postcard' || rv.layout === 'flyer') && (
+                              <TextInput
+                                label="Image"
+                                value={rv.image ?? ''}
+                                onChange={(e) => updateReadable({ image: e.currentTarget.value || undefined })}
+                                placeholder="items/postcard-front.png"
+                                size="sm"
+                              />
+                            )}
+                            {rv.layout !== 'flyer' && (
+                              <Textarea
+                                label="Content"
+                                value={rv.content ?? ''}
+                                onChange={(e) => updateReadable({ content: e.currentTarget.value })}
+                                placeholder={rv.layout === 'postcard' ? 'Message on the back...' : 'Letter text...'}
+                                minRows={4}
+                                autosize
+                                size="sm"
+                              />
+                            )}
+                          </Stack>
+                        )}
+                      </>
+                    );
+                  })()}
+
+                  {/* Consumable fields */}
+                  {item.view?.type === 'consumable' && (
+                    <TextInput
+                      label="Action Label"
+                      value={item.view.action}
+                      onChange={(e) => {
+                        handleChange('view', { ...item.view!, action: e.currentTarget.value } as ItemView);
+                      }}
+                      placeholder="Drink, Use, Eat..."
+                      size="sm"
+                    />
+                  )}
+                </Stack>
+              </Paper>
+
+              {/* 3D Model Card */}
+              <Paper
+                p="md"
+                radius="md"
+                style={{ background: '#181825', border: '1px solid #313244' }}
+              >
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="sm">
+                  3D Model
+                </Text>
+                <Stack gap="sm">
+                  <TextInput
+                    label="Model Path (optional)"
+                    value={item.model || ''}
+                    onChange={(e) => {
+                      const val = e.currentTarget.value.trim();
+                      handleChange('model', val.length > 0 ? val : undefined);
+                    }}
+                    placeholder="models/scroll.fbx"
+                    size="sm"
+                  />
+                  {item.model && (
+                    <>
+                      <NumberInput
+                        label="Model Scale"
+                        value={item.modelScale ?? 1}
+                        onChange={(val) => {
+                          const num = typeof val === 'number' ? val : undefined;
+                          handleChange('modelScale', num && num !== 1 ? num : undefined);
+                        }}
+                        min={0.01}
+                        max={100}
+                        step={0.1}
+                        decimalScale={2}
+                        size="sm"
+                      />
+                      <ColorInput
+                        label="Model Color (optional)"
+                        value={item.modelColor || ''}
+                        onChange={(val) => {
+                          handleChange('modelColor', val.length > 0 ? val : undefined);
+                        }}
+                        placeholder="No override"
+                        size="sm"
+                      />
+                    </>
+                  )}
                 </Stack>
               </Paper>
             </Stack>

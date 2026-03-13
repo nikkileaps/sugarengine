@@ -19,6 +19,34 @@ export class CasterManager {
   // Event handlers
   private onSpellCastHandler: ((spell: SpellDefinition, result: SpellResult) => void) | null = null;
   private onChaosTriggeredHandler: ((spell: SpellDefinition, chaosEffect: SpellEffect) => void) | null = null;
+  private onSpellAvailabilityChangeHandler: ((available: Set<string>) => void) | null = null;
+
+  // Tracks which spells are currently castable — only fires notification when this set changes
+  private availableSpells: Set<string> = new Set();
+
+  setOnSpellAvailabilityChange(handler: (available: Set<string>) => void): void {
+    this.onSpellAvailabilityChangeHandler = handler;
+  }
+
+  /**
+   * Recompute which spells are castable and fire callback if the set changed.
+   * Called after any stat mutation (battery/resonance) and from CasterSystem frame recharge.
+   */
+  checkSpellAvailability(): void {
+    const newAvailable = new Set<string>();
+    for (const [id] of this.spells) {
+      if (this.canCastSpell(id).canCast) {
+        newAvailable.add(id);
+      }
+    }
+
+    // Check if set changed
+    if (newAvailable.size !== this.availableSpells.size ||
+        [...newAvailable].some(id => !this.availableSpells.has(id))) {
+      this.availableSpells = newAvailable;
+      this.onSpellAvailabilityChangeHandler?.(newAvailable);
+    }
+  }
 
   /**
    * Connect to the ECS world
@@ -92,6 +120,7 @@ export class CasterManager {
     if (!caster || caster.battery < amount) return false;
 
     caster.battery = Math.max(0, caster.battery - amount);
+    this.checkSpellAvailability();
     return true;
   }
 
@@ -100,6 +129,7 @@ export class CasterManager {
     if (!caster) return;
 
     caster.battery = Math.min(caster.maxBattery, caster.battery + amount);
+    this.checkSpellAvailability();
   }
 
   setBattery(value: number): void {
@@ -107,6 +137,7 @@ export class CasterManager {
     if (!caster) return;
 
     caster.battery = Math.max(0, Math.min(caster.maxBattery, value));
+    this.checkSpellAvailability();
   }
 
   // ============================================
@@ -122,6 +153,7 @@ export class CasterManager {
     if (!caster) return;
 
     caster.resonance = Math.min(100, caster.resonance + amount);
+    this.checkSpellAvailability();
   }
 
   consumeResonance(): number {
@@ -130,6 +162,7 @@ export class CasterManager {
 
     const consumed = caster.resonance;
     caster.resonance = 0;
+    this.checkSpellAvailability();
     return consumed;
   }
 
@@ -138,6 +171,7 @@ export class CasterManager {
     if (!caster) return;
 
     caster.resonance = Math.max(0, Math.min(100, value));
+    this.checkSpellAvailability();
   }
 
   // ============================================
@@ -194,7 +228,7 @@ export class CasterManager {
 
     // Check battery
     if (caster.battery < spell.batteryCost) {
-      return { canCast: false, reason: 'Not enough battery' };
+      return { canCast: false, reason: `Not enough battery, recharge rate ${caster.rechargeRate}%/min` };
     }
 
     if (caster.battery === 0) {

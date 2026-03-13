@@ -377,8 +377,8 @@ export class GameCamera {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
-    // Q/R for 45 degree rotation steps (E is used for interact)
-    if (e.key === 'q' || e.key === 'Q') {
+    // Z/R for 45 degree rotation steps (E is used for interact, Q is menu)
+    if (e.key === 'z' || e.key === 'Z') {
       this.rotateYawStep(-1);
     } else if (e.key === 'r' || e.key === 'R') {
       this.rotateYawStep(1);

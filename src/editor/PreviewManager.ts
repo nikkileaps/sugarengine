@@ -12,6 +12,7 @@ export interface ProjectData {
   meta?: {
     gameId: string;
     name: string;
+    contentBasePath?: string;
   };
   seasons?: unknown[];
   episodes?: unknown[];
@@ -22,9 +23,12 @@ export interface ProjectData {
   inspections: unknown[];
   regions?: unknown[];
   playerCaster?: unknown;
+  titleScreen?: unknown;
   spells?: unknown[];
   resonancePoints?: unknown[];
   vfxDefinitions?: unknown[];
+  /** Optional Sugarlang runtime config for preview, usually artifact-backed. */
+  sugarlang?: unknown;
 }
 
 export class PreviewManager {

@@ -28,6 +28,9 @@ export interface InspectionEntry {
   headerImage?: string;
   content?: string;
   sections?: InspectionSection[];
+  model?: string;
+  modelScale?: number;
+  modelColor?: string;
 }
 
 export interface InspectionPanelResult {

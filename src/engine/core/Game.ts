@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { SugarEngine, EngineConfig } from './Engine';
 import { DialogueManager } from '../dialogue/DialogueManager';
+import { DialoguePanel } from '../ui/DialoguePanel';
+import type { DialoguePresenter } from '../dialogue/types';
 import { InspectionManager } from '../inspection/InspectionManager';
 import { QuestManager } from '../quests/QuestManager';
 import { InventoryManager } from '../inventory/InventoryManager';
@@ -14,11 +16,27 @@ import { Caster } from '../components/Caster';
 import { ObjectiveType, BeatAction } from '../quests/types';
 import type { BTAction, BTCondition } from '../behavior';
 import { FlagsManager, WorldStateEvaluator, WorldStateNotifier, conditionExpressionToWorldState, btConditionToWorldState } from '../state';
-import { PLAYER, NARRATOR } from '../dialogue/types';
+import { PLAYER, PLAYER_VO, NARRATOR, EXCERPT } from '../dialogue/types';
 import type { ResonancePointConfig } from '../resonance';
 import { ResonancePointLoader } from '../resonance';
 import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
 import { FadeOverlay } from '../ui/FadeOverlay';
+import { PluginManager, PluginSystem, mergeValidationBoundary } from '../plugins';
+import { normalizeContentBasePath, resolveContentUrl } from './contentPaths';
+import type { ItemView } from '../inventory/types';
+import type { InspectionData } from '../inspection/types';
+import type {
+  EnginePlugin,
+  PluginAgentTurnDiagnostics,
+  PluginAgentTurnResult,
+  PluginEvent,
+  PluginIntent,
+  PluginIntentResult,
+} from '../plugins';
+import { ConversationHost } from '../conversation/ConversationHost';
+import { ScriptedDialogueProvider } from '../conversation/ScriptedDialogueProvider';
+import { SugarAgentProviderAdapter } from '../conversation/SugarAgentProviderAdapter';
+import type { ProviderSelectionContext } from '../conversation/types';
 
 export interface TitleScreenConfig {
   /** Camera position for title screen (world coordinates) */
@@ -36,6 +54,16 @@ export interface GameConfig {
   engine?: Partial<EngineConfig>;
   save?: Partial<SaveManagerConfig>;
   audio?: Partial<AudioConfig>;
+  /** Stable game identifier used for save namespace isolation. */
+  gameId?: string;
+  /** Project-scoped content base path for asset resolution. */
+  contentBasePath?: string;
+  /** Optional runtime plugins (ADR-024). Omit for scripted-only games. */
+  plugins?: EnginePlugin[];
+  /** Optional conversation middleware for the ConversationHost (ADR-SL-002). */
+  conversationMiddleware?: import('../conversation/types').ConversationMiddleware[];
+  /** Optional conversation providers from external plugins (e.g. sugarlang). */
+  conversationProviders?: import('../conversation/types').ConversationProvider[];
   startRegion?: string;
   startQuest?: string;
   startItems?: { itemId: string; quantity?: number }[];
@@ -58,6 +86,25 @@ export interface GameEventHandlers {
   onDialogueEvent?: (eventName: string) => void;
   onSpellCast?: (spell: SpellDefinition, result: SpellResult) => void;
   onChaosTriggered?: (spell: SpellDefinition, chaosEffect: SpellEffect) => void;
+  onAgentConversationStart?: (session: { npcId: string; npcName?: string }) => void;
+  onAgentConversationEnd?: () => void;
+  onSugarlangSessionStart?: (session: { npcId: string; npcName?: string }) => void;
+  onSugarlangSessionEnd?: () => void;
+  onSugarlangTurnProduced?: (envelope: import('../conversation/types').ConversationTurnEnvelope) => void;
+}
+
+type NPCInteractionMode = 'scripted' | 'agent' | 'hybrid';
+type AgentInteractionPolicy = 'scripted-first' | 'agent-first' | 'fallback';
+
+function normalizeNPCInteractionMode(raw: unknown): NPCInteractionMode {
+  if (raw === 'agent' || raw === 'hybrid') {
+    return raw;
+  }
+  return 'scripted';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 /**
@@ -86,7 +133,15 @@ export class Game {
   private playerCasterConfig: PlayerCasterConfig | null = null;
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
+  private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
   private fadeOverlay: FadeOverlay;
+  private pluginManager: PluginManager | null = null;
+  private contentBasePath: string;
+  private lastAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
+  private readonly dialoguePresenter: DialoguePresenter;
+
+  // Conversation host (ADR-SL-002) — single orchestration point for all conversation types.
+  private conversationHost: ConversationHost;
 
   // World state (ADR-018)
   readonly flags: FlagsManager;
@@ -103,6 +158,7 @@ export class Game {
   constructor(config: GameConfig) {
     this.config = config;
     const { container } = config;
+    this.contentBasePath = normalizeContentBasePath(config.contentBasePath);
 
     // Store project data for development mode
     if (config.projectData) {
@@ -115,17 +171,21 @@ export class Game {
       camera: config.engine?.camera ?? {
         style: 'isometric',
         zoom: { min: 0.5, max: 2.0, default: 1.0 }
-      }
+      },
+      draco: config.engine?.draco,
+      contentBasePath: this.contentBasePath,
     });
 
     // Create systems
-    this.dialogue = new DialogueManager(container);
+    this.dialoguePresenter = new DialoguePanel(container);
+    this.dialogue = new DialogueManager(this.dialoguePresenter);
     this.inspection = new InspectionManager(container);
     this.quests = new QuestManager();
     this.inventory = new InventoryManager();
     this.saveManager = new SaveManager({
       autoSaveEnabled: config.save?.autoSaveEnabled ?? true,
-      autoSaveDebounceMs: config.save?.autoSaveDebounceMs ?? 10000
+      autoSaveDebounceMs: config.save?.autoSaveDebounceMs ?? 10000,
+      namespace: config.save?.namespace ?? config.gameId,
     });
     this.sceneManager = new SceneManager(container);
     this.audio = new AudioManager(config.audio);
@@ -143,6 +203,66 @@ export class Game {
     // World state (ADR-018)
     this.flags = new FlagsManager();
     this.worldStateNotifier = new WorldStateNotifier();
+
+    // Optional plugin runtime (ADR-024)
+    if (config.plugins && config.plugins.length > 0) {
+      this.pluginManager = new PluginManager({
+        getNearbyInteraction: () => this.getNearbyInteraction(),
+        getNearbyInteractable: () => this.engine.getNearbyInteractable(),
+        getNPCInfo: (npcId) => {
+          const npc = this.engine.getNPCInfo(npcId);
+          if (!npc) return undefined;
+          return { id: npc.id, name: npc.name, dialogueId: npc.dialogue };
+        },
+        getPlayerPosition: () => this.getPlayerPosition(),
+        getRegionInfo: () => this.getRegionInfo(),
+        executeIntent: (intent) => this.executePluginIntent(intent),
+      }, config.plugins);
+
+      // Run plugin updates within ECS update ordering.
+      this.engine.world.addSystem(new PluginSystem(this.pluginManager));
+    }
+
+    // Conversation host (ADR-SL-002) — replaces first-plugin-wins orchestration.
+    this.conversationHost = new ConversationHost({
+      executeIntent: (intent) => this.executePluginIntent(intent),
+      addMovementLock: (id) => this.engine.addMovementLock(id),
+      removeMovementLock: (id) => this.engine.removeMovementLock(id),
+    });
+
+    // Register scripted dialogue provider (priority 10 — first pick for scripted content).
+    this.conversationHost.registerProvider(
+      new ScriptedDialogueProvider(this.dialogue),
+    );
+
+    // Register SugarAgent provider adapter (priority 100 — agent/hybrid conversations).
+    if (this.pluginManager) {
+      this.conversationHost.registerProvider(
+        new SugarAgentProviderAdapter(this.pluginManager, {
+          gameId: config.gameId,
+          getCurrentRegion: () => this.engine.getCurrentRegion(),
+          getCurrentEpisode: () => this.config.currentEpisode,
+          getNpcInteractionMode: (npcId) => this.getNpcInteractionMode(npcId),
+          getNpcInteractionPolicy: (npcId) => this.getNpcInteractionPolicy(npcId),
+          buildQuestSnapshot: () => this.buildPluginQuestSnapshot(),
+          serializeFlags: () => this.flags.serializeFlags(),
+        }),
+      );
+    }
+
+    // Register conversation providers from external plugins (e.g. sugarlang scripted).
+    if (config.conversationProviders) {
+      for (const provider of config.conversationProviders) {
+        this.conversationHost.registerProvider(provider);
+      }
+    }
+
+    // Register conversation middleware (e.g. sugarlang).
+    if (config.conversationMiddleware) {
+      for (const mw of config.conversationMiddleware) {
+        this.conversationHost.registerMiddleware(mw);
+      }
+    }
 
     // Create episode manager
     this.episodes = new EpisodeManager({
@@ -164,13 +284,29 @@ export class Game {
     );
 
     // Wire flags → notifier → re-evaluate conditions
-    this.flags.setOnChange((change) => this.worldStateNotifier.notify(change));
+    this.flags.setOnChange((change) => {
+      this.worldStateNotifier.notify(change);
+      this.emitPluginEvent({ type: 'stateChanged', change });
+    });
     this.worldStateNotifier.subscribe(() => this.quests.evaluateConditions());
 
     // Wire quest state changes → notifier
     this.quests.setOnStateChange(() => {
       this.worldStateNotifier.notify({ namespace: 'quest', key: 'stateChange' });
     });
+
+    // Wire spell availability changes → notifier
+    // CasterManager tracks which spells are castable; only fires when that set changes
+    this.caster.setOnSpellAvailabilityChange(() => {
+      this.worldStateNotifier.notify({ namespace: 'caster', key: 'spellAvailability' });
+    });
+    // CasterSystem frame-by-frame battery recharge (bypasses CasterManager) —
+    // tell CasterManager to recheck spell availability after each tick
+    this.casterSystem.setOnBatteryChanged(() => {
+      this.caster.checkSpellAvailability();
+    });
+
+    await this.pluginManager?.init();
 
     await this.inventory.init();
     await this.saveManager.init();
@@ -186,7 +322,18 @@ export class Game {
     }
 
     // Connect save manager to game systems
-    this.saveManager.setGameSystems(this.engine, this.quests, this.inventory, this.caster);
+    this.saveManager.setGameSystems(
+      this.engine,
+      this.quests,
+      this.inventory,
+      this.caster,
+      this.pluginManager
+        ? {
+            serializePluginState: () => this.pluginManager?.serializeState() ?? {},
+            loadPluginState: (state) => this.pluginManager?.loadState(state),
+          }
+        : undefined,
+    );
     this.sceneManager.setGameSystems(this.engine, this.saveManager);
   }
 
@@ -197,13 +344,35 @@ export class Game {
     const project = projectData as {
       dialogues?: { id: string }[];
       quests?: { id: string }[];
-      npcs?: { id: string; name: string; defaultDialogue?: string; behaviorTree?: import('../behavior').BTNode; behaviorMode?: import('../components').BehaviorMode }[];
-      items?: { id: string; name: string }[];
-      inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[] }[];
+      plugins?: unknown[];
+      npcs?: {
+        id: string;
+        name: string;
+        defaultDialogue?: string;
+        behaviorTree?: import('../behavior').BTNode;
+        behaviorMode?: import('../components').BehaviorMode;
+        model?: string;
+        modelHeight?: number;
+        animations?: Record<string, string>;
+        interactionMode?: NPCInteractionMode;
+        agentProfile?: unknown;
+      }[];
+      items?: { id: string; name: string; model?: string; modelScale?: number; modelColor?: string; view?: import('../inventory/types').ItemView }[];
+      inspections?: { id: string; title: string; subtitle?: string; headerImage?: string; content?: string; sections?: { heading?: string; text: string }[]; model?: string; modelScale?: number; modelColor?: string }[];
       regions?: { id: string; name: string; geometry: { path: string }; gridPosition?: { x: number; z: number }; playerSpawn?: { x: number; y: number; z: number }; npcs?: { id: string; position: { x: number; y: number; z: number } }[]; pickups?: { id: string; itemId: string; position: { x: number; y: number; z: number }; quantity?: number }[]; inspectables?: { id: string; inspectionId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; triggers?: { id: string; type: 'box'; bounds: { min: [number, number, number]; max: [number, number, number] }; event: { type: string; target?: string } }[]; resonancePoints?: { id: string; resonancePointId: string; position: { x: number; y: number; z: number }; promptText?: string }[]; vfxSpawns?: { id: string; vfxId: string; position: { x: number; y: number; z: number }; scale?: number; autoPlay?: boolean }[]; environmentAnimations?: { meshName: string; animationType: 'lamp_glow' | 'candle_flicker' | 'wind_sway'; intensity?: number; speed?: number }[] }[];
       playerCaster?: unknown;
+      playerModel?: string;
+      playerAnimations?: Record<string, string>;
       spells?: unknown[];
     };
+
+    // Set player model if specified in project data
+    if (project.playerModel) {
+      this.engine.setPlayerModel(project.playerModel);
+    }
+    if (project.playerAnimations) {
+      this.engine.setPlayerAnimations(project.playerAnimations);
+    }
 
     // Pre-register regions (must happen before loadRegion)
     if (project.regions) {
@@ -240,24 +409,40 @@ export class Game {
       }
     }
 
-    // Register NPCs
+    // Register NPCs and optional interaction routing mode.
+    this.npcInteractionModes.clear();
     if (project.npcs) {
       for (const npc of project.npcs) {
-        this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode);
+        this.npcInteractionModes.set(
+          npc.id,
+          normalizeNPCInteractionMode(npc.interactionMode),
+        );
+        this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode, npc.model, npc.modelHeight, npc.animations);
       }
     }
 
     // Register items
     if (project.items) {
       for (const item of project.items) {
-        this.inventory.registerItem(item);
+        const itemToRegister = item.view
+          ? { ...item, view: this.rebaseItemViewAssets(item.view) }
+          : item;
+        this.inventory.registerItem(itemToRegister);
+        if (item.model) {
+          const color = item.modelColor ? parseInt(item.modelColor.replace('#', ''), 16) : undefined;
+          this.engine.registerItemModel(item.id, item.model, item.modelScale, color);
+        }
       }
     }
 
     // Register inspections
     if (project.inspections) {
       for (const insp of project.inspections) {
-        this.inspection.registerInspection(insp.id, insp);
+        this.inspection.registerInspection(insp.id, this.rebaseInspectionAssets(insp));
+        if (insp.model) {
+          const color = insp.modelColor ? parseInt(insp.modelColor.replace('#', ''), 16) : undefined;
+          this.engine.registerInspectionModel(insp.id, insp.model, insp.modelScale, color);
+        }
       }
     }
 
@@ -324,11 +509,228 @@ export class Game {
     return this.engine.getCurrentRegionInfo();
   }
 
+  getAgentRuntimeDebugInfo(pluginId = 'sugaragent'): string | null {
+    if (!this.pluginManager) return null;
+
+    const pluginState = this.pluginManager.serializeState();
+    const plugin = pluginState[pluginId];
+    if (!isRecord(plugin) || !isRecord(plugin.runtime)) return null;
+
+    const provider = plugin.runtime.provider === 'local' ? 'local' : 'deterministic';
+    const healthy = plugin.runtime.healthy === true;
+    const outcome = typeof plugin.runtime.lastOutcome === 'string'
+      ? plugin.runtime.lastOutcome
+      : undefined;
+    const detail = typeof plugin.runtime.detail === 'string'
+      ? plugin.runtime.detail
+      : undefined;
+
+    const status = healthy ? 'ok' : 'fallback';
+    const parts = [
+      `Agent: ${status}`,
+      `provider=${provider}`,
+      outcome ? `outcome=${outcome}` : undefined,
+      detail ? `detail=${detail}` : undefined,
+    ].filter((entry): entry is string => typeof entry === 'string');
+
+    const runtimeDiagnostics = isRecord(plugin.runtime.lastTurnDiagnostics)
+      ? plugin.runtime.lastTurnDiagnostics as PluginAgentTurnDiagnostics
+      : null;
+    const diagnostics = this.lastAgentTurnDiagnostics ?? runtimeDiagnostics;
+    if (diagnostics) {
+      const evidenceFactsUsed = diagnostics.evidenceBudget?.usage?.facts;
+      const evidenceFactsBudget = diagnostics.evidenceBudget?.budget?.facts;
+      const evidenceUsage = (
+        typeof evidenceFactsUsed === 'number' && Number.isFinite(evidenceFactsUsed)
+          && typeof evidenceFactsBudget === 'number' && Number.isFinite(evidenceFactsBudget)
+      )
+        ? `${evidenceFactsUsed}/${evidenceFactsBudget}`
+        : (
+          typeof evidenceFactsUsed === 'number' && Number.isFinite(evidenceFactsUsed)
+            ? `${evidenceFactsUsed}`
+            : 'n/a'
+        );
+      const topicCoverage = isRecord(diagnostics.conversation?.topicCoverage)
+        ? diagnostics.conversation.topicCoverage
+        : null;
+      const activeTopic = topicCoverage && typeof topicCoverage.activeTopic === 'string'
+        ? topicCoverage.activeTopic
+        : null;
+      const activeTopicNovelty = topicCoverage && typeof topicCoverage.activeTopicNovelty === 'number'
+        && Number.isFinite(topicCoverage.activeTopicNovelty)
+        ? Number(topicCoverage.activeTopicNovelty.toFixed(2))
+        : null;
+      const topicExhausted = topicCoverage?.exhausted === true;
+      const trackedTopicCount = topicCoverage && typeof topicCoverage.trackedTopicCount === 'number'
+        && Number.isFinite(topicCoverage.trackedTopicCount)
+        ? Math.max(0, Math.floor(topicCoverage.trackedTopicCount))
+        : null;
+      parts.push(
+        `mode=${diagnostics.mode ?? 'unknown'}`,
+        `modeTransition=${diagnostics.modeTransition?.changed === true
+          ? `${diagnostics.modeTransition.from ?? 'none'}->${diagnostics.modeTransition.to ?? diagnostics.mode ?? 'unknown'}`
+          : 'stable'}`,
+        `initiative=${diagnostics.initiative?.action ?? 'unknown'}`,
+        `goal=${diagnostics.initiative?.primaryGoal ?? 'unknown'}`,
+        `evidence=${evidenceUsage}`,
+        `retrieval=${diagnostics.retrieval?.qualityPath ?? (diagnostics.retrieval?.attempted ? 'attempted' : 'n/a')}${diagnostics.retrieval?.correctiveAttempted ? ':corrective' : ''}`,
+        `validation=${diagnostics.validation?.decision ?? 'unknown'}${diagnostics.validation?.source ? `:${diagnostics.validation.source}` : ''}`,
+        `beat=${diagnostics.beatEvaluator?.status ?? 'not_applicable'}`,
+      );
+      if (activeTopic) {
+        parts.push(`topic=${activeTopic}${activeTopicNovelty !== null ? `@${activeTopicNovelty.toFixed(2)}` : ''}${topicExhausted ? ':exhausted' : ''}`);
+      }
+      if (trackedTopicCount !== null) {
+        parts.push(`topicsTracked=${trackedTopicCount}`);
+      }
+    }
+
+    return parts.join(' | ');
+  }
+
   /**
    * Get the nearby NPC ID (for gift UI, etc.)
    */
   getNearbyNpcId(): string | null {
     return this.nearbyNpcId;
+  }
+
+  isAgentConversationActive(): boolean {
+    const session = this.conversationHost.getActiveSession();
+    return session !== null && session.providerId === 'sugaragent';
+  }
+
+  getActiveAgentConversation(): { npcId: string; npcName?: string } | null {
+    const session = this.conversationHost.getActiveSession();
+    if (!session || session.providerId !== 'sugaragent') return null;
+    return { npcId: session.npcId, npcName: session.npcName };
+  }
+
+  closeAgentConversation(): void {
+    if (!this.isAgentConversationActive()) return;
+    void this.conversationHost.endConversation();
+  }
+
+  async submitAgentConversationTurn(playerMessage: string): Promise<PluginAgentTurnResult> {
+    const session = this.conversationHost.getActiveSession();
+    if (!session || session.providerId !== 'sugaragent') {
+      return {
+        utterance: 'I cannot continue this conversation right now.',
+        emotion: 'neutral',
+        intent: 'fallback',
+      };
+    }
+
+    const message = playerMessage.trim();
+    if (!message) {
+      return {
+        utterance: 'Could you say that again?',
+        emotion: 'neutral',
+        intent: 'clarify',
+      };
+    }
+
+    const envelope = await this.conversationHost.submitTurn({ text: message });
+
+    if (envelope) {
+      // Extract diagnostics from the envelope (provider passes them through).
+      const rawDiagnostics = envelope.providerDiagnostics as PluginAgentTurnDiagnostics | undefined;
+      const diagnostics: PluginAgentTurnDiagnostics = {
+        ...(rawDiagnostics ?? {}),
+        validation: mergeValidationBoundary(rawDiagnostics?.validation, {
+          npcOutputValidated: rawDiagnostics?.validation?.npcOutputValidated !== false,
+        }),
+      };
+      if (!diagnostics.beatEvaluator) {
+        diagnostics.beatEvaluator = {
+          status: 'not_applicable',
+        };
+      }
+
+      this.lastAgentTurnDiagnostics = diagnostics;
+      this.emitPluginEvent({
+        type: 'interactionHandled',
+        npcId: session.npcId,
+        source: 'plugin',
+        detail: 'agent-turn',
+      });
+
+      return {
+        utterance: envelope.utterance,
+        emotion: envelope.emotion,
+        intent: envelope.intent,
+        diagnostics,
+      };
+    }
+
+    return {
+      utterance: 'I lost my train of thought. Could you try again?',
+      emotion: 'neutral',
+      intent: 'fallback',
+    };
+  }
+
+  /**
+   * Submit a player response for a Sugarlang scripted turn.
+   * Produces the next turn and fires onSugarlangTurnProduced.
+   */
+  async submitSugarlangTurn(input: import('../conversation/types').PlayerInput): Promise<void> {
+    const session = this.conversationHost.getActiveSession();
+    if (!session || session.providerId !== 'sugarlang-scripted') return;
+
+    const envelope = await this.conversationHost.submitTurn(input);
+    if (envelope) {
+      this.eventHandlers.onSugarlangTurnProduced?.(envelope);
+    }
+  }
+
+  /**
+   * Set the language context for the conversation host.
+   * Used by preview controls to switch language direction and band.
+   */
+  setSugarlangContext(targetLanguage?: string, supportLanguage?: string, bandOverride?: string): void {
+    this.conversationHost.setLanguageContext({
+      targetLanguage,
+      supportLanguage,
+      learnerBandOverride: bandOverride,
+    });
+  }
+
+  closeSugarlangConversation(): void {
+    const session = this.conversationHost.getActiveSession();
+    if (!session || session.providerId !== 'sugarlang-scripted') return;
+    void this.conversationHost.endConversation();
+  }
+
+  private getNpcInteractionMode(npcId: string): NPCInteractionMode {
+    return this.npcInteractionModes.get(npcId) ?? 'scripted';
+  }
+
+  private getNpcInteractionPolicy(npcId: string): AgentInteractionPolicy {
+    const mode = this.getNpcInteractionMode(npcId);
+    if (mode === 'hybrid') return 'scripted-first';
+    if (mode === 'agent') return 'agent-first';
+    return 'fallback';
+  }
+
+  private buildPluginQuestSnapshot(): Array<{
+    questId: string;
+    currentStageId: string;
+    objectives: Array<{
+      objectiveId: string;
+      state: 'active' | 'completed' | 'inactive';
+    }>;
+  }> {
+    return this.quests.getActiveQuests().map((quest) => ({
+      questId: quest.questId,
+      currentStageId: quest.currentStageId,
+      objectives: Array.from(quest.objectiveProgress.values()).map((objective) => ({
+        objectiveId: objective.id,
+        state: objective.completed
+          ? 'completed'
+          : (this.quests.isObjectiveActive(quest.questId, objective.id) ? 'active' : 'inactive'),
+      })),
+    }));
   }
 
   /**
@@ -347,21 +749,40 @@ export class Game {
 
     const { type, id, promptText, dialogueId } = this.nearbyInteractable;
 
-    // For NPCs, available if there's dialogue or a behavior tree to evaluate
+    // For NPCs, available if there's dialogue, a behavior tree, or a conversation provider.
     if (type === 'npc') {
+      const interactionMode = this.getNpcInteractionMode(id);
+      const npcInfo = this.engine.getNPCInfo(id);
       const hasQuestDialogue = this.quests.getQuestDialogueForNpc(id) !== null;
       const hasDefaultDialogue = !!dialogueId;
       const hasBehaviorTree = this.engine.hasNPCBehaviorTree(id);
+      const canUsePlugin = this.pluginManager !== null
+        && (interactionMode === 'agent' || interactionMode === 'hybrid');
+      const hasConversationProvider = this.conversationHost.hasProviderFor(id, {
+        hasQuestDialogue: false,
+        hasBehaviorTree,
+        npcInteractionMode: interactionMode,
+        npcName: npcInfo?.name,
+      });
       return {
         type,
         id,
         promptText,
-        available: hasQuestDialogue || hasDefaultDialogue || hasBehaviorTree,
+        available: hasQuestDialogue || hasDefaultDialogue || hasBehaviorTree || canUsePlugin || hasConversationProvider,
       };
     }
 
     // Other types (inspectables, etc.) are always available
     return { type, id, promptText, available: true };
+  }
+
+  /**
+   * Get the engine-owned dialogue presenter for external conversation flows.
+   * Plugins and game UI can drive this presenter directly (e.g., sugarlang
+   * building synthetic DialogueNodes from ConversationTurnEnvelopes).
+   */
+  getDialoguePresenter(): DialoguePresenter {
+    return this.dialoguePresenter;
   }
 
   /**
@@ -371,8 +792,13 @@ export class Game {
     return (
       this.sceneManager.isBlocking() ||
       this.dialogue.isDialogueActive() ||
-      this.inspection.isInspectionActive()
+      this.inspection.isInspectionActive() ||
+      this.conversationHost.isActive()
     );
+  }
+
+  getGameId(): string | undefined {
+    return this.config.gameId;
   }
 
   /**
@@ -384,11 +810,13 @@ export class Game {
     // ========================================
     this.dialogue.setOnStart(() => {
       this.engine.addMovementLock('dialogue');
+      this.emitPluginEvent({ type: 'dialogueStarted', dialogueId: this.dialogue.getCurrentDialogueId() ?? undefined });
     });
 
     this.dialogue.setOnEnd(() => {
       this.engine.removeMovementLock('dialogue');
       this.engine.consumeInteract();
+      this.emitPluginEvent({ type: 'dialogueEnded' });
 
       // If this was a quest dialogue that completes on dialogue end, complete the objective
       if (this.activeQuestDialogue?.completeOn === 'dialogueEnd') {
@@ -405,6 +833,12 @@ export class Game {
       } else {
         this.activeQuestDialogue = null;
       }
+
+      // End the ConversationHost scripted session when the DialogueManager finishes.
+      const hostSession = this.conversationHost.getActiveSession();
+      if (hostSession?.providerId === 'scripted-dialogue') {
+        void this.conversationHost.endConversation();
+      }
     });
 
     // Dialogue events can trigger quest objectives
@@ -418,6 +852,12 @@ export class Game {
       }
 
       this.eventHandlers.onDialogueEvent?.(eventName);
+      this.emitPluginEvent({ type: 'dialogueEvent', eventName });
+    });
+
+    // Condition checker for conditional dialogue connections (ADR-019)
+    this.dialogue.setConditionChecker((condition) => {
+      return this.worldStateEvaluator.check(condition);
     });
 
     // Resolve speaker IDs to display names
@@ -426,8 +866,14 @@ export class Game {
       if (speakerId === PLAYER.id) {
         return PLAYER.displayName;
       }
+      if (speakerId === PLAYER_VO.id) {
+        return PLAYER_VO.displayName;
+      }
       if (speakerId === NARRATOR.id) {
         return NARRATOR.displayName;
+      }
+      if (speakerId === EXCERPT.id) {
+        return EXCERPT.displayName;
       }
       // Check if it's an NPC
       const npcInfo = this.engine.getNPCInfo(speakerId);
@@ -443,6 +889,38 @@ export class Game {
         );
         this.activeQuestDialogue = null; // Clear so dialogueEnd doesn't double-complete
       }
+    });
+
+    // ========================================
+    // Conversation Host (ADR-SL-002)
+    // ========================================
+    this.conversationHost.setEventHandlers({
+      onSessionStart: (session) => {
+        if (session.providerId === 'sugaragent') {
+          this.eventHandlers.onAgentConversationStart?.({
+            npcId: session.npcId,
+            npcName: session.npcName,
+          });
+        } else if (session.providerId === 'sugarlang-scripted') {
+          this.eventHandlers.onSugarlangSessionStart?.({
+            npcId: session.npcId,
+            npcName: session.npcName,
+          });
+          // Auto-produce the first NPC turn for sugarlang scenes.
+          void this.conversationHost.submitTurn().then((envelope) => {
+            if (envelope) {
+              this.eventHandlers.onSugarlangTurnProduced?.(envelope);
+            }
+          });
+        }
+      },
+      onSessionEnd: (session) => {
+        if (session.providerId === 'sugaragent') {
+          this.eventHandlers.onAgentConversationEnd?.();
+        } else if (session.providerId === 'sugarlang-scripted') {
+          this.eventHandlers.onSugarlangSessionEnd?.();
+        }
+      },
     });
 
     // ========================================
@@ -462,21 +940,48 @@ export class Game {
     // ========================================
     this.quests.setOnQuestStart((event) => {
       this.eventHandlers.onQuestStart?.(event.questName);
+      this.emitPluginEvent({ type: 'questStarted', questId: event.questId, questName: event.questName });
     });
 
     this.quests.setOnQuestComplete((event) => {
       this.eventHandlers.onQuestComplete?.(event.questName);
+      this.emitPluginEvent({ type: 'questCompleted', questId: event.questId, questName: event.questName });
       this.saveManager.autoSave('quest-complete');
+
+      // If no more active quests, return to title screen
+      if (this.quests.getActiveQuests().length === 0) {
+        const goToTitle = async () => {
+          // Fade to black if not already faded (e.g., cutscene already faded)
+          if (!this.fadeOverlay.isBlack()) {
+            await this.fadeOverlay.fadeToBlack(1000);
+          }
+          await this.showTitle();
+          await this.fadeOverlay.fadeFromBlack(500);
+        };
+        // Defer so quest completion callbacks finish first
+        setTimeout(() => goToTitle(), 500);
+      }
     });
 
     this.quests.setOnObjectiveComplete((event) => {
       if (event.objective) {
         this.eventHandlers.onObjectiveComplete?.(event.objective.description);
       }
+      this.emitPluginEvent({
+        type: 'objectiveCompleted',
+        questId: event.questId,
+        objectiveId: event.objectiveId,
+        description: event.objective?.description,
+      });
     });
 
-    this.quests.setOnObjectiveProgress(() => {
+    this.quests.setOnObjectiveProgress((event) => {
       this.eventHandlers.onObjectiveProgress?.();
+      this.emitPluginEvent({
+        type: 'objectiveProgressed',
+        questId: event.questId,
+        objectiveId: event.objectiveId,
+      });
     });
 
     // Handle auto-start objectives (legacy: autoStart on objective nodes)
@@ -542,11 +1047,17 @@ export class Game {
           this.quests.completeObjective(questId, objective.id);
           break;
 
-        case 'cutscene':
-          // Cutscenes not yet implemented - auto-complete for now
-          console.warn(`[Game] Cutscene narrative type not yet implemented, auto-completing node ${objective.id}`);
-          this.quests.completeObjective(questId, objective.id);
+        case 'cutscene': {
+          // Fire event so game code can handle custom visuals
+          if (objective.eventName) {
+            this.eventHandlers.onDialogueEvent?.(objective.eventName);
+          }
+          // Fade to black, then complete the node
+          this.fadeOverlay.fadeToBlack(1000).then(() => {
+            this.quests.completeObjective(questId, objective.id);
+          });
           break;
+        }
       }
     });
 
@@ -572,6 +1083,7 @@ export class Game {
     // ========================================
     this.inventory.setOnItemAdded((event) => {
       this.eventHandlers.onItemAdded?.(event.itemName, event.quantity);
+      this.emitPluginEvent({ type: 'itemAdded', itemId: event.itemId, quantity: event.quantity });
 
       // Trigger collect objectives for this item
       this.quests.triggerObjective('collect', event.itemId);
@@ -583,6 +1095,7 @@ export class Game {
     this.inventory.setOnItemRemoved((event) => {
       // Notify world state (ADR-018) - triggers condition re-evaluation
       this.worldStateNotifier.notify({ namespace: 'inventory', key: event.itemId, newValue: 0 });
+      this.emitPluginEvent({ type: 'itemRemoved', itemId: event.itemId, quantity: event.quantity });
     });
 
     // ========================================
@@ -590,6 +1103,9 @@ export class Game {
     // ========================================
     this.caster.setOnSpellCast((spell, result) => {
       this.eventHandlers.onSpellCast?.(spell, result);
+
+      // Trigger castSpell objective (quest system)
+      this.quests.triggerObjective('castSpell', spell.id);
 
       // Handle spell effects
       for (const effect of result.effects) {
@@ -614,43 +1130,12 @@ export class Game {
       if (this.onNearbyInteractionChangeHandler) {
         this.onNearbyInteractionChangeHandler(this.getNearbyInteraction());
       }
+      this.emitPluginEvent({ type: 'nearbyInteractionChanged', interaction: this.getNearbyInteraction() });
     });
 
     // NPC interaction → quest dialogue → behavior tree → default dialogue
     this.engine.onInteract((npcId, npcDefaultDialogue) => {
-      if (this.isUIBlocking()) return;
-      this.audio.play('interact');
-
-      // 1. Check if any active quest has a specific dialogue for this NPC
-      const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
-
-      if (questDialogue) {
-        // Use quest-specific dialogue
-        console.log(`[Game] Interact ${npcId}: quest dialogue intercepted (quest=${questDialogue.questId}, obj=${questDialogue.objectiveId})`);
-        this.activeQuestDialogue = {
-          questId: questDialogue.questId,
-          objectiveId: questDialogue.objectiveId,
-          completeOn: questDialogue.completeOn
-        };
-        this.dialogue.start(questDialogue.dialogue);
-        return;
-      }
-
-      // 2. Evaluate behavior tree (ADR-017)
-      const btAction = this.engine.evaluateNPCBehavior(npcId);
-      console.log(`[Game] Interact ${npcId}: BT result =`, btAction);
-      if (btAction) {
-        this.executeBTAction(btAction, npcId);
-        return;
-      }
-
-      // 3. Fallback to default dialogue + trigger generic talk objectives
-      console.log(`[Game] Interact ${npcId}: fallback (defaultDialogue=${npcDefaultDialogue || 'none'})`);
-      this.quests.triggerObjective('talk', npcId);
-
-      if (npcDefaultDialogue) {
-        this.dialogue.start(npcDefaultDialogue);
-      }
+      void this.handleNPCInteraction(npcId, npcDefaultDialogue);
     });
 
     // Inspectable interaction → inspection system
@@ -665,6 +1150,7 @@ export class Game {
       // Location objectives complete when player reaches a trigger zone
       // The objective's target should match the trigger ID
       this.quests.triggerObjective('location', triggerId);
+      this.emitPluginEvent({ type: 'triggerEntered', triggerId, triggerType: event.type, target: event.target });
 
       if (event.type === 'quest') {
         this.quests.triggerObjective('trigger', triggerId);
@@ -676,9 +1162,11 @@ export class Game {
 
     // Item pickups → inventory
     this.engine.onItemPickup((pickupId, itemId, quantity) => {
+      const regionPath = this.engine.getCurrentRegion();
       this.inventory.addItem(itemId, quantity);
-      this.saveManager.markPickupCollected(this.engine.getCurrentRegion(), pickupId);
+      this.saveManager.markPickupCollected(regionPath, pickupId);
       this.audio.play('pickup');
+      this.emitPluginEvent({ type: 'itemPickedUp', pickupId, itemId, quantity, regionPath });
     });
 
     // Resonance points → resonance game
@@ -925,7 +1413,7 @@ export class Game {
     this.engine.removeMovementLock('resonance');
     this.engine.consumeInteract();
 
-    // Add resonance if successful
+    // Add resonance if successful (checkSpellAvailability fires automatically)
     if (success && resonanceGained > 0) {
       this.caster.addResonance(resonanceGained);
     }
@@ -989,14 +1477,14 @@ export class Game {
   private async loadAudioAssets(): Promise<void> {
     // Load menu music
     try {
-      await this.audio.load('menu-music', import.meta.env.BASE_URL + 'audio/music/menu.mp3', 'music', { loop: true });
+      await this.audio.load('menu-music', this.resolveRuntimeAssetUrl('audio/music/menu.mp3'), 'music', { loop: true });
     } catch {
       console.warn('[Game] Menu music not found');
     }
 
     // Load SFX
     try {
-      await this.audio.load('footstep', import.meta.env.BASE_URL + 'audio/sfx/footstep.mp3', 'sfx', { loop: true });
+      await this.audio.load('footstep', this.resolveRuntimeAssetUrl('audio/sfx/footstep.mp3'), 'sfx', { loop: true });
       // Wire up footstep handler - loops while walking, stops when stopped
       this.engine.onFootstep(
         () => this.audio.play('footstep'),
@@ -1007,20 +1495,20 @@ export class Game {
     }
 
     try {
-      await this.audio.load('interact', import.meta.env.BASE_URL + 'audio/sfx/interact.mp3', 'sfx');
+      await this.audio.load('interact', this.resolveRuntimeAssetUrl('audio/sfx/interact.mp3'), 'sfx');
     } catch {
       console.warn('[Game] Interact sound not found');
     }
 
     try {
-      await this.audio.load('pickup', import.meta.env.BASE_URL + 'audio/sfx/pickup.mp3', 'sfx');
+      await this.audio.load('pickup', this.resolveRuntimeAssetUrl('audio/sfx/pickup.mp3'), 'sfx');
     } catch {
       console.warn('[Game] Pickup sound not found');
     }
 
     // Load ambient sounds
     try {
-      await this.audio.load('wind', import.meta.env.BASE_URL + 'audio/ambient/wind.mp3', 'ambient', { loop: true });
+      await this.audio.load('wind', this.resolveRuntimeAssetUrl('audio/ambient/wind.mp3'), 'ambient', { loop: true });
       this.ambient.add({
         id: 'wind',
         minInterval: 20,
@@ -1033,7 +1521,7 @@ export class Game {
     }
 
     try {
-      await this.audio.load('owl', import.meta.env.BASE_URL + 'audio/ambient/owl.mp3', 'ambient');
+      await this.audio.load('owl', this.resolveRuntimeAssetUrl('audio/ambient/owl.mp3'), 'ambient');
       this.ambient.add({ id: 'owl', minInterval: 30, maxInterval: 90 });
     } catch {
       console.warn('[Game] Owl sound not found');
@@ -1060,6 +1548,34 @@ export class Game {
     // In production mode, get from episode content
     // TODO: implement production mode quest loading
     return [];
+  }
+
+  private resolveRuntimeAssetUrl(path: string): string {
+    return resolveContentUrl(this.contentBasePath, path);
+  }
+
+  private rebaseItemViewAssets(view: ItemView): ItemView {
+    if (view.type !== 'readable') return view;
+    return {
+      ...view,
+      cover: view.cover ? this.resolveRuntimeAssetUrl(view.cover) : view.cover,
+      image: view.image ? this.resolveRuntimeAssetUrl(view.image) : view.image,
+      pages: view.pages?.map((page) => this.resolveRuntimeAssetUrl(page)),
+    };
+  }
+
+  private rebaseInspectionAssets<T extends InspectionData>(inspection: T): T {
+    const sections = inspection.sections?.map((section) => ({
+      ...section,
+      image: section.image ? this.resolveRuntimeAssetUrl(section.image) : section.image,
+    }));
+    return {
+      ...inspection,
+      headerImage: inspection.headerImage
+        ? this.resolveRuntimeAssetUrl(inspection.headerImage)
+        : inspection.headerImage,
+      sections,
+    };
   }
 
   // TODO: Implement episode main quest auto-start
@@ -1108,27 +1624,41 @@ export class Game {
         break;
 
       case 'teleportNPC':
-        // Instant position change - use moveNPCTo with instant flag
-        // TODO: Add true instant teleport to Engine if needed
-        if (action.target && action.value) {
-          const pos = action.value as { x: number; y: number; z: number };
-          this.engine.moveNPCTo(action.target, pos)
-            .catch((err: unknown) => console.error(`[Game] Failed to teleport NPC:`, err));
-        }
-        break;
+      case 'moveNpc': {
+        const npcId = action.target || action.npcId;
+        if (!npcId) break;
 
-      case 'moveNpc':
-        // Legacy animated movement (backward compat from ADR-015)
-        if (action.npcId && action.position) {
-          this.engine.moveNPCTo(action.npcId, action.position)
-            .catch((err: unknown) => console.error(`[Game] Failed to move NPC:`, err));
-        } else if (action.target && action.value) {
-          // Also support new format: target=npcId, value=position
-          const pos = action.value as { x: number; y: number; z: number };
-          this.engine.moveNPCTo(action.target, pos)
+        let pos: { x: number; y: number; z: number } | null = null;
+        if (action.moveTarget === 'player') {
+          const playerPos = this.engine.getPlayerPosition();
+          if (playerPos) {
+            const offset = action.moveOffset ?? 1.5;
+            const npcPos = this.engine.getNPCPosition(npcId);
+            if (npcPos && offset > 0) {
+              // Offset toward NPC's current position so they stop short of the player
+              const dx = npcPos.x - playerPos.x;
+              const dz = npcPos.z - playerPos.z;
+              const dist = Math.sqrt(dx * dx + dz * dz);
+              if (dist > 0.01) {
+                pos = { x: playerPos.x + (dx / dist) * offset, y: playerPos.y, z: playerPos.z + (dz / dist) * offset };
+              } else {
+                // NPC already at player position — offset on X
+                pos = { x: playerPos.x + offset, y: playerPos.y, z: playerPos.z };
+              }
+            } else {
+              pos = playerPos;
+            }
+          }
+        } else {
+          pos = (action.value as { x: number; y: number; z: number }) || action.position || null;
+        }
+
+        if (pos) {
+          this.engine.moveNPCTo(npcId, pos)
             .catch((err: unknown) => console.error(`[Game] Failed to move NPC:`, err));
         }
         break;
+      }
 
       case 'setNPCState':
         // NPC state changes - will be more useful with ADR-017 behavior trees
@@ -1156,6 +1686,153 @@ export class Game {
         console.warn(`[Game] Custom beat action: ${action.target}`, action.value);
         break;
     }
+  }
+
+  /**
+   * NPC interaction chain — routed through ConversationHost (ADR-SL-002).
+   *
+   * Routing order:
+   *   1. Quest dialogue  (ScriptedDialogueProvider via dialogueId)
+   *   2. Behavior tree    (non-dialogue BT actions stay here; dialogue actions → host)
+   *   3. Agent/hybrid     (SugarAgentProviderAdapter via provider selection)
+   *   4. Default dialogue (ScriptedDialogueProvider via dialogueId)
+   */
+  private async handleNPCInteraction(npcId: string, npcDefaultDialogue?: string): Promise<void> {
+    if (this.isUIBlocking()) return;
+    this.audio.play('interact');
+    this.emitPluginEvent({ type: 'interactionAttempt', npcId, npcDefaultDialogue });
+    const interactionMode = this.getNpcInteractionMode(npcId);
+    const npcInfo = this.engine.getNPCInfo(npcId);
+    const npcName = npcInfo?.name;
+    const hasBehaviorTree = this.engine.hasNPCBehaviorTree(npcId);
+
+    // 1) Quest-specific dialogue takes absolute priority.
+    const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
+    if (questDialogue) {
+      this.activeQuestDialogue = {
+        questId: questDialogue.questId,
+        objectiveId: questDialogue.objectiveId,
+        completeOn: questDialogue.completeOn,
+      };
+      const ctx: ProviderSelectionContext = {
+        hasQuestDialogue: true,
+        hasBehaviorTree,
+        npcInteractionMode: interactionMode,
+        npcName,
+        dialogueId: questDialogue.dialogue,
+      };
+      await this.conversationHost.startConversation(npcId, npcName, ctx);
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'quest' });
+      return;
+    }
+
+    // 2) Scripted behavior tree interaction (existing ADR-017 path).
+    //    "agent" mode bypasses BT to prioritize plugin free-form interaction.
+    if (interactionMode !== 'agent') {
+      const btAction = this.engine.evaluateNPCBehavior(npcId);
+      if (btAction) {
+        // If BT produces a dialogue action, route through the ConversationHost.
+        if (btAction.type === 'dialogue') {
+          const ctx: ProviderSelectionContext = {
+            hasQuestDialogue: false,
+            hasBehaviorTree: true,
+            npcInteractionMode: interactionMode,
+            npcName,
+            dialogueId: btAction.dialogueId,
+          };
+          await this.conversationHost.startConversation(npcId, npcName, ctx);
+          this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
+        } else {
+          // Non-dialogue BT actions (setFlag, moveTo, etc.) are not conversations.
+          this.executeBTAction(btAction, npcId);
+          this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
+        }
+        return;
+      }
+    }
+
+    // 3) Plugin-provided conversation (sugarlang, SugarAgent, etc.).
+    //    Try the host with no dialogueId — any registered provider may handle it.
+    //    SugarlangScriptedProvider picks up NPCs with sugarlang scenarios.
+    //    SugarAgentProviderAdapter picks up agent/hybrid mode NPCs.
+    {
+      const ctx: ProviderSelectionContext = {
+        hasQuestDialogue: false,
+        hasBehaviorTree,
+        npcInteractionMode: interactionMode,
+        npcName,
+      };
+      const session = await this.conversationHost.startConversation(npcId, npcName, ctx);
+      if (session) {
+        this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'plugin' });
+        return;
+      }
+    }
+
+    // 4) Scripted fallback — default dialogue.
+    this.quests.triggerObjective('talk', npcId);
+    if (npcDefaultDialogue) {
+      const ctx: ProviderSelectionContext = {
+        hasQuestDialogue: false,
+        hasBehaviorTree: false,
+        npcInteractionMode: interactionMode,
+        npcName,
+        dialogueId: npcDefaultDialogue,
+      };
+      await this.conversationHost.startConversation(npcId, npcName, ctx);
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'defaultDialogue' });
+    } else {
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'none' });
+    }
+  }
+
+  /**
+   * Canonical action gate for plugins.
+   * Plugins can request actions, but the engine validates and executes them.
+   */
+  private async executePluginIntent(intent: PluginIntent): Promise<PluginIntentResult> {
+    try {
+      switch (intent.type) {
+        case 'startDialogue':
+          this.dialogue.start(intent.dialogueId);
+          return { success: true };
+
+        case 'setFlag':
+          this.flags.set(intent.flag, intent.value);
+          return { success: true };
+
+        case 'emitEvent':
+          this.eventHandlers.onDialogueEvent?.(intent.eventName);
+          return { success: true };
+
+        case 'moveNpc':
+          await this.engine.moveNPCTo(intent.npcId, intent.target);
+          return { success: true };
+
+        case 'triggerObjective':
+          this.quests.triggerObjective(intent.objectiveType, intent.targetId);
+          return { success: true };
+
+        case 'completeObjective':
+          this.quests.completeObjective(intent.questId, intent.objectiveId);
+          return { success: true };
+
+        case 'closeConversation':
+          // Defer to next microtask to avoid ending session mid-submitTurn.
+          void Promise.resolve().then(() => this.conversationHost.endConversation());
+          return { success: true };
+
+        default:
+          return { success: false, error: 'Unknown plugin intent type' };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown plugin intent error';
+      return { success: false, error: message };
+    }
+  }
+
+  private emitPluginEvent(event: PluginEvent): void {
+    this.pluginManager?.emit(event);
   }
 
   /**
@@ -1205,6 +1882,10 @@ export class Game {
    * Dispose all systems
    */
   dispose(): void {
+    void this.conversationHost.dispose();
+    if (this.pluginManager) {
+      void this.pluginManager.dispose();
+    }
     this.ambient.dispose();
     this.audio.dispose();
     this.dialogue.dispose();

@@ -15,9 +15,13 @@ import {
   Select,
   Paper,
   ScrollArea,
+  NumberInput,
+  ActionIcon,
+  Tooltip,
 } from '@mantine/core';
 import { NodeCanvas, CanvasNode, CanvasConnection } from '../../components';
-import { DialogueEntry, DialogueNode, DialogueNext } from './DialoguePanel';
+import { DialogueEntry, DialogueNode, DialogueNext, DialogueQuestRef } from './DialoguePanel';
+import type { WorldStateCondition } from '../../../engine/state';
 
 // Auto-layout constants
 const NODE_SPACING_X = 280;
@@ -25,12 +29,16 @@ const NODE_SPACING_Y = 150;
 
 // Special speaker IDs
 const PLAYER_ID = 'e095b3b2-3351-403a-abe1-88861fa489ad';
+const PLAYER_VO_ID = 'b4e9d2a1-6f3c-4b8e-a7d1-5c9e2f3a4b5c';
 const NARRATOR_ID = '1a44e7dd-fd2c-4862-a489-59692155e406';
+const EXCERPT_ID = 'a3f8c1d2-7e4b-4a9f-b6d5-1c2e3f4a5b6d';
 
 interface DialogueNodeCanvasProps {
   dialogue: DialogueEntry;
   selectedNodeId: string | null;
   npcs: { id: string; name: string }[];
+  items?: { id: string; name: string }[];
+  quests?: DialogueQuestRef[];
   onNodeSelect: (nodeId: string | null) => void;
   onDialogueChange: (dialogue: DialogueEntry) => void;
   onNodeChange: (node: DialogueNode) => void;
@@ -43,6 +51,8 @@ export function DialogueNodeCanvas({
   dialogue,
   selectedNodeId,
   npcs,
+  items = [],
+  quests = [],
   onNodeSelect,
   onDialogueChange,
   onNodeChange,
@@ -71,7 +81,9 @@ export function DialogueNodeCanvas({
   const getSpeakerName = (speakerId: string | undefined): string => {
     if (!speakerId) return '';
     if (speakerId === PLAYER_ID) return 'Player';
+    if (speakerId === PLAYER_VO_ID) return 'Player (VO)';
     if (speakerId === NARRATOR_ID) return 'Narrator';
+    if (speakerId === EXCERPT_ID) return 'Excerpt';
     const npc = npcs.find((n) => n.id === speakerId);
     return npc?.name || speakerId;
   };
@@ -164,7 +176,8 @@ export function DialogueNodeCanvas({
             fromId: node.id,
             toId: nextItem.nodeId,
             fromPort: isChoice ? `choice-${i}` : undefined,
-            color: isChoice ? getChoiceColor(i) : '#45475a',
+            color: nextItem.condition ? '#f9e2af' : isChoice ? getChoiceColor(i) : '#45475a',
+            dashed: !!nextItem.condition,
           });
         }
       }
@@ -291,24 +304,55 @@ export function DialogueNodeCanvas({
 
           if (node.next.length > 1) {
             for (let i = 0; i < node.next.length; i++) {
+              const nextItem = node.next[i]!;
               const choice = document.createElement('div');
+              const choiceColor = nextItem.condition ? '#f9e2af' : getChoiceColor(i);
               choice.style.cssText = `
                 font-size: 11px;
                 padding: 4px 8px;
                 margin: 2px 0;
-                background: ${getChoiceColor(i)}22;
-                color: ${getChoiceColor(i)};
+                background: ${choiceColor}22;
+                color: ${choiceColor};
                 border-radius: 4px;
+                display: flex;
+                align-items: center;
+                gap: 4px;
               `;
-              choice.textContent = node.next[i]!.text || `Choice ${i + 1}`;
+              if (nextItem.condition) {
+                const badge = document.createElement('span');
+                badge.textContent = '?';
+                badge.style.cssText = `
+                  display: inline-block;
+                  width: 14px; height: 14px;
+                  line-height: 14px;
+                  text-align: center;
+                  background: #f9e2af33;
+                  border-radius: 3px;
+                  font-size: 10px;
+                  font-weight: 700;
+                  flex-shrink: 0;
+                `;
+                choice.appendChild(badge);
+              }
+              const textSpan = document.createElement('span');
+              textSpan.textContent = nextItem.text || `Choice ${i + 1}`;
+              choice.appendChild(textSpan);
               footer.appendChild(choice);
             }
           } else {
-            const nextNodeId = node.next[0]!.nodeId;
-            const nextNode = currentDialogue.nodes.find((n) => n.id === nextNodeId);
+            const singleNext = node.next[0]!;
+            const nextNode = currentDialogue.nodes.find((n) => n.id === singleNext.nodeId);
             const nextLabel = document.createElement('div');
-            nextLabel.style.cssText = 'font-size: 10px; color: #6c7086;';
-            nextLabel.textContent = `→ ${nextNode?.name || nextNodeId}`;
+            nextLabel.style.cssText = 'font-size: 10px; color: #6c7086; display: flex; align-items: center; gap: 4px;';
+            if (singleNext.condition) {
+              const badge = document.createElement('span');
+              badge.textContent = '?';
+              badge.style.cssText = 'color: #f9e2af; font-weight: 700;';
+              nextLabel.appendChild(badge);
+            }
+            const text = document.createElement('span');
+            text.textContent = `→ ${nextNode?.name || singleNext.nodeId}`;
+            nextLabel.appendChild(text);
             footer.appendChild(nextLabel);
           }
 
@@ -437,6 +481,8 @@ export function DialogueNodeCanvas({
             <NodeEditorPanel
               node={selectedNode}
               npcs={npcs}
+              items={items}
+              quests={quests}
               dialogueNodes={dialogue.nodes}
               isStartNode={isStartNode}
               onChange={onNodeChange}
@@ -471,6 +517,8 @@ export function DialogueNodeCanvas({
 interface NodeEditorPanelProps {
   node: DialogueNode;
   npcs: { id: string; name: string }[];
+  items: { id: string; name: string }[];
+  quests: DialogueQuestRef[];
   dialogueNodes: DialogueNode[];
   isStartNode: boolean;
   onChange: (node: DialogueNode) => void;
@@ -481,6 +529,8 @@ interface NodeEditorPanelProps {
 function NodeEditorPanel({
   node,
   npcs,
+  items,
+  quests,
   dialogueNodes,
   isStartNode,
   onChange,
@@ -489,7 +539,9 @@ function NodeEditorPanel({
 }: NodeEditorPanelProps) {
   const speakerOptions = [
     { value: PLAYER_ID, label: 'Player' },
+    { value: PLAYER_VO_ID, label: 'Player (VO)' },
     { value: NARRATOR_ID, label: 'Narrator' },
+    { value: EXCERPT_ID, label: 'Excerpt' },
     ...npcs.map((n) => ({ value: n.id, label: n.name })),
   ];
 
@@ -557,11 +609,26 @@ function NodeEditorPanel({
             label="Speaker"
             data={speakerOptions}
             value={node.speaker || null}
-            onChange={(value) => handleChange('speaker', value || undefined)}
+            onChange={(value) => {
+              handleChange('speaker', value || undefined);
+              if (value !== EXCERPT_ID && node.speakerLabel) {
+                handleChange('speakerLabel', undefined);
+              }
+            }}
             placeholder="Select speaker"
             searchable
             clearable
           />
+
+          {node.speaker === EXCERPT_ID && (
+            <TextInput
+              label="Source Title"
+              value={node.speakerLabel || ''}
+              onChange={(e) => handleChange('speakerLabel', e.currentTarget.value || undefined)}
+              placeholder="e.g., Handbook for the Recently Transported"
+              description="Displayed as the speaker name for this excerpt"
+            />
+          )}
 
           <Textarea
             label="Dialogue Text"
@@ -599,15 +666,33 @@ function NodeEditorPanel({
                     <Text size="xs" c="dimmed">
                       {(node.next?.length || 0) > 1 ? `Choice ${i + 1}` : 'Next Node'}
                     </Text>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      onClick={() => handleRemoveNext(i)}
-                      styles={{ root: { padding: '2px 6px' } }}
-                    >
-                      ✕
-                    </Button>
+                    <Group gap={4}>
+                      <Tooltip label={nextItem.condition ? 'Remove condition' : 'Add condition'}>
+                        <ActionIcon
+                          size="xs"
+                          variant={nextItem.condition ? 'filled' : 'subtle'}
+                          color={nextItem.condition ? 'yellow' : 'gray'}
+                          onClick={() => {
+                            if (nextItem.condition) {
+                              handleNextChange(i, { condition: undefined });
+                            } else {
+                              handleNextChange(i, { condition: { type: 'flag', key: '' } });
+                            }
+                          }}
+                        >
+                          ?
+                        </ActionIcon>
+                      </Tooltip>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        color="red"
+                        onClick={() => handleRemoveNext(i)}
+                        styles={{ root: { padding: '2px 6px' } }}
+                      >
+                        ✕
+                      </Button>
+                    </Group>
                   </Group>
 
                   <Select
@@ -625,6 +710,15 @@ function NodeEditorPanel({
                       placeholder="Choice text..."
                       value={nextItem.text || ''}
                       onChange={(e) => handleNextChange(i, { text: e.currentTarget.value || undefined })}
+                    />
+                  )}
+
+                  {nextItem.condition && (
+                    <DialogueConditionEditor
+                      condition={nextItem.condition}
+                      onChange={(condition) => handleNextChange(i, { condition })}
+                      items={items}
+                      quests={quests}
                     />
                   )}
                 </Stack>
@@ -758,6 +852,187 @@ function PlaytestPanel({
             </Button>
           </>
         )}
+      </Stack>
+    </Paper>
+  );
+}
+
+// Condition editor for dialogue connections (ADR-019)
+interface DialogueConditionEditorProps {
+  condition: WorldStateCondition;
+  onChange: (condition: WorldStateCondition) => void;
+  items: { id: string; name: string }[];
+  quests: DialogueQuestRef[];
+}
+
+function DialogueConditionEditor({ condition, onChange, items, quests }: DialogueConditionEditorProps) {
+  const conditionType = condition.type;
+
+  const handleTypeChange = (type: string) => {
+    switch (type) {
+      case 'flag': onChange({ type: 'flag', key: '' }); break;
+      case 'hasItem': onChange({ type: 'hasItem', itemId: '' }); break;
+      case 'questActive': onChange({ type: 'questActive', questId: '' }); break;
+      case 'questCompleted': onChange({ type: 'questCompleted', questId: '' }); break;
+      case 'questStage': onChange({ type: 'questStage', questId: '', stageId: '', state: 'active' }); break;
+      case 'not': onChange({ type: 'not', condition: { type: 'flag', key: '' } }); break;
+    }
+  };
+
+  // For 'not' wrapper, show the inner condition with a negate label
+  if (condition.type === 'not') {
+    return (
+      <Paper p="xs" style={{ background: '#f38ba822', borderLeft: '2px solid #f38ba8' }}>
+        <Stack gap="xs">
+          <Group justify="space-between">
+            <Text size="xs" c="#f38ba8" fw={600}>NOT (negate)</Text>
+            <Button size="xs" variant="subtle" onClick={() => onChange(condition.condition)}>
+              Remove NOT
+            </Button>
+          </Group>
+          <DialogueConditionEditor
+            condition={condition.condition}
+            onChange={(inner) => onChange({ type: 'not', condition: inner })}
+            items={items}
+            quests={quests}
+          />
+        </Stack>
+      </Paper>
+    );
+  }
+
+  return (
+    <Paper p="xs" style={{ background: '#f9e2af11', borderLeft: '2px solid #f9e2af' }}>
+      <Stack gap="xs">
+        <Group justify="space-between">
+          <Text size="xs" c="#f9e2af" fw={600}>Condition</Text>
+          <Tooltip label="Negate this condition">
+            <ActionIcon
+              size="xs"
+              variant="subtle"
+              color="red"
+              onClick={() => onChange({ type: 'not', condition })}
+            >
+              !
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+
+        <Select
+          size="xs"
+          label="Type"
+          data={[
+            { value: 'flag', label: 'Has Flag' },
+            { value: 'hasItem', label: 'Has Item' },
+            { value: 'questActive', label: 'Quest Active' },
+            { value: 'questCompleted', label: 'Quest Completed' },
+            { value: 'questStage', label: 'Quest Stage' },
+          ]}
+          value={conditionType}
+          onChange={(value) => value && handleTypeChange(value)}
+        />
+
+        {condition.type === 'flag' && (
+          <>
+            <TextInput
+              size="xs"
+              label="Flag Key"
+              value={condition.key}
+              onChange={(e) => onChange({ ...condition, key: e.currentTarget.value })}
+              placeholder="flag-name"
+            />
+            <TextInput
+              size="xs"
+              label="Value (optional)"
+              value={String(condition.value ?? '')}
+              onChange={(e) => onChange({ ...condition, value: e.currentTarget.value || undefined })}
+              placeholder="true (default)"
+            />
+          </>
+        )}
+
+        {condition.type === 'hasItem' && (
+          <>
+            <Select
+              size="xs"
+              label="Item"
+              data={items.map(i => ({ value: i.id, label: i.name }))}
+              value={condition.itemId || null}
+              onChange={(value) => onChange({ ...condition, itemId: value || '' })}
+              searchable
+              clearable
+            />
+            <NumberInput
+              size="xs"
+              label="Count (optional)"
+              value={condition.count || 1}
+              onChange={(value) => onChange({ ...condition, count: Number(value) || undefined })}
+              min={1}
+            />
+          </>
+        )}
+
+        {condition.type === 'questActive' && (
+          <Select
+            size="xs"
+            label="Quest"
+            data={quests.map(q => ({ value: q.id, label: q.name }))}
+            value={condition.questId || null}
+            onChange={(value) => onChange({ ...condition, questId: value || '' })}
+            searchable
+            clearable
+          />
+        )}
+
+        {condition.type === 'questCompleted' && (
+          <Select
+            size="xs"
+            label="Quest"
+            data={quests.map(q => ({ value: q.id, label: q.name }))}
+            value={condition.questId || null}
+            onChange={(value) => onChange({ ...condition, questId: value || '' })}
+            searchable
+            clearable
+          />
+        )}
+
+        {condition.type === 'questStage' && (() => {
+          const selectedQuest = quests.find(q => q.id === condition.questId);
+          return (
+            <>
+              <Select
+                size="xs"
+                label="Quest"
+                data={quests.map(q => ({ value: q.id, label: q.name }))}
+                value={condition.questId || null}
+                onChange={(value) => onChange({ ...condition, questId: value || '', stageId: '' })}
+                searchable
+                clearable
+              />
+              {selectedQuest && (
+                <Select
+                  size="xs"
+                  label="Stage"
+                  data={selectedQuest.stages.map(s => ({ value: s.id, label: s.description || s.id }))}
+                  value={condition.stageId || null}
+                  onChange={(value) => onChange({ ...condition, stageId: value || '' })}
+                  searchable
+                  clearable
+                />
+              )}
+              <Select
+                size="xs"
+                label="State"
+                data={[
+                  { value: 'active', label: 'Active' },
+                  { value: 'completed', label: 'Completed' },
+                ]}
+                value={condition.state}
+                onChange={(value) => onChange({ ...condition, state: value as 'active' | 'completed' })}
+              />
+            </>
+          );
+        })()}
       </Stack>
     </Paper>
   );

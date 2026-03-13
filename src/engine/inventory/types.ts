@@ -4,6 +4,34 @@
 export type ItemCategory = 'quest' | 'gift' | 'key' | 'misc';
 
 /**
+ * Readable layout — controls presentation of readable items
+ */
+export type ReadableLayout = 'book' | 'newspaper' | 'letter' | 'postcard' | 'flyer';
+
+/**
+ * Item view type — determines what happens when the player clicks the item in inventory
+ */
+export type ItemView =
+  | {
+      type: 'readable';
+      layout?: ReadableLayout;
+      // Text content
+      content?: string;
+      sections?: { heading?: string; text: string }[];
+      // Book structure
+      title?: string;
+      author?: string;
+      cover?: string;
+      blurb?: string;
+      chapters?: { title: string; content: string }[];
+      // Image content
+      pages?: string[];
+      image?: string;
+    }
+  | { type: 'examine' }
+  | { type: 'consumable'; action: string };
+
+/**
  * Item definition (loaded from items.json)
  */
 export interface ItemDefinition {
@@ -15,6 +43,10 @@ export interface ItemDefinition {
   stackable: boolean;
   maxStack?: number;       // Max stack size (default 99 if stackable)
   giftable: boolean;       // Can be given to NPCs
+  model?: string;          // Optional 3D model path (FBX/GLB)
+  modelScale?: number;     // Scale multiplier for the model (default 1)
+  modelColor?: number;     // Optional solid color override (hex, e.g. 0x8899aa)
+  view?: ItemView;         // Click interaction in inventory (readable, examine, consumable)
 }
 
 /**

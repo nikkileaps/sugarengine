@@ -12,6 +12,7 @@ export type { GameConfig, GameEventHandlers, TitleScreenConfig } from './core/Ga
 export { GameCamera } from './core/GameCamera';
 export type { GameCameraConfig } from './core/GameCamera';
 export { InputManager } from './core/InputManager';
+export type { InputContext } from './core/InputManager';
 export { PostProcessing } from './core/PostProcessing';
 
 // ECS
@@ -30,6 +31,7 @@ export {
   NPC,
   ItemPickup,
   Inspectable,
+  Animator,
 } from './components';
 export { NPCMovement } from './components/NPCMovement';
 export type { MovementBehavior, Waypoint } from './components/NPCMovement';
@@ -41,6 +43,7 @@ export {
   TriggerSystem,
   InteractionSystem,
   NPCMovementSystem,
+  AnimationSystem,
 } from './systems';
 export type {
   TriggerHandler,
@@ -51,6 +54,10 @@ export type {
 
 // Loaders
 export { ModelLoader } from './loaders/ModelLoader';
+export { CharacterLoader } from './loaders/CharacterLoader';
+export type { CharacterModel } from './loaders/CharacterLoader';
+export { PropLoader } from './loaders/PropLoader';
+export type { PropModel } from './loaders/PropLoader';
 export { RegionLoader } from './loaders/RegionLoader';
 export type { RegionData, LoadedRegion, RegionStreamingConfig, GridPosition, Vec3 } from './loaders/RegionLoader';
 
@@ -101,6 +108,7 @@ export { Screen } from './scenes/Screen';
 export { TitleScreen } from './scenes/TitleScreen';
 export { PauseScreen } from './scenes/PauseScreen';
 export { SaveLoadScreen } from './scenes/SaveLoadScreen';
+export { LoadingScreen } from './scenes/LoadingScreen';
 
 // Audio
 export { AudioManager } from './audio';
@@ -116,13 +124,21 @@ export {
   InventoryUI,
   ItemNotification,
   InspectionUI,
+  ItemViewUI,
   GiftUI,
   DebugHUD,
   SpellMenuUI,
   CasterHUD,
   ResonanceGameUI,
   FadeOverlay,
+  ControlsHint,
+  AgentConversationUI,
+  ResponseModeUI,
+  SupportStrip,
+  SugarlangConversationUI,
+  SugarlangPreviewControls,
 } from './ui';
+export type { SugarlangTurnView, SugarlangPreviewConfig } from './ui';
 
 // Resonance System
 export { ResonancePointLoader } from './resonance';
@@ -162,6 +178,54 @@ export type { BTConditionChecker, BTActionHandler } from './systems/BehaviorTree
 // World State (ADR-018)
 export { WorldStateEvaluator, WorldStateNotifier, FlagsManager } from './state';
 export type { WorldStateCondition, StateChange, StateChangeListener, StateNamespace } from './state';
+
+// Conversation (ADR-SL-002)
+export {
+  ConversationHost,
+  ScriptedDialogueProvider,
+  SugarAgentProviderAdapter,
+} from './conversation';
+export type {
+  ConversationHostContext,
+  ConversationHostEventHandlers,
+  LanguageContext,
+  SugarAgentAdapterContext,
+  ConversationSession,
+  ResponseContract,
+  ResponseContractMode,
+  GroundingReference,
+  GroundingMetadata,
+  ProviderConstraintBundle,
+  ConversationTurnEnvelope,
+  ConversationProvider,
+  ConversationProviderDescriptor,
+  ProviderSelectionContext,
+  PlayerInput,
+  ProviderTurnOutput,
+  ConversationMiddleware,
+  ConversationMiddlewareDescriptor,
+  ConversationMiddlewareStage,
+  ConversationCapability,
+} from './conversation';
+
+// Plugins (ADR-024)
+export { PluginManager, PluginSystem, PLUGIN_API_VERSION } from './plugins';
+export type {
+  EnginePlugin,
+  PluginDescriptor,
+  PluginContext,
+  PluginEvent,
+  PluginHostContext,
+  PluginIntent,
+  PluginIntentResult,
+  PluginAgentBeatContract,
+  PluginAgentBeatEvidence,
+  PluginAgentTurnRequest,
+  PluginAgentTurnResult,
+  PluginInteractionResolution,
+  InteractionRequest,
+  PluginInteractionSource,
+} from './plugins';
 
 // Debug
 export { FreeCameraController } from './debug';

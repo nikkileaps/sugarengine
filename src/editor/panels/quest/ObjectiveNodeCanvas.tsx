@@ -22,9 +22,12 @@ import {
   Menu,
 } from '@mantine/core';
 import { NodeCanvas, CanvasNode, CanvasConnection } from '../../components';
+import { useEditorStore } from '../../store';
+import { resolveTalkDeliveryOptions } from '../../utils/talkDeliveryOptions';
 import {
   QuestStage,
   QuestObjective,
+  QuestObjectiveAgentContract,
   BeatAction,
   BeatNodeType,
   NarrativeSubtype,
@@ -43,6 +46,7 @@ const OBJECTIVE_ICONS: Record<string, string> = {
   location: '📍',
   collect: '📦',
   trigger: '⚡',
+  castSpell: '🔮',
   custom: '⭐',
 };
 
@@ -53,6 +57,7 @@ const OBJECTIVE_COLORS: Record<string, string> = {
   location: '#a6e3a1',
   collect: '#f9e2af',
   trigger: '#fab387',
+  castSpell: '#94e2d5',
   custom: '#f5c2e7',
 };
 
@@ -61,7 +66,11 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   objective: '#89b4fa',
   narrative: '#cba6f7',
   condition: '#f9e2af',
+  branch: '#fab387',
 };
+
+// Fail connection color
+const FAIL_EDGE_COLOR = '#f38ba8';
 
 // Beat action types for onEnter/onComplete
 const ACTION_TYPES = [
@@ -77,22 +86,97 @@ const ACTION_TYPES = [
   { value: 'custom', label: 'Custom' },
 ];
 
+function parseContractList(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .filter((entry) => entry.trim().length > 0);
+}
+
+function defaultContractId(questId: string, stageId: string, objectiveId: string): string {
+  return `beat.${questId}.${stageId}.${objectiveId}`;
+}
+
+function createDefaultAgentContract(questId: string, stageId: string, objectiveId: string): QuestObjectiveAgentContract {
+  return {
+    enabled: true,
+    id: defaultContractId(questId, stageId, objectiveId),
+    requiredFacts: [],
+    forbiddenFacts: [],
+    completionRule: 'player_ack',
+    maxTurns: 3,
+  };
+}
+
+/** Build canvas nodes, adding pass/fail output ports where needed */
+function buildCanvasNodes(
+  objectives: QuestObjective[],
+  positions: Map<string, { x: number; y: number }>,
+): CanvasNode[] {
+  return objectives.map((obj) => {
+    const nodeType = obj.nodeType || 'objective';
+    const node: CanvasNode = {
+      id: obj.id,
+      position: positions.get(obj.id) || { x: 50, y: 50 },
+    };
+    // Only branch nodes get pass/fail ports (routing is the whole point)
+    // Gate/condition nodes have a single output — they just wait until true
+    if (nodeType === 'branch') {
+      node.outputs = [
+        { name: 'pass', color: '#a6e3a1', hoverColor: '#a6e3a1', yPercent: 0.35 },
+        { name: 'fail', color: '#f38ba8', hoverColor: '#f38ba8', yPercent: 0.65 },
+      ];
+    }
+    return node;
+  });
+}
+
+/** Build connections including both prerequisite (pass) and fail target connections */
+function buildAllConnections(objectives: QuestObjective[]): CanvasConnection[] {
+  const graph = ObjectiveGraph.fromObjectives(objectives);
+  const connections: CanvasConnection[] = graph.edges.map(edge => ({
+    fromId: edge.fromId,
+    toId: edge.toId,
+    color: EDGE_COLOR,
+  }));
+
+  // Add fail target connections
+  for (const obj of objectives) {
+    if (obj.failTargets) {
+      for (const targetId of obj.failTargets) {
+        connections.push({
+          fromId: obj.id,
+          toId: targetId,
+          fromPort: 'fail',
+          color: FAIL_EDGE_COLOR,
+          dashed: true,
+        });
+      }
+    }
+  }
+
+  return connections;
+}
+
 interface ObjectiveNodeCanvasProps {
+  questId: string;
   stage: QuestStage;
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
   triggers: { id: string; name: string }[];
+  spells: { id: string; name: string }[];
   onStageChange: (stage: QuestStage) => void;
   onClose: () => void;
 }
 
 export function ObjectiveNodeCanvas({
+  questId,
   stage,
   npcs,
   items,
   dialogues,
   triggers,
+  spells,
   onStageChange,
   onClose,
 }: ObjectiveNodeCanvasProps) {
@@ -161,27 +245,8 @@ export function ObjectiveNodeCanvas({
     if (!canvasRef.current) return;
 
     const currentStage = stageRef.current;
-    const positions = nodePositions;
-
-    // Create canvas nodes
-    const canvasNodes: CanvasNode[] = currentStage.objectives.map((obj) => ({
-      id: obj.id,
-      position: positions.get(obj.id) || { x: 50, y: 50 },
-    }));
-
-    // Create connections (prerequisites -> objective)
-    const connections: CanvasConnection[] = [];
-    for (const obj of currentStage.objectives) {
-      if (obj.prerequisites) {
-        for (const prereqId of obj.prerequisites) {
-          connections.push({
-            fromId: prereqId,
-            toId: obj.id,
-            color: '#45475a',
-          });
-        }
-      }
-    }
+    const canvasNodes = buildCanvasNodes(currentStage.objectives, nodePositions);
+    const connections = buildAllConnections(currentStage.objectives);
 
     canvasRef.current.setNodes(canvasNodes);
     canvasRef.current.setConnections(connections);
@@ -219,19 +284,33 @@ export function ObjectiveNodeCanvas({
         });
       },
       onCanvasClick: () => setSelectedObjectiveId(null),
-      onConnect: (fromId, toId) => {
-        // Adding a connection means: toId now has fromId as a prerequisite
+      onConnect: (fromId, toId, fromPort) => {
         const currentStage = stageRef.current;
-        const updatedObjectives = currentStage.objectives.map((obj) => {
-          if (obj.id === toId) {
-            const prereqs = obj.prerequisites || [];
-            if (!prereqs.includes(fromId)) {
-              return { ...obj, prerequisites: [...prereqs, fromId] };
+        if (fromPort === 'fail') {
+          // Fail port connection: add toId to fromNode's failTargets
+          const updatedObjectives = currentStage.objectives.map((obj) => {
+            if (obj.id === fromId) {
+              const failTargets = obj.failTargets || [];
+              if (!failTargets.includes(toId)) {
+                return { ...obj, failTargets: [...failTargets, toId] };
+              }
             }
-          }
-          return obj;
-        });
-        onStageChange({ ...currentStage, objectives: updatedObjectives });
+            return obj;
+          });
+          onStageChange({ ...currentStage, objectives: updatedObjectives });
+        } else {
+          // Pass port (default): add fromId as prerequisite of toId
+          const updatedObjectives = currentStage.objectives.map((obj) => {
+            if (obj.id === toId) {
+              const prereqs = obj.prerequisites || [];
+              if (!prereqs.includes(fromId)) {
+                return { ...obj, prerequisites: [...prereqs, fromId] };
+              }
+            }
+            return obj;
+          });
+          onStageChange({ ...currentStage, objectives: updatedObjectives });
+        }
       },
       renderNode: (canvasNode, element) => {
         const currentStage = stageRef.current;
@@ -271,6 +350,7 @@ export function ObjectiveNodeCanvas({
         const headerBg = isEntry ? '#a6e3a122'
           : nodeType === 'narrative' ? '#cba6f722'
           : nodeType === 'condition' ? '#f9e2af22'
+          : nodeType === 'branch' ? '#fab38722'
           : '#313244';
         header.style.cssText = `
           padding: 8px 12px;
@@ -299,6 +379,11 @@ export function ObjectiveNodeCanvas({
           badge.textContent = '?';
           badge.style.cssText = `font-size: 13px; font-weight: 700; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: #f9e2af33; color: #f9e2af; border-radius: 4px;`;
           header.appendChild(badge);
+        } else if (nodeType === 'branch') {
+          const badge = document.createElement('span');
+          badge.textContent = '⑂';
+          badge.style.cssText = `font-size: 13px; font-weight: 700; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: #fab38733; color: #fab387; border-radius: 4px;`;
+          header.appendChild(badge);
         } else {
           const typeIcon = document.createElement('span');
           typeIcon.textContent = OBJECTIVE_ICONS[obj.type] || '⭐';
@@ -311,7 +396,7 @@ export function ObjectiveNodeCanvas({
           ? obj.type
           : nodeType === 'narrative'
             ? (obj.narrativeType || 'narrative')
-            : (obj.condition?.operator || 'condition');
+            : (obj.condition?.operator || (nodeType === 'branch' ? 'branch' : 'condition'));
         const typeLabel = document.createElement('span');
         typeLabel.textContent = labelText;
         typeLabel.style.cssText = `
@@ -340,14 +425,19 @@ export function ObjectiveNodeCanvas({
           targetDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
 
           let targetName = obj.target;
+          let targetLabel = 'Target';
           if (obj.type === 'talk' || obj.type === 'voiceover') {
             const npc = npcs.find(n => n.id === obj.target);
             targetName = npc?.name || obj.target;
+          } else if (obj.type === 'castSpell') {
+            const spell = spells.find(s => s.id === obj.target);
+            targetName = spell?.name || obj.target;
+            targetLabel = 'Spell';
           }
 
-          targetDiv.textContent = `Target: ${targetName}`;
+          targetDiv.textContent = `${targetLabel}: ${targetName}`;
           element.appendChild(targetDiv);
-        } else if (nodeType === 'condition' && obj.condition) {
+        } else if ((nodeType === 'condition' || nodeType === 'branch') && obj.condition) {
           const operandDiv = document.createElement('div');
           operandDiv.style.cssText = 'padding: 0 12px 8px; font-size: 11px; color: #6c7086;';
           const negatePrefix = obj.condition.negate ? 'NOT ' : '';
@@ -420,18 +510,8 @@ export function ObjectiveNodeCanvas({
     canvasRef.current = canvas;
 
     // Set initial nodes directly (don't use updateCanvas which relies on state)
-    const canvasNodes: CanvasNode[] = currentStage.objectives.map((obj) => ({
-      id: obj.id,
-      position: positions.get(obj.id) || { x: 50, y: 50 },
-    }));
-
-    // Build connections from ObjectiveGraph
-    const graph = ObjectiveGraph.fromObjectives(currentStage.objectives);
-    const connections: CanvasConnection[] = graph.edges.map(edge => ({
-      fromId: edge.fromId,
-      toId: edge.toId,
-      color: EDGE_COLOR,
-    }));
+    const canvasNodes = buildCanvasNodes(currentStage.objectives, positions);
+    const connections = buildAllConnections(currentStage.objectives);
 
     canvas.setNodes(canvasNodes);
     canvas.setConnections(connections);
@@ -443,20 +523,8 @@ export function ObjectiveNodeCanvas({
     if (!canvasRef.current) return;
 
     const currentStage = stageRef.current;
-
-    // Create canvas nodes using current positions
-    const canvasNodes: CanvasNode[] = currentStage.objectives.map((obj) => ({
-      id: obj.id,
-      position: nodePositions.get(obj.id) || { x: 50, y: 50 },
-    }));
-
-    // Build connections from ObjectiveGraph
-    const graph = ObjectiveGraph.fromObjectives(currentStage.objectives);
-    const connections: CanvasConnection[] = graph.edges.map(edge => ({
-      fromId: edge.fromId,
-      toId: edge.toId,
-      color: EDGE_COLOR,
-    }));
+    const canvasNodes = buildCanvasNodes(currentStage.objectives, nodePositions);
+    const connections = buildAllConnections(currentStage.objectives);
 
     canvasRef.current.setNodes(canvasNodes);
     canvasRef.current.setConnections(connections);
@@ -475,20 +543,28 @@ export function ObjectiveNodeCanvas({
 
   const handleAddNode = (nodeType: string, subtype: string) => {
     const id = `obj-${Date.now()}`;
+    const isContractNode = nodeType === 'objective' && subtype === 'contract';
     const newObj: QuestObjective = {
       id,
-      type: nodeType === 'objective' ? subtype as QuestObjective['type'] : 'custom',
+      type: nodeType === 'objective'
+        ? (isContractNode ? 'talk' : subtype as QuestObjective['type'])
+        : 'custom',
       target: '',
-      description: nodeType === 'objective' ? 'New objective'
+      description: nodeType === 'objective'
+        ? (isContractNode ? 'Contract-guided talk' : 'New objective')
         : subtype === 'voiceover' ? 'Voiceover'
         : nodeType === 'narrative' ? 'Narrative beat'
+        : nodeType === 'branch' ? 'Branch route'
         : 'Condition gate',
       nodeType: nodeType as BeatNodeType,
+      ...(isContractNode ? {
+        agentBeatContract: createDefaultAgentContract(questId, stage.id, id),
+      } : {}),
       ...(nodeType === 'narrative' ? {
         narrativeType: (subtype === 'voiceover' ? 'dialogue' : subtype) as NarrativeSubtype,
         autoStart: true,
       } : {}),
-      ...(nodeType === 'condition' ? {
+      ...((nodeType === 'condition' || nodeType === 'branch') ? {
         condition: { operator: subtype as ConditionOperator, operand: '' },
       } : {}),
     };
@@ -526,12 +602,13 @@ export function ObjectiveNodeCanvas({
   };
 
   const handleDeleteObjective = (id: string) => {
-    // Remove objective and any references to it in prerequisites
+    // Remove objective and any references to it in prerequisites or failTargets
     const updatedObjectives = stage.objectives
       .filter((o) => o.id !== id)
       .map((o) => ({
         ...o,
         prerequisites: o.prerequisites?.filter((p) => p !== id),
+        failTargets: o.failTargets?.filter((t) => t !== id),
       }));
 
     // Remove position
@@ -550,6 +627,19 @@ export function ObjectiveNodeCanvas({
     });
 
     setSelectedObjectiveId(null);
+  };
+
+  const handleRemoveFailTarget = (objectiveId: string, failTargetId: string) => {
+    const updatedObjectives = stage.objectives.map((o) => {
+      if (o.id === objectiveId) {
+        return {
+          ...o,
+          failTargets: o.failTargets?.filter((t) => t !== failTargetId),
+        };
+      }
+      return o;
+    });
+    onStageChange({ ...stage, objectives: updatedObjectives });
   };
 
   const handleRemovePrerequisite = (objectiveId: string, prereqId: string) => {
@@ -592,20 +682,30 @@ export function ObjectiveNodeCanvas({
             </Menu.Target>
             <Menu.Dropdown>
               <Menu.Label>Objective</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('objective', 'contract')}>🤖 Contract Talk Node</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'talk')}>💬 Talk to NPC</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'location')}>📍 Go to Location</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'trigger')}>⚡ Trigger</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('objective', 'castSpell')}>🔮 Cast Spell</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('objective', 'custom')}>⭐ Custom</Menu.Item>
               <Menu.Divider />
               <Menu.Label>Narrative</Menu.Label>
               <Menu.Item onClick={() => handleAddNode('narrative', 'voiceover')}>🎤 Voiceover</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('narrative', 'cutscene')}>🎬 Cutscene</Menu.Item>
               <Menu.Divider />
-              <Menu.Label>Condition</Menu.Label>
+              <Menu.Label>Condition (gate)</Menu.Label>
               <Menu.Item onClick={() => handleAddNode('condition', 'hasItem')}>📦 Has Item</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('condition', 'hasFlag')}>🚩 Has Flag</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('condition', 'questComplete')}>✓ Quest Complete</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('condition', 'canCastSpell')}>✨ Can Cast Spell</Menu.Item>
               <Menu.Item onClick={() => handleAddNode('condition', 'custom')}>⭐ Custom</Menu.Item>
+              <Menu.Divider />
+              <Menu.Label>Branch (route)</Menu.Label>
+              <Menu.Item onClick={() => handleAddNode('branch', 'hasItem')}>📦 Has Item</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'hasFlag')}>🚩 Has Flag</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'questComplete')}>✓ Quest Complete</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'canCastSpell')}>✨ Can Cast Spell</Menu.Item>
+              <Menu.Item onClick={() => handleAddNode('branch', 'custom')}>⭐ Custom</Menu.Item>
             </Menu.Dropdown>
           </Menu>
           <Button
@@ -636,15 +736,19 @@ export function ObjectiveNodeCanvas({
         {selectedObjective && (
           <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 340, zIndex: 10 }}>
             <ObjectiveEditorPanel
+              questId={questId}
+              stageId={stage.id}
               objective={selectedObjective}
               allObjectives={stage.objectives}
               npcs={npcs}
               items={items}
               dialogues={dialogues}
               triggers={triggers}
+              spells={spells}
               onChange={handleObjectiveChange}
               onDelete={() => handleDeleteObjective(selectedObjective.id)}
               onRemovePrerequisite={(prereqId) => handleRemovePrerequisite(selectedObjective.id, prereqId)}
+              onRemoveFailTarget={(targetId) => handleRemoveFailTarget(selectedObjective.id, targetId)}
               onClose={() => setSelectedObjectiveId(null)}
             />
           </div>
@@ -655,15 +759,19 @@ export function ObjectiveNodeCanvas({
 }
 
 interface ObjectiveEditorPanelProps {
+  questId: string;
+  stageId: string;
   objective: QuestObjective;
   allObjectives: QuestObjective[];
   npcs: { id: string; name: string }[];
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
   triggers: { id: string; name: string }[];
+  spells: { id: string; name: string }[];
   onChange: (objective: QuestObjective) => void;
   onDelete: () => void;
   onRemovePrerequisite: (prereqId: string) => void;
+  onRemoveFailTarget: (targetId: string) => void;
   onClose: () => void;
 }
 
@@ -730,25 +838,50 @@ function BeatActionFields({
       );
     case 'moveNpc':
     case 'teleportNPC': {
+      const moveTarget = action.moveTarget || 'position';
       const pos = (action.value as { x: number; y: number; z: number }) || action.position || { x: 0, y: 0, z: 0 };
       return (
         <>
           <Select size="xs" label="NPC"
             data={npcs.map((n) => ({ value: n.id, label: n.name }))}
             value={action.target || action.npcId || null}
-            onChange={(value) => updateAction({ ...action, target: value || '', npcId: value || '' })}
+            onChange={(value) => {
+              const defaultPos = { x: 0, y: 0, z: 0 };
+              updateAction({
+                ...action,
+                target: value || '', npcId: value || '',
+                value: action.value || defaultPos,
+                position: action.position || defaultPos,
+              });
+            }}
             searchable styles={{ input: inputStyle, label: labelStyle }} />
-          <Group gap="xs">
-            <NumberInput size="xs" label="X" value={pos.x}
-              onChange={(v) => updateAction({ ...action, value: { ...pos, x: Number(v) || 0 }, position: { ...pos, x: Number(v) || 0 } })}
-              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
-            <NumberInput size="xs" label="Y" value={pos.y}
-              onChange={(v) => updateAction({ ...action, value: { ...pos, y: Number(v) || 0 }, position: { ...pos, y: Number(v) || 0 } })}
-              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
-            <NumberInput size="xs" label="Z" value={pos.z}
-              onChange={(v) => updateAction({ ...action, value: { ...pos, z: Number(v) || 0 }, position: { ...pos, z: Number(v) || 0 } })}
-              styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
-          </Group>
+          <Select size="xs" label="Destination"
+            data={[
+              { value: 'player', label: 'Player Location' },
+              { value: 'position', label: 'Fixed Position' },
+            ]}
+            value={moveTarget}
+            onChange={(value) => updateAction({ ...action, moveTarget: (value as 'position' | 'player') || 'position' })}
+            styles={{ input: inputStyle, label: labelStyle }} />
+          {moveTarget === 'player' && (
+            <NumberInput size="xs" label="Stop Distance" value={action.moveOffset ?? 1.5}
+              onChange={(v) => updateAction({ ...action, moveOffset: Number(v) || 1.5 })}
+              step={0.5} min={0} decimalScale={1}
+              styles={{ input: { ...inputStyle, width: 80 }, label: labelStyle }} />
+          )}
+          {moveTarget === 'position' && (
+            <Group gap="xs">
+              <NumberInput size="xs" label="X" value={pos.x}
+                onChange={(v) => updateAction({ ...action, value: { ...pos, x: Number(v) || 0 }, position: { ...pos, x: Number(v) || 0 } })}
+                styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+              <NumberInput size="xs" label="Y" value={pos.y}
+                onChange={(v) => updateAction({ ...action, value: { ...pos, y: Number(v) || 0 }, position: { ...pos, y: Number(v) || 0 } })}
+                styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+              <NumberInput size="xs" label="Z" value={pos.z}
+                onChange={(v) => updateAction({ ...action, value: { ...pos, z: Number(v) || 0 }, position: { ...pos, z: Number(v) || 0 } })}
+                styles={{ input: { ...inputStyle, width: 60 }, label: labelStyle }} />
+            </Group>
+          )}
         </>
       );
     }
@@ -823,6 +956,10 @@ function ActionListEditor({
           onChange={(value) => {
             if (!value) return;
             const newAction: BeatAction = { type: value as ActionType };
+            if (value === 'moveNpc' || value === 'teleportNPC') {
+              newAction.value = { x: 0, y: 0, z: 0 };
+              newAction.position = { x: 0, y: 0, z: 0 };
+            }
             onChange({ ...objective, [field]: [...actions, newAction] });
           }}
           styles={{
@@ -842,7 +979,12 @@ function ActionListEditor({
                 onChange={(value) => {
                   if (!value) return;
                   const updated = [...actions];
-                  updated[index] = { type: value as ActionType };
+                  const newAction: BeatAction = { type: value as ActionType };
+                  if (value === 'moveNpc' || value === 'teleportNPC') {
+                    newAction.value = { x: 0, y: 0, z: 0 };
+                    newAction.position = { x: 0, y: 0, z: 0 };
+                  }
+                  updated[index] = newAction;
                   onChange({ ...objective, [field]: updated });
                 }}
                 styles={{
@@ -885,20 +1027,37 @@ function ActionListEditor({
 }
 
 function ObjectiveEditorPanel({
+  questId,
+  stageId,
   objective,
   allObjectives,
   npcs,
   items,
   dialogues,
   triggers,
+  spells,
   onChange,
   onDelete,
   onRemovePrerequisite,
+  onRemoveFailTarget,
   onClose,
 }: ObjectiveEditorPanelProps) {
+  const plugins = useEditorStore((state) => state.plugins);
+  const talkDeliveryOptions = resolveTalkDeliveryOptions(plugins);
+  const talkDeliveryOptionsData = talkDeliveryOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+  }));
+  const talkDeliveryOptionIds = new Set(talkDeliveryOptions.map((option) => option.id));
   const isEntry = !objective.prerequisites || objective.prerequisites.length === 0;
   const nodeType = objective.nodeType || 'objective';
   const nodeTypeColor = NODE_TYPE_COLORS[nodeType] || '#89b4fa';
+
+  // Fail targets (condition and branch nodes)
+  const failTargets = objective.failTargets || [];
+  const failTargetObjectives = failTargets
+    .map((id) => allObjectives.find((o) => o.id === id))
+    .filter((o): o is QuestObjective => o !== undefined);
 
   const handleChange = <K extends keyof QuestObjective>(field: K, value: QuestObjective[K]) => {
     onChange({ ...objective, [field]: value });
@@ -909,6 +1068,7 @@ function ObjectiveEditorPanel({
     { value: 'voiceover', label: '🎤 Voiceover' },
     { value: 'location', label: '📍 Location' },
     { value: 'trigger', label: '⚡ Trigger' },
+    { value: 'castSpell', label: '🔮 Cast Spell' },
     { value: 'custom', label: '⭐ Custom' },
   ];
 
@@ -916,9 +1076,88 @@ function ObjectiveEditorPanel({
     ? npcs.map((n) => ({ value: n.id, label: n.name }))
     : objective.type === 'location' || objective.type === 'trigger'
     ? triggers.map((t) => ({ value: t.id, label: t.name }))
+    : objective.type === 'castSpell'
+    ? spells.map((s) => ({ value: s.id, label: s.name }))
     : [];
 
   const dialogueOptions = dialogues.map((d) => ({ value: d.id, label: d.name }));
+  const contractDefaultId = defaultContractId(questId, stageId, objective.id);
+
+  const resolveContractDraft = (): QuestObjectiveAgentContract => {
+    const existing = objective.agentBeatContract ?? {};
+    return {
+      ...createDefaultAgentContract(questId, stageId, objective.id),
+      ...existing,
+      id: typeof existing.id === 'string' && existing.id.trim().length > 0
+        ? existing.id.trim()
+        : contractDefaultId,
+      requiredFacts: Array.isArray(existing.requiredFacts) ? existing.requiredFacts : [],
+      forbiddenFacts: Array.isArray(existing.forbiddenFacts) ? existing.forbiddenFacts : [],
+      completionRule: existing.completionRule ?? 'player_ack',
+      maxTurns: typeof existing.maxTurns === 'number' && Number.isFinite(existing.maxTurns)
+        ? Math.max(1, Math.floor(existing.maxTurns))
+        : 3,
+    };
+  };
+
+  const updateContract = (updates: Partial<QuestObjectiveAgentContract>) => {
+    const merged = {
+      ...resolveContractDraft(),
+      ...updates,
+    };
+    if (typeof merged.id === 'string' && merged.id.trim().length === 0) {
+      merged.id = contractDefaultId;
+    }
+    if (typeof merged.maxTurns === 'number' && (!Number.isFinite(merged.maxTurns) || merged.maxTurns < 1)) {
+      merged.maxTurns = 1;
+    }
+    onChange({
+      ...objective,
+      agentBeatContract: merged,
+    });
+  };
+  const contractDraft = resolveContractDraft();
+  const contractEnabled = contractDraft.enabled === true;
+  const isTalkObjective = objective.type === 'talk';
+  const configuredAgentModeId = typeof contractDraft.deliveryModeId === 'string'
+    && contractDraft.deliveryModeId.trim().length > 0
+    ? contractDraft.deliveryModeId.trim()
+    : 'agent';
+  const activeAgentModeId = talkDeliveryOptionIds.has(configuredAgentModeId)
+    ? configuredAgentModeId
+    : (
+      talkDeliveryOptions.find((option) => option.id === 'agent')?.id
+      ?? talkDeliveryOptions.find((option) => option.id !== 'scripted')?.id
+      ?? 'agent'
+    );
+  const talkDeliveryMode = isTalkObjective && contractEnabled && talkDeliveryOptionIds.has(activeAgentModeId)
+    ? activeAgentModeId
+    : 'scripted';
+  const setTalkDeliveryMode = (mode: string) => {
+    if (!isTalkObjective) return;
+    if (mode !== 'scripted') {
+      const nextDraft = resolveContractDraft();
+      nextDraft.enabled = true;
+      nextDraft.deliveryModeId = mode;
+      if (!nextDraft.npcId || nextDraft.npcId.trim().length === 0) {
+        nextDraft.npcId = objective.target || '';
+      }
+      onChange({
+        ...objective,
+        dialogue: undefined,
+        completeOn: undefined,
+        agentBeatContract: nextDraft,
+      });
+      return;
+    }
+    const nextDraft = resolveContractDraft();
+    nextDraft.enabled = false;
+    nextDraft.deliveryModeId = 'scripted';
+    onChange({
+      ...objective,
+      agentBeatContract: nextDraft,
+    });
+  };
 
   // Get prerequisite objective names
   const prerequisites = objective.prerequisites || [];
@@ -943,11 +1182,16 @@ function ObjectiveEditorPanel({
       >
         <Group gap="xs">
           <Text size="sm" fw={500}>
-            {nodeType === 'narrative' ? 'Narrative' : nodeType === 'condition' ? 'Condition' : 'Objective'}
+            {nodeType === 'narrative' ? 'Narrative' : nodeType === 'condition' ? 'Condition' : nodeType === 'branch' ? 'Branch' : 'Objective'}
           </Text>
           <Badge size="xs" color={nodeTypeColor} variant="light">
             {nodeType}
           </Badge>
+          {objective.agentBeatContract?.enabled === true && (
+            <Badge size="xs" color="teal" variant="light">
+              contract
+            </Badge>
+          )}
           {isEntry && (
             <Badge size="xs" color="green">Entry</Badge>
           )}
@@ -965,7 +1209,8 @@ function ObjectiveEditorPanel({
             data={[
               { value: 'objective', label: 'Objective - player action' },
               { value: 'narrative', label: 'Narrative - auto-trigger' },
-              { value: 'condition', label: 'Condition - gate/check' },
+              { value: 'condition', label: 'Condition - gate (waits)' },
+              { value: 'branch', label: 'Branch - route (one-shot)' },
             ]}
             value={nodeType}
             onChange={(value) => value && handleChange('nodeType', value as BeatNodeType)}
@@ -991,22 +1236,49 @@ function ObjectiveEditorPanel({
                 label="Type"
                 data={typeOptions}
                 value={objective.type}
-                onChange={(value) => value && handleChange('type', value as QuestObjective['type'])}
+                onChange={(value) => {
+                  if (!value) return;
+                  const nextType = value as QuestObjective['type'];
+                  if (nextType !== 'talk' && objective.agentBeatContract?.enabled === true) {
+                    const nextDraft = resolveContractDraft();
+                    nextDraft.enabled = false;
+                    onChange({
+                      ...objective,
+                      type: nextType,
+                      agentBeatContract: nextDraft,
+                    });
+                    return;
+                  }
+                  handleChange('type', nextType);
+                }}
               />
 
               {targetOptions.length > 0 && (
                 <Select
-                  label="Target"
+                  label={objective.type === 'castSpell' ? 'Spell' : 'Target'}
                   data={targetOptions}
                   value={objective.target || null}
                   onChange={(value) => handleChange('target', value || '')}
-                  placeholder="Select target..."
+                  placeholder={objective.type === 'castSpell' ? 'Select spell...' : 'Select target...'}
                   searchable
                   clearable
                 />
               )}
 
-              {objective.type !== 'location' && objective.type !== 'trigger' && (
+              {isTalkObjective && (
+                <Select
+                  label="Talk Delivery"
+                  data={talkDeliveryOptionsData}
+                  value={talkDeliveryMode}
+                  onChange={(value) => {
+                    if (!value) return;
+                    setTalkDeliveryMode(value);
+                  }}
+                  allowDeselect={false}
+                />
+              )}
+
+              {objective.type !== 'location' && objective.type !== 'trigger' && (!isTalkObjective || talkDeliveryMode === 'scripted') && (
                 <Select
                   label="Dialogue"
                   data={dialogueOptions}
@@ -1019,7 +1291,7 @@ function ObjectiveEditorPanel({
                 />
               )}
 
-              {objective.dialogue && (
+              {objective.dialogue && (!isTalkObjective || talkDeliveryMode === 'scripted') && (
                 <Select
                   label="Complete On"
                   data={[
@@ -1029,6 +1301,109 @@ function ObjectiveEditorPanel({
                   value={objective.completeOn || 'dialogueEnd'}
                   onChange={(value) => handleChange('completeOn', value || 'dialogueEnd')}
                 />
+              )}
+
+              {isTalkObjective && talkDeliveryMode !== 'scripted' && (
+                <Paper p="sm" style={{ background: '#11111b', border: '1px solid #313244' }}>
+                  <Stack gap="xs">
+                    <Text size="sm" fw={500}>SugarAgent Contract</Text>
+                    <Text size="xs" c="dimmed">
+                      Attach a beat contract directly to this node; runtime contract bindings are generated automatically.
+                    </Text>
+
+                    <>
+                        <TextInput
+                          label="Contract ID"
+                          value={contractDraft.id || contractDefaultId}
+                          onChange={(e) => updateContract({ id: e.currentTarget.value })}
+                        />
+
+                        <Select
+                          label="NPC Override"
+                          description="Defaults to this node's talk target if left blank."
+                          data={[
+                            { value: '', label: '(Use Talk Target)' },
+                            ...npcs.map((npc) => ({ value: npc.id, label: npc.name })),
+                          ]}
+                          value={contractDraft.npcId || ''}
+                          onChange={(value) => updateContract({ npcId: value || undefined })}
+                          searchable
+                        />
+
+                        <Textarea
+                          label="Contract Objective"
+                          description="Optional authoring note for the beat objective."
+                          value={contractDraft.objective || ''}
+                          onChange={(e) => updateContract({ objective: e.currentTarget.value || undefined })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Textarea
+                          label="Required Facts"
+                          description="One per line (or comma-separated)."
+                          value={(contractDraft.requiredFacts || []).join('\n')}
+                          onChange={(e) => updateContract({ requiredFacts: parseContractList(e.currentTarget.value) })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Textarea
+                          label="Forbidden Facts"
+                          description="Optional. One per line (or comma-separated)."
+                          value={(contractDraft.forbiddenFacts || []).join('\n')}
+                          onChange={(e) => updateContract({ forbiddenFacts: parseContractList(e.currentTarget.value) })}
+                          minRows={2}
+                          autosize
+                        />
+
+                        <Select
+                          label="Completion Rule"
+                          data={[
+                            { value: 'player_ack', label: 'Player Acknowledges' },
+                            { value: 'player_action', label: 'Player Action' },
+                            { value: 'engine_flag', label: 'Engine Flag' },
+                          ]}
+                          value={contractDraft.completionRule || 'player_ack'}
+                          onChange={(value) => updateContract({ completionRule: (value as QuestObjectiveAgentContract['completionRule']) || 'player_ack' })}
+                        />
+
+                        <TextInput
+                          label="Completion Target"
+                          description="Optional target token/flag key depending on completion rule."
+                          value={contractDraft.completionTarget || ''}
+                          onChange={(e) => updateContract({ completionTarget: e.currentTarget.value || undefined })}
+                        />
+
+                        <NumberInput
+                          label="Max Turns"
+                          value={contractDraft.maxTurns ?? 3}
+                          min={1}
+                          step={1}
+                          onChange={(value) =>
+                            updateContract({
+                              maxTurns: typeof value === 'number' && Number.isFinite(value)
+                                ? Math.max(1, Math.floor(value))
+                                : 3,
+                            })
+                          }
+                        />
+
+                        <Select
+                          label="Fallback Dialogue"
+                          description="Scripted fallback dialogue when turn budget is exceeded."
+                          data={dialogues.map((dialogue) => ({
+                            value: dialogue.id,
+                            label: dialogue.name || dialogue.id,
+                          }))}
+                          value={contractDraft.fallbackScriptId || null}
+                          onChange={(value) => updateContract({ fallbackScriptId: value || undefined })}
+                          searchable
+                          clearable
+                        />
+                    </>
+                  </Stack>
+                </Paper>
               )}
             </>
           )}
@@ -1061,8 +1436,8 @@ function ObjectiveEditorPanel({
             </>
           )}
 
-          {/* === Condition-specific fields === */}
-          {nodeType === 'condition' && (
+          {/* === Condition/Branch-specific fields === */}
+          {(nodeType === 'condition' || nodeType === 'branch') && (
             <Stack gap="xs">
               <Select
                 label="Operator"
@@ -1071,6 +1446,7 @@ function ObjectiveEditorPanel({
                   { value: 'hasFlag', label: '🚩 Has Flag' },
                   { value: 'questComplete', label: '✓ Quest Complete' },
                   { value: 'stageComplete', label: '✓ Stage Complete' },
+                  { value: 'canCastSpell', label: '✨ Can Cast Spell' },
                   { value: 'custom', label: '⭐ Custom' },
                 ]}
                 value={objective.condition?.operator || 'hasFlag'}
@@ -1090,6 +1466,19 @@ function ObjectiveEditorPanel({
                     handleChange('condition', { ...cond, operand: value || '' });
                   }}
                   placeholder="Select item..."
+                  searchable
+                  clearable
+                />
+              ) : objective.condition?.operator === 'canCastSpell' ? (
+                <Select
+                  label="Spell"
+                  data={spells.map((s) => ({ value: s.id, label: s.name }))}
+                  value={objective.condition?.operand || null}
+                  onChange={(value) => {
+                    const cond = objective.condition || { operator: 'canCastSpell' as ConditionOperator, operand: '' };
+                    handleChange('condition', { ...cond, operand: value || '' });
+                  }}
+                  placeholder="Select spell..."
                   searchable
                   clearable
                 />
@@ -1173,6 +1562,50 @@ function ObjectiveEditorPanel({
               Drag from another node's output to add prerequisites
             </Text>
           </Stack>
+
+          {/* Fail Targets (branch nodes only) */}
+          {nodeType === 'branch' && (
+            <Stack gap="xs">
+              <Text size="sm" fw={500} c="#f38ba8">
+                Fail Targets (false path)
+              </Text>
+              {failTargetObjectives.length === 0 ? (
+                <Text size="xs" c="dimmed" fs="italic">
+                  No fail targets — branch only routes to pass path
+                </Text>
+              ) : (
+                failTargetObjectives.map((target) => {
+                  const targetNodeType = target.nodeType || 'objective';
+                  const targetIcon = targetNodeType === 'narrative' ? 'N'
+                    : targetNodeType === 'condition' ? '?'
+                    : targetNodeType === 'branch' ? '⑂'
+                    : OBJECTIVE_ICONS[target.type] || '⭐';
+                  return (
+                    <Paper key={target.id} p="xs" withBorder style={{ background: '#181825' }}>
+                      <Group justify="space-between">
+                        <Group gap="xs">
+                          <Text size="sm">{targetIcon}</Text>
+                          <Text size="xs">{target.description}</Text>
+                        </Group>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          onClick={() => onRemoveFailTarget(target.id)}
+                          styles={{ root: { padding: '2px 6px' } }}
+                        >
+                          ✕
+                        </Button>
+                      </Group>
+                    </Paper>
+                  );
+                })
+              )}
+              <Text size="xs" c="dimmed">
+                Drag from the red port to add fail targets
+              </Text>
+            </Stack>
+          )}
 
           {/* OnEnter Actions */}
           <ActionListEditor

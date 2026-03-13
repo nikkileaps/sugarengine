@@ -26,6 +26,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "../src/plugins/sugaragent/runtime/bundle/bin/**/*",
+      "../src/plugins/sugaragent/runtime/bundle/models/**/*",
+      "../src/plugins/sugaragent/runtime/bundle/bundle.lock.json",
+      "../src/plugins/sugaragent/lore/generated/**/*"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

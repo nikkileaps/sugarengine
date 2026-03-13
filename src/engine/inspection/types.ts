@@ -17,6 +17,8 @@ export interface InspectionData {
   headerImage?: string;
   content?: string;          // Simple single-content format
   sections?: InspectionSection[];  // Multi-section format (newspapers, etc.)
+  model?: string;            // Optional 3D model path (FBX/GLB)
+  modelScale?: number;       // Scale multiplier for the model (default 1)
 }
 
 /**

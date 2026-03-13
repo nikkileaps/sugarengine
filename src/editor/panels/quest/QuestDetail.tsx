@@ -19,7 +19,14 @@ import {
   Select,
   Switch,
 } from '@mantine/core';
-import { QuestEntry, QuestStage, QuestObjective, validateQuest } from './QuestPanel';
+import { CompactIdDisplay } from '../../components';
+import {
+  QuestEntry,
+  QuestStage,
+  QuestObjective,
+  QuestObjectiveAgentContract,
+  validateQuest,
+} from './QuestPanel';
 import { ObjectiveNodeCanvas } from './ObjectiveNodeCanvas';
 import { ObjectiveGraph } from '../../../engine/quests';
 import { generateUUID } from '../../utils';
@@ -30,6 +37,7 @@ interface QuestDetailProps {
   items: { id: string; name: string }[];
   dialogues: { id: string; name: string }[];
   triggers: { id: string; name: string }[];
+  spells: { id: string; name: string }[];
   onChange: (quest: QuestEntry) => void;
   onDelete: () => void;
 }
@@ -51,6 +59,136 @@ const OBJECTIVE_COLORS: Record<string, string> = {
   trigger: '#fab387',
   custom: '#f5c2e7',
 };
+
+type AgentBeatContract = NonNullable<QuestEntry['agentBeatContracts']>[number];
+
+const AGENT_COMPLETION_RULES = new Set(['player_ack', 'player_action', 'engine_flag']);
+
+function trimOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0);
+}
+
+function defaultContractId(questId: string, stageId: string, objectiveId: string): string {
+  return `beat.${questId}.${stageId}.${objectiveId}`;
+}
+
+function resolveContractDraft(
+  questId: string,
+  stageId: string,
+  objective: QuestObjective,
+): QuestObjectiveAgentContract | null {
+  if (objective.type !== 'talk') return null;
+  const draft = objective.agentBeatContract;
+  if (!draft || draft.enabled !== true) return null;
+
+  const resolvedId = trimOrUndefined(draft.id) ?? defaultContractId(questId, stageId, objective.id);
+  const completionRule = AGENT_COMPLETION_RULES.has(String(draft.completionRule))
+    ? (draft.completionRule as AgentBeatContract['completionRule'])
+    : 'player_ack';
+  const maxTurns = typeof draft.maxTurns === 'number' && Number.isFinite(draft.maxTurns)
+    ? Math.max(1, Math.floor(draft.maxTurns))
+    : 3;
+
+  return {
+    ...draft,
+    enabled: true,
+    id: resolvedId,
+    completionRule,
+    maxTurns,
+    objective: trimOrUndefined(draft.objective) ?? objective.description,
+    requiredFacts: normalizeStringArray(draft.requiredFacts),
+    forbiddenFacts: normalizeStringArray(draft.forbiddenFacts),
+    completionTarget: trimOrUndefined(draft.completionTarget),
+    fallbackScriptId: trimOrUndefined(draft.fallbackScriptId),
+  };
+}
+
+function normalizeAgentBeatContracts(quest: QuestEntry): AgentBeatContract[] {
+  const existing = Array.isArray(quest.agentBeatContracts) ? quest.agentBeatContracts : [];
+  const validObjectiveKeys = new Set<string>();
+  for (const stage of quest.stages) {
+    for (const objective of stage.objectives) {
+      validObjectiveKeys.add(`${stage.id}:${objective.id}`);
+    }
+  }
+
+  const dedup = new Map<string, AgentBeatContract>();
+  for (const contract of existing) {
+    const id = trimOrUndefined(contract.id);
+    if (!id) continue;
+    if (
+      contract.stageId
+      && contract.objectiveId
+      && !validObjectiveKeys.has(`${contract.stageId}:${contract.objectiveId}`)
+    ) {
+      continue;
+    }
+    dedup.set(id, {
+      ...contract,
+      id,
+      npcId: trimOrUndefined(contract.npcId) ?? '',
+      objective: trimOrUndefined(contract.objective) ?? '',
+      requiredFacts: normalizeStringArray(contract.requiredFacts),
+      forbiddenFacts: normalizeStringArray(contract.forbiddenFacts),
+      completionRule: AGENT_COMPLETION_RULES.has(String(contract.completionRule))
+        ? contract.completionRule
+        : 'player_ack',
+      completionTarget: trimOrUndefined(contract.completionTarget),
+      maxTurns: typeof contract.maxTurns === 'number' && Number.isFinite(contract.maxTurns)
+        ? Math.max(1, Math.floor(contract.maxTurns))
+        : undefined,
+      fallbackScriptId: trimOrUndefined(contract.fallbackScriptId),
+      stageId: trimOrUndefined(contract.stageId),
+      objectiveId: trimOrUndefined(contract.objectiveId),
+    });
+  }
+
+  for (const stage of quest.stages) {
+    for (const objective of stage.objectives) {
+      const hasNodeManagedContract = objective.agentBeatContract !== undefined;
+      const resolved = resolveContractDraft(quest.id, stage.id, objective);
+      if (hasNodeManagedContract) {
+        const boundStageId = stage.id;
+        const boundObjectiveId = objective.id;
+        for (const [existingId, existingContract] of dedup.entries()) {
+          if (existingContract.stageId === boundStageId && existingContract.objectiveId === boundObjectiveId) {
+            dedup.delete(existingId);
+          }
+        }
+      }
+      if (!resolved) {
+        continue;
+      }
+      const npcId = trimOrUndefined(resolved.npcId)
+        ?? (objective.type === 'talk' ? trimOrUndefined(objective.target) : undefined)
+        ?? '';
+      dedup.set(resolved.id!, {
+        id: resolved.id!,
+        npcId,
+        objective: trimOrUndefined(resolved.objective) ?? objective.description,
+        requiredFacts: normalizeStringArray(resolved.requiredFacts),
+        forbiddenFacts: normalizeStringArray(resolved.forbiddenFacts),
+        completionRule: resolved.completionRule ?? 'player_ack',
+        completionTarget: trimOrUndefined(resolved.completionTarget),
+        maxTurns: resolved.maxTurns,
+        fallbackScriptId: trimOrUndefined(resolved.fallbackScriptId),
+        stageId: stage.id,
+        objectiveId: objective.id,
+      });
+    }
+  }
+
+  return Array.from(dedup.values());
+}
 
 /**
  * Mini graph visualization of objectives within a stage
@@ -186,11 +324,14 @@ function MiniObjectiveGraph({
         {/* Nodes */}
         {layout.nodes.map(({ x, y, obj }) => {
           const nt = obj.nodeType || 'objective';
+          const hasAgentContract = obj.agentBeatContract?.enabled === true;
           const fillColor = nt === 'narrative' ? '#cba6f7'
             : nt === 'condition' ? '#f9e2af'
+            : nt === 'branch' ? '#fab387'
             : (OBJECTIVE_COLORS[obj.type] || '#89b4fa');
           const icon = nt === 'narrative' ? 'N'
             : nt === 'condition' ? '?'
+            : nt === 'branch' ? '⑂'
             : (OBJECTIVE_ICONS[obj.type] || '⭐');
           const strokeColor = obj.autoStart ? '#a6e3a1' : 'none';
           const r = layout.nodeSize! / 2;
@@ -198,12 +339,12 @@ function MiniObjectiveGraph({
           return (
             <Tooltip
               key={obj.id}
-              label={`${icon} ${obj.description}`}
+              label={`${icon} ${obj.description}${obj.agentBeatContract?.enabled === true ? ' • SugarAgent Contract' : ''}`}
               position="top"
               withArrow
             >
               <g>
-                {nt === 'condition' ? (
+                {(nt === 'condition' || nt === 'branch') ? (
                   <rect
                     x={x - r * 0.7}
                     y={y - r * 0.7}
@@ -236,6 +377,16 @@ function MiniObjectiveGraph({
                     strokeDasharray="2,2"
                   />
                 )}
+                {hasAgentContract && (
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={r + 2}
+                    fill="none"
+                    stroke="#94e2d5"
+                    strokeWidth={1.5}
+                  />
+                )}
               </g>
             </Tooltip>
           );
@@ -254,6 +405,7 @@ export function QuestDetail({
   items,
   dialogues,
   triggers,
+  spells,
   onChange,
   onDelete,
 }: QuestDetailProps) {
@@ -263,8 +415,16 @@ export function QuestDetail({
   const [editingStageId, setEditingStageId] = useState<string | null>(null);
   const editingStage = editingStageId ? quest.stages.find(s => s.id === editingStageId) : null;
 
+  const commitQuest = (nextQuest: QuestEntry): void => {
+    const normalizedContracts = normalizeAgentBeatContracts(nextQuest);
+    onChange({
+      ...nextQuest,
+      agentBeatContracts: normalizedContracts.length > 0 ? normalizedContracts : undefined,
+    });
+  };
+
   const handleChange = <K extends keyof QuestEntry>(field: K, value: QuestEntry[K]) => {
-    onChange({ ...quest, [field]: value });
+    commitQuest({ ...quest, [field]: value });
   };
 
   // Build stage order starting from startStage
@@ -315,14 +475,14 @@ export function QuestDetail({
     }
 
     updatedStages.push(newStage);
-    onChange({ ...quest, stages: updatedStages });
+    commitQuest({ ...quest, stages: updatedStages });
   };
 
   const handleStageChange = (updatedStage: QuestStage) => {
     const updatedStages = quest.stages.map((s) =>
       s.id === updatedStage.id ? updatedStage : s
     );
-    onChange({ ...quest, stages: updatedStages });
+    commitQuest({ ...quest, stages: updatedStages });
   };
 
   const handleDeleteStage = (stageId: string) => {
@@ -342,7 +502,7 @@ export function QuestDetail({
       newStartStage = updatedStages[0]?.id ?? '';
     }
 
-    onChange({ ...quest, stages: updatedStages, startStage: newStartStage });
+    commitQuest({ ...quest, stages: updatedStages, startStage: newStartStage });
     setEditingStageId(null);
   };
 
@@ -353,11 +513,13 @@ export function QuestDetail({
   if (graphStage) {
     return (
       <ObjectiveNodeCanvas
+        questId={quest.id}
         stage={graphStage}
         npcs={npcs}
         items={items}
         dialogues={dialogues}
         triggers={triggers}
+        spells={spells}
         onStageChange={handleStageChange}
         onClose={() => setGraphStageId(null)}
       />
@@ -413,9 +575,7 @@ export function QuestDetail({
                 <Badge size="sm" variant="light" color="blue">
                   {quest.stages.length} stages
                 </Badge>
-                <Text size="xs" c="dimmed" ff="monospace">
-                  {quest.id.slice(0, 8)}
-                </Text>
+                <CompactIdDisplay value={quest.id} />
               </Group>
             </Stack>
           </Group>

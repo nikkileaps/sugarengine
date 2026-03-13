@@ -40,6 +40,11 @@ interface CasterManagerLike {
   loadCasterState(state: { battery: number; resonance: number }): void;
 }
 
+interface PluginPersistenceBridgeLike {
+  serializePluginState(): Record<string, unknown>;
+  loadPluginState(state: Record<string, unknown> | undefined): void;
+}
+
 export type SaveEventHandler = (trigger: AutoSaveTrigger, slotId: string) => void;
 
 /**
@@ -49,6 +54,12 @@ export interface SaveManagerConfig {
   autoSaveEnabled: boolean;
   autoSaveSlotId: string;
   autoSaveDebounceMs: number;
+  /** Optional save namespace (usually gameId) to isolate saves per game. */
+  namespace?: string;
+}
+
+interface LegacySaveMigrationProvider extends StorageProvider {
+  migrateLegacySaves?: (slotIds: string[]) => Promise<void>;
 }
 
 const DEFAULT_CONFIG: SaveManagerConfig = {
@@ -56,6 +67,8 @@ const DEFAULT_CONFIG: SaveManagerConfig = {
   autoSaveSlotId: 'autosave',
   autoSaveDebounceMs: 5000
 };
+
+const LEGACY_SAVE_SLOT_IDS = ['autosave', 'slot1', 'slot2', 'slot3'];
 
 /**
  * Orchestrates save/load operations across all game systems
@@ -78,13 +91,14 @@ export class SaveManager {
   private questManager: QuestManagerLike | null = null;
   private inventoryManager: InventoryManagerLike | null = null;
   private casterManager: CasterManagerLike | null = null;
+  private pluginBridge: PluginPersistenceBridgeLike | null = null;
 
   constructor(config: Partial<SaveManagerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.gameStartTime = Date.now();
 
     // Default to localStorage, will be updated in init() if Tauri is detected
-    this.provider = new LocalStorageProvider();
+    this.provider = new LocalStorageProvider(this.config.namespace);
   }
 
   /**
@@ -93,7 +107,13 @@ export class SaveManager {
   async init(): Promise<SaveResult> {
     // Auto-detect and initialize the best storage provider
     await this.detectAndInitProvider();
-    return await this.provider.init();
+    const initResult = await this.provider.init();
+    if (!initResult.success) {
+      return initResult;
+    }
+
+    await this.migrateLegacySaves();
+    return initResult;
   }
 
   /**
@@ -105,11 +125,22 @@ export class SaveManager {
       try {
         // Dynamic import to avoid bundling Tauri deps in browser builds
         const { TauriFileProvider } = await import('./TauriFileProvider');
-        this.provider = new TauriFileProvider();
+        this.provider = new TauriFileProvider(this.config.namespace);
       } catch {
         // Fall back to localStorage if Tauri import fails
         console.warn('Failed to load TauriFileProvider, using localStorage');
       }
+    }
+  }
+
+  private async migrateLegacySaves(): Promise<void> {
+    const provider = this.provider as LegacySaveMigrationProvider;
+    if (typeof provider.migrateLegacySaves !== 'function') return;
+
+    try {
+      await provider.migrateLegacySaves(LEGACY_SAVE_SLOT_IDS);
+    } catch (err) {
+      console.warn('[SaveMigration] Failed to migrate legacy saves:', err);
     }
   }
 
@@ -127,12 +158,14 @@ export class SaveManager {
     engine: EngineLike,
     questManager: QuestManagerLike,
     inventoryManager: InventoryManagerLike,
-    casterManager?: CasterManagerLike
+    casterManager?: CasterManagerLike,
+    pluginBridge?: PluginPersistenceBridgeLike,
   ): void {
     this.engine = engine;
     this.questManager = questManager;
     this.inventoryManager = inventoryManager;
     this.casterManager = casterManager ?? null;
+    this.pluginBridge = pluginBridge ?? null;
   }
 
   // ============================================
@@ -218,7 +251,15 @@ export class SaveManager {
         collectedPickups: this.serializeCollectedPickups()
       },
       caster: casterState,
+      plugins: this.gatherPluginState(),
     };
+  }
+
+  private gatherPluginState(): Record<string, unknown> | undefined {
+    if (!this.pluginBridge) return undefined;
+
+    const state = this.pluginBridge.serializePluginState();
+    return Object.keys(state).length > 0 ? state : undefined;
   }
 
   private gatherCasterState(): GameSaveData['caster'] {
@@ -366,6 +407,9 @@ export class SaveManager {
 
     // 5. Restore caster state
     this.restoreCasterState(data.caster);
+
+    // 6. Restore plugin state (if any)
+    this.restorePluginState(data.plugins);
   }
 
   private restoreCasterState(caster: GameSaveData['caster']): void {
@@ -417,6 +461,11 @@ export class SaveManager {
     for (const [region, pickups] of Object.entries(world.collectedPickups)) {
       this.collectedPickups.set(region, new Set(pickups));
     }
+  }
+
+  private restorePluginState(plugins: GameSaveData['plugins']): void {
+    if (!this.pluginBridge) return;
+    this.pluginBridge.loadPluginState(plugins);
   }
 
   // ============================================

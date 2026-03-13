@@ -102,20 +102,22 @@ export class InteractionSystem extends System {
     }
 
     // Find nearest Inspectable within interaction radius
+    // Offset distance by collision radius so the prompt appears at the model edge
     const inspectables = world.query<[Inspectable, Position]>(Inspectable, Position);
     for (const { components: [inspectable, inspectablePos] } of inspectables) {
       const dx = playerPos.x - inspectablePos.x;
       const dz = playerPos.z - inspectablePos.z;
-      const distance = Math.sqrt(dx * dx + dz * dz);
+      const centerDistance = Math.sqrt(dx * dx + dz * dz);
+      const edgeDistance = centerDistance - inspectable.collisionRadius;
 
-      if (distance <= this.interactionRadius) {
-        if (!nearestInteractable || distance < nearestInteractable.distance) {
+      if (edgeDistance <= this.interactionRadius) {
+        if (!nearestInteractable || edgeDistance < nearestInteractable.distance) {
           nearestInteractable = {
             type: 'inspectable',
             id: inspectable.id,
             inspectionId: inspectable.inspectionId,
             promptText: inspectable.promptText,
-            distance
+            distance: edgeDistance
           };
         }
       }
@@ -134,7 +136,7 @@ export class InteractionSystem extends System {
             type: 'resonancePoint',
             id: resonancePoint.id,
             resonanceDefId: resonancePoint.resonancePointId,
-            promptText: resonancePoint.promptText || 'Attune',
+            promptText: resonancePoint.promptText || 'Resonance Point',
             distance
           };
         }
@@ -180,7 +182,7 @@ export class InteractionSystem extends System {
         this.onResonance(
           this.nearestInteractable.id,
           this.nearestInteractable.resonanceDefId!,
-          this.nearestInteractable.promptText || 'Attune'
+          this.nearestInteractable.promptText || 'Resonance Point'
         );
       }
     }

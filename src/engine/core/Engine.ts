@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { World } from '../ecs';
 import { Position, Velocity, Renderable, PlayerControlled, TriggerZone, NPC, NPCBehavior, ItemPickup, NPCMovement, Waypoint, Inspectable, ResonancePoint, WorldLabel, SurfacePatchLOD } from '../components';
-import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem, BehaviorTreeSystem, BTConditionChecker, BTActionHandler } from '../systems';
-import { ModelLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
+import { MovementSystem, RenderSystem, TriggerSystem, TriggerHandler, InteractionSystem, InteractionHandler, InspectionHandler, ResonanceHandler, NearbyInteractable, NPCMovementSystem, WorldLabelSystem, LODSystem, BehaviorTreeSystem, BTConditionChecker, BTActionHandler, AnimationSystem } from '../systems';
+import { Animator } from '../components/Animator';
+import { ModelLoader, CharacterLoader, PropLoader, RegionLoader, LoadedRegion, RegionData, RegionStreamingConfig, Vec3, SurfacePatchDefinition } from '../loaders';
 import { GameCamera, GameCameraConfig } from './GameCamera';
 import { InputManager } from './InputManager';
 import { PostProcessing } from './PostProcessing';
@@ -10,6 +11,7 @@ import { getRegionWorldOffset, gridKey } from '../streaming';
 import { EnvironmentAnimation } from '../shaders';
 import { VFXManager, VFXDefinition } from '../vfx';
 import type { Emitter } from '../vfx';
+import { normalizeContentBasePath, resolveContentUrl } from './contentPaths';
 
 export interface CameraConfig {
   style: 'isometric' | 'perspective';
@@ -24,6 +26,10 @@ export interface CameraConfig {
 export interface EngineConfig {
   container: HTMLElement;
   camera: CameraConfig;
+  /** Enable Draco mesh decoder for compressed GLBs (published builds). */
+  draco?: boolean;
+  /** Optional project-scoped content base path (e.g. "games/rackwick-city/"). */
+  contentBasePath?: string;
 }
 
 // NPC database entry (matches editor format)
@@ -34,6 +40,9 @@ export interface NPCDatabaseEntry {
   dialogue?: string;
   behaviorTree?: import('../behavior').BTNode;
   behaviorMode?: import('../components').BehaviorMode;
+  model?: string;
+  modelHeight?: number;
+  animations?: Record<string, string>;
 }
 
 /**
@@ -93,17 +102,27 @@ export class SugarEngine {
   private cameraFollowsPlayer: boolean = true;
   private cameraUpdateEnabled: boolean = true;
   private npcDatabase: Map<string, NPCDatabaseEntry> = new Map();
+  private inspectionModelDatabase: Map<string, { model: string; modelScale?: number; modelColor?: number }> = new Map();
+  private itemModelDatabase: Map<string, { model: string; modelScale?: number; modelColor?: number }> = new Map();
   private regionRegistry: Map<string, RegionData> = new Map();  // path -> RegionData
   private regionsByGridKey: Map<string, RegionData> = new Map();  // "x,z" -> RegionData
   private worldLabelSystem: WorldLabelSystem;
   private environmentAnimation: EnvironmentAnimation;
   private vfxManager: VFXManager;
+  private playerModelPath: string = 'models/player.glb';
+  private playerAnimationPaths: Record<string, string> = {};
+  private pendingModelLoads: Promise<void>[] = [];
+  private contentBasePath: string;
 
   readonly world: World;
   readonly models: ModelLoader;
+  readonly characters: CharacterLoader;
+  readonly props: PropLoader;
   readonly regions: RegionLoader;
 
   constructor(config: EngineConfig) {
+    this.contentBasePath = normalizeContentBasePath(config.contentBasePath);
+
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setSize(config.container.clientWidth, config.container.clientHeight);
@@ -132,8 +151,15 @@ export class SugarEngine {
     this.input = new InputManager();
 
     // Loaders
-    this.models = new ModelLoader();
-    this.regions = new RegionLoader(this.models);
+    this.models = new ModelLoader(config.draco ? {
+      draco: true,
+      dracoDecoderPath: import.meta.env.BASE_URL + 'draco/',
+    } : undefined);
+    this.characters = new CharacterLoader(this.models);
+    this.props = new PropLoader(this.models);
+    this.regions = new RegionLoader(this.models, {
+      contentBasePath: this.contentBasePath,
+    });
 
     // ECS World
     this.world = new World();
@@ -144,6 +170,7 @@ export class SugarEngine {
     this.movementSystem = new MovementSystem(this.input, this.scene);
     this.movementSystem.setCameraYawProvider(() => this.camera.getYaw());
     this.world.addSystem(this.movementSystem);
+    this.world.addSystem(new AnimationSystem());
     this.world.addSystem(new RenderSystem(this.scene));
     this.triggerSystem = new TriggerSystem();
     this.world.addSystem(this.triggerSystem);
@@ -313,6 +340,9 @@ export class SugarEngine {
     }
     this.inspectableEntities = [];
 
+    // Discard any pending model loads from previous region
+    this.pendingModelLoads = [];
+
     // Remove old resonance point entities (and their meshes)
     for (const entityId of this.resonancePointEntities) {
       const renderable = this.world.getComponent<Renderable>(entityId, Renderable);
@@ -416,7 +446,7 @@ export class SugarEngine {
         this.world.addComponent(entity, npcMovement);
       }
 
-      // Placeholder mesh (capsule like player but different color)
+      // Placeholder capsule (always created synchronously)
       const geometry = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
       const material = new THREE.MeshStandardMaterial({ color: 0x9966ff });
       const mesh = new THREE.Mesh(geometry, material);
@@ -432,6 +462,13 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       this.npcEntities.push(entity);
+
+      // Fire-and-forget: upgrade placeholder to loaded model in the background
+      if (npcInfo?.model) {
+        this.pendingModelLoads.push(
+          this.upgradeNPCModel(entity, npcDef.id, npcInfo, npcDef.position.x, npcDef.position.y, npcDef.position.z),
+        );
+      }
     }
     // Create pickup entities from region data (skip already collected ones)
     const pickups = this.currentRegion.data.pickups ?? [];
@@ -479,6 +516,17 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       this.pickupEntities.push(entity);
+
+      // Fire-and-forget: upgrade placeholder to loaded model in the background
+      const itemModelInfo = this.itemModelDatabase.get(pickupDef.itemId);
+      if (itemModelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradePickupModel(
+            entity, pickupDef.id, pickupDef.itemId, itemModelInfo,
+            pickupDef.position.x, pickupDef.position.y, pickupDef.position.z,
+          ),
+        );
+      }
     }
 
     // Create inspectable entities from region data
@@ -500,19 +548,19 @@ export class SugarEngine {
         inspectableDef.promptText
       ));
 
-      // Placeholder mesh (small box to indicate inspectable object)
+      // Placeholder box (always created synchronously)
       const geometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
-      const material = new THREE.MeshStandardMaterial({
+      const boxMaterial = new THREE.MeshStandardMaterial({
         color: 0x8888ff,
         emissive: 0x4444aa,
-        emissiveIntensity: 0.3
+        emissiveIntensity: 0.3,
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new THREE.Mesh(geometry, boxMaterial);
       mesh.castShadow = true;
       mesh.position.set(
         inspectableDef.position.x,
         inspectableDef.position.y + 0.2,
-        inspectableDef.position.z
+        inspectableDef.position.z,
       );
       mesh.name = `inspectable-${inspectableDef.id}`;
       mesh.userData.inspectableId = inspectableDef.id;
@@ -521,6 +569,17 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       this.inspectableEntities.push(entity);
+
+      // Fire-and-forget: upgrade placeholder to loaded model in the background
+      const modelInfo = this.inspectionModelDatabase.get(inspectableDef.inspectionId);
+      if (modelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradeInspectableModel(
+            entity, inspectableDef.id, modelInfo,
+            inspectableDef.position.x, inspectableDef.position.y, inspectableDef.position.z,
+          ),
+        );
+      }
     }
     // Create resonance point entities from region data
     const resonancePoints = this.currentRegion.data.resonancePoints ?? [];
@@ -607,7 +666,7 @@ export class SugarEngine {
       const pos = this.world.getComponent<Position>(this.playerEntity, Position);
       if (pos) {
         pos.x = spawn.x;
-        pos.y = spawn.y + 0.75; // Offset for player height
+        pos.y = spawn.y;
         pos.z = spawn.z;
       }
     }
@@ -737,6 +796,12 @@ export class SugarEngine {
       this.world.addComponent(entity, new WorldLabel(displayName, 1.8));
       this.world.addComponent(entity, new Renderable(mesh));
       state.npcEntities.push(entity);
+
+      if (npcInfo?.model) {
+        this.pendingModelLoads.push(
+          this.upgradeNPCModel(entity, npcDef.id, npcInfo, worldX, worldY, worldZ),
+        );
+      }
     }
 
     // Create pickup entities (offset by world position)
@@ -774,6 +839,15 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       state.pickupEntities.push(entity);
+
+      const itemModelInfo = this.itemModelDatabase.get(pickupDef.itemId);
+      if (itemModelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradePickupModel(
+            entity, pickupDef.id, pickupDef.itemId, itemModelInfo, worldX, worldY, worldZ,
+          ),
+        );
+      }
     }
 
     // Create inspectable entities (offset by world position)
@@ -791,13 +865,13 @@ export class SugarEngine {
         inspectableDef.promptText
       ));
 
-      const geometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
-      const material = new THREE.MeshStandardMaterial({
+      const inspGeometry = new THREE.BoxGeometry(0.4, 0.3, 0.4);
+      const inspMaterial = new THREE.MeshStandardMaterial({
         color: 0x8888ff,
         emissive: 0x4444aa,
-        emissiveIntensity: 0.3
+        emissiveIntensity: 0.3,
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new THREE.Mesh(inspGeometry, inspMaterial);
       mesh.castShadow = true;
       mesh.position.set(worldX, worldY + 0.2, worldZ);
       mesh.name = `inspectable-${inspectableDef.id}`;
@@ -808,6 +882,15 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Renderable(mesh));
       state.inspectableEntities.push(entity);
+
+      const modelInfo = this.inspectionModelDatabase.get(inspectableDef.inspectionId);
+      if (modelInfo) {
+        this.pendingModelLoads.push(
+          this.upgradeInspectableModel(
+            entity, inspectableDef.id, modelInfo, worldX, worldY, worldZ,
+          ),
+        );
+      }
     }
 
     // Create resonance point entities (offset by world position)
@@ -974,7 +1057,7 @@ export class SugarEngine {
       const pos = this.world.getComponent<Position>(this.playerEntity, Position);
       if (pos) {
         pos.x = worldPos.x;
-        pos.y = worldPos.y + 0.75;
+        pos.y = worldPos.y;
         pos.z = worldPos.z;
       }
     }
@@ -1127,30 +1210,31 @@ export class SugarEngine {
   private async createPlayer(x: number = 0, y: number = 0, z: number = 0): Promise<number> {
     const entity = this.world.createEntity();
 
-    // Position component (slightly above ground)
-    this.world.addComponent(entity, new Position(x, y + 0.75, z));
-
-    // Velocity component
+    this.world.addComponent(entity, new Position(x, y, z));
     this.world.addComponent(entity, new Velocity());
-
-    // Player controlled component
     this.world.addComponent(entity, new PlayerControlled(5));
 
-    // Try to load a model, fall back to cube
+    // Load character model, fall back to cube
     let mesh: THREE.Object3D;
+    let clips = new Map<string, THREE.AnimationClip>();
     try {
-      mesh = await this.models.load(import.meta.env.BASE_URL + 'models/player.glb');
+      const baseUrl = this.resolveAssetPath(this.playerModelPath);
+      const animPaths = Object.fromEntries(
+        Object.entries(this.playerAnimationPaths).map(([k, v]) => [k, this.resolveAssetPath(v)])
+      );
+      const character = await this.characters.load(baseUrl, animPaths);
+      mesh = character.mesh;
+      clips = character.clips;
       mesh.name = 'player';
-      mesh.castShadow = true;
+      // Name all child meshes so collision system excludes them
       mesh.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          child.castShadow = true;
           child.name = 'player-mesh';
         }
       });
     } catch {
-      // Fallback to cube if no model exists
       const geometry = new THREE.BoxGeometry(1, 1.5, 1);
+      geometry.translate(0, 0.75, 0); // Bottom at y=0 to match CharacterLoader convention
       const material = new THREE.MeshStandardMaterial({ color: 0xe07a5f });
       mesh = new THREE.Mesh(geometry, material);
       mesh.name = 'player';
@@ -1159,7 +1243,179 @@ export class SugarEngine {
 
     this.world.addComponent(entity, new Renderable(mesh));
 
+    if (clips.size > 0) {
+      const animator = new Animator(mesh);
+      for (const [name, clip] of clips) {
+        animator.addClip(name, clip);
+      }
+      if (animator.hasClip('idle')) {
+        animator.play('idle', 0);
+      } else if (animator.hasClip('walk')) {
+        animator.play('walk', 0);
+      }
+      this.world.addComponent(entity, animator);
+    }
+
     return entity;
+  }
+
+  /**
+   * Wait for all pending model loads (NPC + inspectable) to complete.
+   * Reports progress via optional callback.
+   */
+  async waitForPendingModelLoads(
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<void> {
+    const promises = [...this.pendingModelLoads];
+    if (promises.length === 0) return;
+
+    const total = promises.length;
+    let loaded = 0;
+    onProgress?.(0, total);
+
+    await Promise.all(
+      promises.map((p) =>
+        p.then(() => {
+          loaded++;
+          onProgress?.(loaded, total);
+        }),
+      ),
+    );
+
+    // Clear only the batch we waited on
+    this.pendingModelLoads = this.pendingModelLoads.filter((p) => !promises.includes(p));
+  }
+
+  /**
+   * Background model upgrade for NPCs. Loads the character model and swaps
+   * the placeholder capsule. Never blocks loadRegion.
+   */
+  private async upgradeNPCModel(
+    entity: number, npcId: string, npcInfo: NPCDatabaseEntry,
+    x: number, y: number, z: number,
+  ): Promise<void> {
+    try {
+      if (!npcInfo.model) return;
+      const baseUrl = this.resolveAssetPath(npcInfo.model);
+      const animPaths = npcInfo.animations
+        ? Object.fromEntries(
+            Object.entries(npcInfo.animations).map(([k, v]) => [k, this.resolveAssetPath(v)])
+          )
+        : {};
+      const character = await this.characters.load(baseUrl, animPaths, npcInfo.modelHeight);
+      const newMesh = character.mesh;
+      newMesh.name = `npc-${npcId}`;
+      newMesh.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.name = `npc-${npcId}`;
+        }
+      });
+      newMesh.position.set(x, y, z);
+
+      // Swap placeholder → loaded model
+      const renderable = this.world.getComponent<Renderable>(entity, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+        this.scene.add(newMesh);
+        renderable.mesh = newMesh;
+      }
+
+      // Add animator if clips available
+      if (character.clips.size > 0) {
+        const animator = new Animator(newMesh);
+        for (const [name, clip] of character.clips) {
+          animator.addClip(name, clip);
+        }
+        if (animator.hasClip('idle')) {
+          animator.play('idle', 0);
+        }
+        this.world.addComponent(entity, animator);
+      }
+    } catch (e) {
+      console.warn(`[Engine] Failed to load NPC model for ${npcId}, keeping placeholder`, e);
+    }
+  }
+
+  /**
+   * Background model upgrade for inspectables. Loads the model and swaps
+   * the placeholder box. Never blocks loadRegion.
+   */
+  private async upgradeInspectableModel(
+    entity: number, id: string,
+    modelInfo: { model: string; modelScale?: number; modelColor?: number },
+    x: number, y: number, z: number,
+  ): Promise<void> {
+    try {
+      const url = this.resolveAssetPath(modelInfo.model);
+      const prop = await this.props.load(url, {}, 1.5, modelInfo.modelColor);
+      const newMesh = prop.mesh;
+      const scale = modelInfo.modelScale ?? 1;
+      if (scale !== 1) newMesh.scale.multiplyScalar(scale);
+      newMesh.position.set(x, y, z);
+      newMesh.name = `inspectable-${id}`;
+
+      // Compute XZ collision radius from bounding box
+      const box = new THREE.Box3().setFromObject(newMesh);
+      const size = box.getSize(new THREE.Vector3());
+      const xzRadius = Math.max(size.x, size.z) / 2;
+
+      const renderable = this.world.getComponent<Renderable>(entity, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+        this.scene.add(newMesh);
+        renderable.mesh = newMesh;
+      }
+
+      // Set collision radius on inspectable component
+      const inspectable = this.world.getComponent<Inspectable>(entity, Inspectable);
+      if (inspectable) {
+        inspectable.collisionRadius = xzRadius;
+      }
+    } catch (e) {
+      console.warn(`[Engine] Failed to load inspectable model for ${id}, keeping placeholder`, e);
+    }
+  }
+
+  /**
+   * Background model upgrade for pickups. Loads the model and swaps
+   * the placeholder sphere. Never blocks loadRegion.
+   */
+  private async upgradePickupModel(
+    entity: number, pickupId: string, itemId: string,
+    modelInfo: { model: string; modelScale?: number; modelColor?: number },
+    x: number, y: number, z: number,
+  ): Promise<void> {
+    try {
+      const url = this.resolveAssetPath(modelInfo.model);
+      const prop = await this.props.load(url, {}, 1.5, modelInfo.modelColor);
+      const newMesh = prop.mesh;
+      const scale = modelInfo.modelScale ?? 1;
+      if (scale !== 1) newMesh.scale.multiplyScalar(scale);
+      newMesh.position.set(x, y, z);
+      newMesh.name = `pickup-${pickupId}`;
+      newMesh.userData.pickupId = pickupId;
+      newMesh.userData.entityId = entity;
+
+      // Compute XZ collision radius from bounding box
+      const box = new THREE.Box3().setFromObject(newMesh);
+      const size = box.getSize(new THREE.Vector3());
+      const xzRadius = Math.max(size.x, size.z) / 2;
+
+      const renderable = this.world.getComponent<Renderable>(entity, Renderable);
+      if (renderable) {
+        this.scene.remove(renderable.mesh);
+        this.scene.add(newMesh);
+        renderable.mesh = newMesh;
+      }
+
+      // Set collision radius on pickup component
+      const pickup = this.world.getComponent<ItemPickup>(entity, ItemPickup);
+      if (pickup) {
+        pickup.collisionRadius = xzRadius;
+      }
+    } catch (e) {
+      console.warn(`[Engine] Failed to load pickup model for ${pickupId} (item: ${itemId}), keeping placeholder`, e);
+    }
   }
 
   // Helper to spawn an entity with a loaded model
@@ -1205,6 +1461,12 @@ export class SugarEngine {
     this.scene.add(directionalLight);
     this.regionLights.push(directionalLight);
   }
+
+  /**
+   * Infer a standard clip name from FBX/GLTF clip names.
+   * Handles Mixamo names ("mixamo.com"), generic names ("Take 001"),
+   * and Blender-style names ("Armature|Walk").
+   */
 
   private onResize(container: HTMLElement): void {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
@@ -1424,6 +1686,13 @@ export class SugarEngine {
   }
 
   /**
+   * Check if menu key was just pressed (Q)
+   */
+  isMenuPressed(): boolean {
+    return this.input.isMenuPressed();
+  }
+
+  /**
    * Check if inventory key was just pressed (I)
    */
   isInventoryPressed(): boolean {
@@ -1477,9 +1746,10 @@ export class SugarEngine {
 
       const dx = pos.x - playerPos.x;
       const dz = pos.z - playerPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const centerDist = Math.sqrt(dx * dx + dz * dz);
+      const edgeDist = centerDist - pickup.collisionRadius;
 
-      if (dist < pickupRange) {
+      if (edgeDist < pickupRange) {
         return {
           id: pickup.id,
           itemId: pickup.itemId,
@@ -1511,9 +1781,10 @@ export class SugarEngine {
 
       const dx = pos.x - playerPos.x;
       const dz = pos.z - playerPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const centerDist = Math.sqrt(dx * dx + dz * dz);
+      const edgeDist = centerDist - pickup.collisionRadius;
 
-      if (dist < pickupRange) {
+      if (edgeDist < pickupRange) {
         // Remove entity from world FIRST (prevents RenderSystem from re-adding)
         this.world.removeEntity(entityId);
         const idx = this.pickupEntities.indexOf(entityId);
@@ -1577,6 +1848,17 @@ export class SugarEngine {
       movement.onScriptedComplete = resolve;
       movement.isMoving = true;
     });
+  }
+
+  /**
+   * Get current position of an NPC.
+   */
+  getNPCPosition(npcId: string): { x: number; y: number; z: number } | null {
+    const entity = this.findNPCEntity(npcId);
+    if (entity === null) return null;
+
+    const pos = this.world.getComponent<Position>(entity, Position);
+    return pos ? { x: pos.x, y: pos.y, z: pos.z } : null;
   }
 
   /**
@@ -1739,8 +2021,19 @@ export class SugarEngine {
   /**
    * Register an NPC directly (for development mode)
    */
-  registerNPC(id: string, name: string, dialogue?: string, behaviorTree?: import('../behavior').BTNode, behaviorMode?: import('../components').BehaviorMode): void {
-    this.npcDatabase.set(id, { id, name, dialogue, behaviorTree, behaviorMode });
+  registerNPC(id: string, name: string, dialogue?: string, behaviorTree?: import('../behavior').BTNode, behaviorMode?: import('../components').BehaviorMode, model?: string, modelHeight?: number, animations?: Record<string, string>): void {
+    this.npcDatabase.set(id, { id, name, dialogue, behaviorTree, behaviorMode, model, modelHeight, animations });
+  }
+
+  /**
+   * Register model info for an inspection (for development mode)
+   */
+  registerInspectionModel(inspectionId: string, model: string, modelScale?: number, modelColor?: number): void {
+    this.inspectionModelDatabase.set(inspectionId, { model, modelScale, modelColor });
+  }
+
+  registerItemModel(itemId: string, model: string, modelScale?: number, modelColor?: number): void {
+    this.itemModelDatabase.set(itemId, { model, modelScale, modelColor });
   }
 
   /**
@@ -1755,6 +2048,26 @@ export class SugarEngine {
    */
   getPlayerEntity(): number {
     return this.playerEntity;
+  }
+
+  /**
+   * Set the player model path. Must be called before the player is spawned (i.e. before loadRegion).
+   * Supports .glb and .fbx formats.
+   */
+  setPlayerModel(path: string): void {
+    this.playerModelPath = path;
+  }
+
+  /**
+   * Resolve an asset path using BASE_URL + project content base.
+   */
+  private resolveAssetPath(path: string): string {
+    return resolveContentUrl(this.contentBasePath, path);
+  }
+
+  /** Set additional animation clip paths (e.g. { idle: 'models/idle.fbx' }). */
+  setPlayerAnimations(anims: Record<string, string>): void {
+    this.playerAnimationPaths = anims;
   }
 
   /**

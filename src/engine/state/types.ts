@@ -29,6 +29,7 @@ export type WorldStateCondition =
   | { type: 'resonance'; comparison: 'eq' | 'gte' | 'lte'; value: number }
   | { type: 'battery'; comparison: 'eq' | 'gte' | 'lte'; value: number }
   | { type: 'hasSpell'; spellId: string }
+  | { type: 'canCastSpell'; spellId: string }
   | { type: 'flag'; key: string; value?: unknown }
   | { type: 'and'; conditions: WorldStateCondition[] }
   | { type: 'or'; conditions: WorldStateCondition[] }

@@ -11,6 +11,6 @@ export class ResonancePoint implements Component {
   constructor(
     public id: string,
     public resonancePointId: string,
-    public promptText: string = 'Attune'
+    public promptText: string = 'Resonance Point'
   ) {}
 }

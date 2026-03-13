@@ -5,8 +5,8 @@
  * migrated here from the legacy vanilla EditorApp over time.
  */
 
-import { useState, useRef } from 'react';
-import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, TextInput, ActionIcon, ScrollArea } from '@mantine/core';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
 import type { EditorTab } from './store/useEditorStore';
@@ -20,14 +20,27 @@ import { MagicPanel } from './panels/magic';
 import { PlayerPanel } from './panels/player';
 import { ResonancePanel } from './panels/resonance';
 import { VFXPanel } from './panels/vfx';
+import { SugarlangPanel } from './panels/sugarlang';
 import { WelcomeDialog } from './components/WelcomeDialog';
+import { NewGameDialog } from './components/NewGameDialog';
+import { OpenGameDialog } from './components/OpenGameDialog';
 import { ProjectMenu } from './components/ProjectMenu';
 import { ProjectExplorer } from './components/ProjectExplorer';
 import { EpisodeDialog } from './components/EpisodeDialog';
 import { EpisodeDetailsDialog } from './components/EpisodeDetailsDialog';
 import { PreviewManager } from './PreviewManager';
+import type { ProjectData as PreviewProjectData } from './PreviewManager';
+import type { PluginConfigData } from './store/useEditorStore';
+import { createGame, openGame, pickGameProjectFile, pickGameRootDirectory, saveGame } from './game-root/service';
+import { loadAllSugarlangArtifacts } from './game-root/plugin-artifacts';
+import {
+  buildPreviewProjectDocument,
+  buildProjectDocumentFromSnapshot,
+  buildRuntimeExportDocument,
+  type EditorProjectDocument,
+} from './game-root/project-document';
 
-const TABS: { value: EditorTab; label: string; icon: string }[] = [
+const BASE_TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'dialogues', label: 'Dialogues', icon: '💬' },
   { value: 'quests', label: 'Quests', icon: '📜' },
   { value: 'npcs', label: 'NPCs', icon: '👤' },
@@ -39,6 +52,30 @@ const TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'inspections', label: 'Inspections', icon: '🔍' },
   { value: 'regions', label: 'Regions', icon: '🗺️' },
 ];
+
+const PLUGIN_TABS: { value: EditorTab; label: string; icon: string; pluginId: string }[] = [
+  { value: 'sugarlang', label: 'Sugarlang', icon: '🌍', pluginId: 'sugarlang' },
+];
+
+const AVAILABLE_PLUGINS = [
+  {
+    id: 'sugaragent',
+    name: 'SugarAgent',
+    description: 'Agentic NPC conversation, memory, lore retrieval, and beat contracts.',
+  },
+  {
+    id: 'sugarlang',
+    name: 'Sugarlang',
+    description: 'Immersive language-learning overlay with learner bands, repair, and grounded vocabulary.',
+  },
+] as const;
+
+const SUGARAGENT_RUNTIME_MODE_OPTIONS = [
+  { value: 'llama', label: 'llama (default)' },
+  { value: 'auto', label: 'auto' },
+  { value: 'mock', label: 'mock (testing only)' },
+] as const;
+type SugarAgentRuntimeMode = (typeof SUGARAGENT_RUNTIME_MODE_OPTIONS)[number]['value'];
 
 const theme = createTheme({
   primaryColor: 'blue',
@@ -62,11 +99,110 @@ const theme = createTheme({
   },
 });
 
+function normalizePlugins(rawPlugins: unknown): PluginConfigData[] {
+  if (!Array.isArray(rawPlugins)) return [];
+  const normalized: PluginConfigData[] = [];
+
+  for (const entry of rawPlugins) {
+    if (typeof entry === 'string') {
+      const id = entry.trim();
+      if (id.length > 0) {
+        normalized.push({ id, enabled: true });
+      }
+      continue;
+    }
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== 'string' || record.id.trim().length === 0) continue;
+    const pluginId = record.id.trim();
+    const normalizedEntry: PluginConfigData = {
+      ...record,
+      id: pluginId,
+      enabled: record.enabled === false ? false : true,
+    } as PluginConfigData;
+    if (pluginId === 'sugaragent') {
+      normalizedEntry.runtimeMode = normalizeSugarAgentRuntimeMode(
+        normalizedEntry.runtimeMode ?? normalizedEntry.runtime,
+      );
+      delete normalizedEntry.runtime;
+    }
+    normalized.push(normalizedEntry);
+  }
+
+  return normalized;
+}
+
+function isPluginEnabled(plugins: PluginConfigData[], pluginId: string): boolean {
+  const id = pluginId.trim();
+  return plugins.some((entry) => entry.id === id && entry.enabled !== false);
+}
+
+function parseStringList(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeSugarAgentRuntimeMode(value: unknown): SugarAgentRuntimeMode {
+  if (value === 'auto' || value === 'mock' || value === 'llama') {
+    return value;
+  }
+  return 'llama';
+}
+
+function normalizeStringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter((entry) => entry.length > 0);
+}
+
+function toGameSlug(value: string | null | undefined): string {
+  const normalized = (value ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'untitled-game';
+}
+
+async function syncCliActiveGame(slug: string, rootPath: string, projectFilePath: string): Promise<void> {
+  const cleanSlug = toGameSlug(slug);
+  try {
+    const response = await fetch('/__sugarengine/active-game', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: cleanSlug,
+        rootPath,
+        projectFilePath,
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.warn(
+        `[Editor] Could not sync CLI active game to "${cleanSlug}" (${response.status} ${response.statusText})`,
+        detail,
+      );
+    }
+  } catch {
+    // Endpoint is only available in local dev server context.
+  }
+}
+
 export function Editor() {
   const activeTab = useEditorStore((s) => s.activeTab);
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
   const projectLoaded = useEditorStore((s) => s.projectLoaded);
-  const setProjectLoaded = useEditorStore((s) => s.setProjectLoaded);
+  const projectName = useEditorStore((s) => s.projectName);
+  const setProjectContext = useEditorStore((s) => s.setProjectContext);
+  const gameId = useEditorStore((s) => s.gameId);
+  const gameRootPath = useEditorStore((s) => s.gameRootPath);
+  const projectFilePath = useEditorStore((s) => s.projectFilePath);
+  const projectCreatedAt = useEditorStore((s) => s.projectCreatedAt);
+  const projectVersion = useEditorStore((s) => s.projectVersion);
+  const defaultEpisodeId = useEditorStore((s) => s.defaultEpisodeId);
   const npcs = useEditorStore((s) => s.npcs);
   const setNPCs = useEditorStore((s) => s.setNPCs);
   const dialogues = useEditorStore((s) => s.dialogues);
@@ -81,10 +217,23 @@ export function Editor() {
   const setSeasons = useEditorStore((s) => s.setSeasons);
   const episodes = useEditorStore((s) => s.episodes);
   const setEpisodes = useEditorStore((s) => s.setEpisodes);
+  const plugins = useEditorStore((s) => s.plugins);
+  const setPlugins = useEditorStore((s) => s.setPlugins);
+  const enabledPluginIds = useMemo(() => new Set(plugins.filter((p) => p.enabled !== false).map((p) => p.id)), [plugins]);
+  const tabs = useMemo(() => [
+    ...BASE_TABS,
+    ...PLUGIN_TABS.filter((t) => enabledPluginIds.has(t.pluginId)),
+  ], [enabledPluginIds]);
   const regions = useEditorStore((s) => s.regions);
   const setRegions = useEditorStore((s) => s.setRegions);
   const playerCaster = useEditorStore((s) => s.playerCaster);
   const setPlayerCaster = useEditorStore((s) => s.setPlayerCaster);
+  const playerModel = useEditorStore((s) => s.playerModel);
+  const setPlayerModel = useEditorStore((s) => s.setPlayerModel);
+  const playerAnimations = useEditorStore((s) => s.playerAnimations);
+  const setPlayerAnimations = useEditorStore((s) => s.setPlayerAnimations);
+  const titleScreen = useEditorStore((s) => s.titleScreen);
+  const setTitleScreen = useEditorStore((s) => s.setTitleScreen);
   const spells = useEditorStore((s) => s.spells);
   const setSpells = useEditorStore((s) => s.setSpells);
   const resonancePoints = useEditorStore((s) => s.resonancePoints);
@@ -109,13 +258,45 @@ export function Editor() {
   const [episodeDetailsDialogOpen, setEpisodeDetailsDialogOpen] = useState(false);
 
   // New project dialog state (for creating from menu)
-  const [newProjectDialogOpen, setNewProjectDialogOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('My Game');
+  const [newGameDialogOpen, setNewGameDialogOpen] = useState(false);
+  const [newGameName, setNewGameName] = useState('My Game');
+  const [newGameSlug, setNewGameSlug] = useState('my-game');
+  const [newGameRootPath, setNewGameRootPath] = useState('games/my-game');
+  const [newGameSlugDirty, setNewGameSlugDirty] = useState(false);
+  const [newGameRootPathDirty, setNewGameRootPathDirty] = useState(false);
+  const [pickingNewGameRoot, setPickingNewGameRoot] = useState(false);
+  const [openGameDialogOpen, setOpenGameDialogOpen] = useState(false);
+  const [openGamePath, setOpenGamePath] = useState('');
+  const [pickingOpenGamePath, setPickingOpenGamePath] = useState(false);
+  const [gameLifecycleBusy, setGameLifecycleBusy] = useState(false);
+  const [gameLifecycleError, setGameLifecycleError] = useState<string | null>(null);
+  const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
+  const [sugarAgentSettingsOpen, setSugarAgentSettingsOpen] = useState(false);
+  const [resettingSugarAgentRuntime, setResettingSugarAgentRuntime] = useState(false);
+  const [resettingSugarAgentSessions, setResettingSugarAgentSessions] = useState(false);
+  const [reingestingSugarAgentLore, setReingestingSugarAgentLore] = useState(false);
+  const [sugarAgentRuntimeMessage, setSugarAgentRuntimeMessage] = useState<{
+    kind: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
+
+  const [saveFlashVisible, setSaveFlashVisible] = useState(false);
+  const [sugarlangDirty, setSugarlangDirty] = useState(false);
+  const sugarlangSaveHandlerRef = useRef<(() => Promise<void>) | null>(null);
+  const sugarlangOpenSettingsHandlerRef = useRef<(() => void) | null>(null);
+
+  // Auto-hide the save flash after a short delay.
+  useEffect(() => {
+    if (!saveFlashVisible) return;
+    const timer = setTimeout(() => setSaveFlashVisible(false), 1800);
+    return () => clearTimeout(timer);
+  }, [saveFlashVisible]);
 
   // Get current episode
   const currentEpisode = episodes.find((e) => e.id === currentEpisodeId);
+  const resolvedGameId = gameId ?? toGameSlug(projectName ?? 'untitled-game');
 
-  const isEditorEnabled = projectLoaded && currentEpisodeId;
+  const isEditorEnabled = Boolean(projectLoaded && currentEpisodeId);
   const setDirty = useEditorStore((s) => s.setDirty);
 
   // Preview manager (singleton)
@@ -124,32 +305,189 @@ export function Editor() {
     previewManagerRef.current = new PreviewManager();
   }
 
-  // Open preview
-  const handlePreview = () => {
-    if (!previewManagerRef.current) return;
+  const resetNewGameDraft = () => {
+    const nextName = 'My Game';
+    const nextSlug = toGameSlug(nextName);
+    setNewGameName(nextName);
+    setNewGameSlug(nextSlug);
+    setNewGameRootPath(`games/${nextSlug}`);
+    setNewGameSlugDirty(false);
+    setNewGameRootPathDirty(false);
+  };
 
-    const projectData = {
-      version: 1,
-      meta: {
-        gameId: 'editor-preview',
-        name: 'Preview',
-      },
+  const closeNewGameDialog = () => {
+    setNewGameDialogOpen(false);
+    setGameLifecycleError(null);
+    if (!projectLoaded) {
+      setWelcomeDialogOpen(true);
+    }
+  };
+
+  const closeOpenGameDialog = () => {
+    setOpenGameDialogOpen(false);
+    setGameLifecycleError(null);
+    if (!projectLoaded) {
+      setWelcomeDialogOpen(true);
+    }
+  };
+
+  const openNewGameDialog = () => {
+    setGameLifecycleError(null);
+    resetNewGameDraft();
+    setWelcomeDialogOpen(false);
+    setOpenGameDialogOpen(false);
+    setNewGameDialogOpen(true);
+  };
+
+  const openOpenGameDialog = () => {
+    setGameLifecycleError(null);
+    setOpenGamePath('');
+    setWelcomeDialogOpen(false);
+    setNewGameDialogOpen(false);
+    setOpenGameDialogOpen(true);
+  };
+
+  const applyProjectToEditor = async (result: {
+    rootPath: string;
+    projectFilePath: string;
+    project: EditorProjectDocument;
+  }) => {
+    const project = result.project;
+    const loadedSeasons = project.seasons;
+    const loadedEpisodes = project.episodes;
+    const firstSeason = [...loadedSeasons].sort((a, b) => a.order - b.order)[0];
+    const preferredEpisodeId = project.defaultEpisode
+      ?? loadedEpisodes[0]?.id
+      ?? null;
+    const preferredEpisode = preferredEpisodeId
+      ? loadedEpisodes.find((episode) => episode.id === preferredEpisodeId) ?? null
+      : null;
+    const resolvedSeasonId = preferredEpisode?.seasonId
+      ?? firstSeason?.id
+      ?? null;
+    const resolvedEpisodeId = preferredEpisode?.id ?? (resolvedSeasonId
+      ? [...loadedEpisodes]
+        .filter((episode) => episode.seasonId === resolvedSeasonId)
+        .sort((a, b) => a.order - b.order)[0]?.id ?? null
+      : null);
+
+    setSeasons(loadedSeasons);
+    setEpisodes(loadedEpisodes);
+    setPlugins(normalizePlugins(project.plugins));
+    setNPCs(project.npcs);
+    setDialogues(project.dialogues);
+    setQuests(project.quests);
+    setItems(project.items);
+    setInspections(project.inspections);
+    setRegions(project.regions);
+    setPlayerCaster(project.playerCaster);
+    setPlayerModel(project.playerModel);
+    setPlayerAnimations(project.playerAnimations);
+    setTitleScreen(project.titleScreen);
+    setSpells(project.spells);
+    setResonancePoints(project.resonancePoints);
+    setVFXDefinitions(project.vfxDefinitions);
+    setCurrentSeason(resolvedSeasonId);
+    setCurrentEpisode(resolvedEpisodeId);
+    setProjectContext({
+      loaded: true,
+      name: project.meta.name,
+      gameId: project.meta.gameId,
+      gameRootPath: result.rootPath,
+      projectFilePath: result.projectFilePath,
+      projectCreatedAt: project.meta.createdAt ?? null,
+      projectVersion: project.meta.version,
+      defaultEpisodeId: project.defaultEpisode ?? resolvedEpisodeId,
+    });
+    setSugarlangDirty(false);
+    setDirty(false);
+    setWelcomeDialogOpen(false);
+    setNewGameDialogOpen(false);
+    setOpenGameDialogOpen(false);
+    setGameLifecycleError(null);
+    await syncCliActiveGame(project.meta.gameId, result.rootPath, result.projectFilePath);
+  };
+
+  const buildCurrentProjectDocument = (): EditorProjectDocument => {
+    return buildProjectDocumentFromSnapshot({
+      gameId: resolvedGameId,
+      name: projectName || 'Untitled Game',
+      version: projectVersion,
+      createdAt: projectCreatedAt,
+      defaultEpisode: defaultEpisodeId ?? currentEpisodeId,
       seasons,
       episodes,
+      plugins,
+      npcs,
       dialogues,
       quests,
-      npcs,
       items,
       inspections,
       regions,
       playerCaster,
+      playerModel,
+      playerAnimations,
+      titleScreen,
       spells,
       resonancePoints,
       vfxDefinitions,
-    };
+    });
+  };
 
-    console.log('[Editor] handlePreview: playerCaster =', playerCaster);
-    previewManagerRef.current.openPreviewWithData(projectData, currentEpisodeId || undefined);
+  const handleSugarlangDirtyChange = useCallback((dirty: boolean) => {
+    setSugarlangDirty(dirty);
+  }, []);
+
+  const handleSugarlangSaveHandlerChange = useCallback((handler: (() => Promise<void>) | null) => {
+    sugarlangSaveHandlerRef.current = handler;
+  }, []);
+
+  const handleSugarlangOpenSettingsHandlerChange = useCallback((handler: (() => void) | null) => {
+    sugarlangOpenSettingsHandlerRef.current = handler;
+  }, []);
+
+  // Open preview
+  const handlePreview = async () => {
+    if (!previewManagerRef.current) return;
+
+    try {
+      if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
+        await sugarlangSaveHandlerRef.current();
+        setSugarlangDirty(false);
+      }
+
+      const sugarlangEnabled = enabledPluginIds.has('sugarlang');
+      let sugarlangConfig: PreviewProjectData['sugarlang'];
+
+      if (sugarlangEnabled) {
+        const artifactFiles = gameRootPath
+          ? await loadAllSugarlangArtifacts(gameRootPath, resolvedGameId)
+          : new Map<string, string>();
+
+        const slPlugin = plugins.find((p) => p.id === 'sugarlang');
+        const slDisabled = Array.isArray(slPlugin?.disabledLanguages) ? slPlugin.disabledLanguages as string[] : [];
+
+        sugarlangConfig = artifactFiles.size > 0
+          ? { enabled: true, artifacts: Object.fromEntries(artifactFiles), disabledLanguages: slDisabled }
+          : { enabled: true, disabledLanguages: slDisabled };
+      }
+
+      const projectData: PreviewProjectData = {
+        version: 1,
+        ...buildPreviewProjectDocument(
+          buildCurrentProjectDocument(),
+          `__sugarengine/game-assets/${resolvedGameId}/`,
+        ),
+        sugarlang: sugarlangConfig,
+      };
+
+      console.log('[Editor] handlePreview: playerCaster =', playerCaster);
+      previewManagerRef.current.openPreviewWithData(projectData, currentEpisodeId || undefined);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setGameLifecycleError(message);
+      alert(`Preview failed: ${message}`);
+    }
   };
 
   // Create new episode
@@ -166,6 +504,18 @@ export function Editor() {
 
     setEpisodes([...episodes, newEpisode]);
     setCurrentEpisode(newEpisode.id);
+    if (!defaultEpisodeId) {
+      setProjectContext({
+        loaded: projectLoaded,
+        name: projectName,
+        gameId: resolvedGameId,
+        gameRootPath,
+        projectFilePath,
+        projectCreatedAt,
+        projectVersion,
+        defaultEpisodeId: newEpisode.id,
+      });
+    }
     setDirty(true);
   };
 
@@ -175,37 +525,103 @@ export function Editor() {
     return `Episode ${existingCount + 1}`;
   };
 
-  // Project handlers
-  const handleCreateProject = (name: string) => {
-    // Create a default season and episode
-    const seasonId = crypto.randomUUID();
-    const episodeId = crypto.randomUUID();
-
-    const newSeason = { id: seasonId, name: 'Season 1', order: 1 };
-    const newEpisode = { id: episodeId, seasonId, name: 'Episode 1', order: 1 };
-
-    setSeasons([newSeason]);
-    setEpisodes([newEpisode]);
-    setNPCs([]);
-    setDialogues([]);
-    setQuests([]);
-    setItems([]);
-    setInspections([]);
-    setRegions([]);
-    setPlayerCaster(null);
-    setSpells([]);
-    setResonancePoints([]);
-    setVFXDefinitions([]);
-    setCurrentSeason(seasonId);
-    setCurrentEpisode(episodeId);
-    setProjectLoaded(true, name);
-    setWelcomeDialogOpen(false);
-    setNewProjectDialogOpen(false);
+  const handleNewGameNameChange = (value: string) => {
+    const nextSlug = toGameSlug(value);
+    const currentSuggestedSlug = toGameSlug(newGameName);
+    const currentSuggestedRoot = `games/${currentSuggestedSlug}`;
+    setNewGameName(value);
+    if (!newGameSlugDirty) {
+      setNewGameSlug(nextSlug);
+    }
+    if (!newGameRootPathDirty || newGameRootPath === currentSuggestedRoot) {
+      setNewGameRootPath(`games/${nextSlug}`);
+    }
   };
 
-  const handleOpenProjectFromFile = async () => {
-    // Same file picker logic as in welcome dialog
-    await handleOpenProject();
+  const handleNewGameSlugChange = (value: string) => {
+    const nextSlug = toGameSlug(value);
+    const currentSuggestedRoot = `games/${newGameSlug}`;
+    setNewGameSlug(nextSlug);
+    setNewGameSlugDirty(true);
+    if (!newGameRootPathDirty || newGameRootPath === currentSuggestedRoot) {
+      setNewGameRootPath(`games/${nextSlug}`);
+    }
+  };
+
+  const handleNewGameRootPathChange = (value: string) => {
+    setNewGameRootPath(value);
+    setNewGameRootPathDirty(true);
+  };
+
+  const handleBrowseNewGameRootPath = async () => {
+    setPickingNewGameRoot(true);
+    setGameLifecycleError(null);
+    try {
+      const selectedPath = await pickGameRootDirectory();
+      if (!selectedPath) return;
+      setNewGameRootPath(selectedPath);
+      setNewGameRootPathDirty(true);
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPickingNewGameRoot(false);
+    }
+  };
+
+  const handleCreateGame = async () => {
+    const name = newGameName.trim();
+    const slug = toGameSlug(newGameSlug);
+    const rootPath = newGameRootPath.trim();
+    if (!name || !rootPath) {
+      setGameLifecycleError('Game name and root directory are required.');
+      return;
+    }
+
+    setGameLifecycleBusy(true);
+    setGameLifecycleError(null);
+    try {
+      const result = await createGame({ name, slug, rootPath });
+      await applyProjectToEditor(result);
+      resetNewGameDraft();
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGameLifecycleBusy(false);
+    }
+  };
+
+  const handleOpenGame = async () => {
+    const inputPath = openGamePath.trim();
+    if (!inputPath) {
+      setGameLifecycleError('Select a project.sgrgame file.');
+      return;
+    }
+
+    setGameLifecycleBusy(true);
+    setGameLifecycleError(null);
+    try {
+      const result = await openGame(inputPath);
+      await applyProjectToEditor(result);
+      setOpenGamePath('');
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGameLifecycleBusy(false);
+    }
+  };
+
+  const handleBrowseOpenGamePath = async () => {
+    setPickingOpenGamePath(true);
+    setGameLifecycleError(null);
+    try {
+      const selectedPath = await pickGameProjectFile();
+      if (!selectedPath) return;
+      setOpenGamePath(selectedPath);
+    } catch (error) {
+      setGameLifecycleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPickingOpenGamePath(false);
+    }
   };
 
   const handleOpenEpisode = (seasonId: string, episodeId: string) => {
@@ -230,92 +646,70 @@ export function Editor() {
     // Select another episode in the same season, or clear selection
     const nextEpisode = remainingEpisodes.find((e) => e.seasonId === currentSeasonId);
     setCurrentEpisode(nextEpisode?.id || null);
+    if (defaultEpisodeId === currentEpisodeId) {
+      setProjectContext({
+        loaded: projectLoaded,
+        name: projectName,
+        gameId: resolvedGameId,
+        gameRootPath,
+        projectFilePath,
+        projectCreatedAt,
+        projectVersion,
+        defaultEpisodeId: nextEpisode?.id ?? null,
+      });
+    }
     setDirty(true);
   };
 
-  const handleSaveProject = async () => {
-    // Gather all project data
-    const projectData = {
-      meta: {
-        name: 'My Project',
-        version: '1.0.0',
-        savedAt: new Date().toISOString(),
-      },
-      seasons,
-      episodes,
-      npcs,
-      dialogues,
-      quests,
-      items,
-      inspections,
-      regions,
-      playerCaster,
-      spells,
-      resonancePoints,
-      vfxDefinitions,
-    };
+  const handleSaveGame = async () => {
+    if (!projectFilePath || !gameRootPath) {
+      const message = 'No game root is open. Open or create a game before saving.';
+      setGameLifecycleError(message);
+      alert(message);
+      return;
+    }
 
-    const jsonContent = JSON.stringify(projectData, null, 2);
-
+    setGameLifecycleBusy(true);
+    setGameLifecycleError(null);
     try {
-      // Try File System Access API first (Chrome/Edge)
-      if ('showSaveFilePicker' in window) {
-        const handle = await (window as Window & {
-          showSaveFilePicker: (options: {
-            suggestedName?: string;
-            types: { description: string; accept: Record<string, string[]> }[];
-          }) => Promise<FileSystemFileHandle>;
-        }).showSaveFilePicker({
-          suggestedName: 'project.sgrgame',
-          types: [{
-            description: 'Sugar Engine Project',
-            accept: { 'application/json': ['.sgrgame'] },
-          }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(jsonContent);
-        await writable.close();
-        setDirty(false);
-      } else {
-        // Fallback to download
-        const blob = new Blob([jsonContent], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'project.sgrgame';
-        a.click();
-        URL.revokeObjectURL(url);
-        setDirty(false);
+      if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
+        await sugarlangSaveHandlerRef.current();
       }
-    } catch (err) {
-      // User cancelled or error
-      console.error('Save failed:', err);
+      const project = buildCurrentProjectDocument();
+      await saveGame({
+        rootPath: gameRootPath,
+        projectFilePath,
+        project,
+      });
+      setProjectContext({
+        loaded: true,
+        name: project.meta.name,
+        gameId: project.meta.gameId,
+        gameRootPath,
+        projectFilePath,
+        projectCreatedAt: project.meta.createdAt ?? null,
+        projectVersion: project.meta.version,
+        defaultEpisodeId: project.defaultEpisode ?? currentEpisodeId,
+      });
+      setSugarlangDirty(false);
+      setDirty(false);
+      console.log(`[Editor] Project saved to ${projectFilePath}`);
+      setSaveFlashVisible(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setGameLifecycleError(message);
+      alert(`Save failed: ${message}`);
+    } finally {
+      setGameLifecycleBusy(false);
     }
   };
 
   const handlePublish = async () => {
     // Build game data for publishing
-    const gameData = {
-      version: 1,
-      defaultEpisode: currentEpisodeId,
-      seasons,
-      episodes,
-      dialogues,
-      quests,
-      npcs,
-      items,
-      inspections,
-      regions,
-      playerCaster,
-      spells,
-      resonancePoints,
-      vfxDefinitions,
-    };
-
-    const jsonContent = JSON.stringify(gameData, null, 2);
+    const jsonContent = JSON.stringify(buildRuntimeExportDocument(buildCurrentProjectDocument()), null, 2);
 
     try {
-      // Use File System Access API to save to public/game.json
+      // Optional export of a runtime game.json snapshot.
       if ('showSaveFilePicker' in window) {
         const handle = await (window as Window & {
           showSaveFilePicker: (options: {
@@ -333,7 +727,10 @@ export function Editor() {
         await writable.write(jsonContent);
         await writable.close();
         console.log('[Editor] Published game.json');
-        alert('Published! Save to the public/ folder, then run:\n\nnpm run publish:local\n\nto preview the build.');
+        alert(
+          'Exported game.json snapshot.\n\n' +
+          'Use this for runtime inspection or downstream build tooling.'
+        );
       } else {
         // Fallback to download
         const blob = new Blob([jsonContent], { type: 'application/json' });
@@ -343,121 +740,14 @@ export function Editor() {
         a.download = 'game.json';
         a.click();
         URL.revokeObjectURL(url);
-        alert('Downloaded game.json!\n\nMove it to the public/ folder, then run:\n\nnpm run publish:local');
+        alert(
+          'Downloaded game.json snapshot.\n\n' +
+          'Use this for runtime inspection or downstream build tooling.'
+        );
       }
     } catch (err) {
       // User cancelled or error
       console.error('Publish failed:', err);
-    }
-  };
-
-  const handleOpenProject = async () => {
-    try {
-      let fileText: string;
-      let fileName: string;
-
-      // Try File System Access API first (Chrome/Edge)
-      if ('showOpenFilePicker' in window) {
-        const handles = await (window as Window & {
-          showOpenFilePicker: (options: {
-            types: { description: string; accept: Record<string, string[]> }[];
-          }) => Promise<FileSystemFileHandle[]>;
-        }).showOpenFilePicker({
-          types: [{
-            description: 'Sugar Engine Project',
-            accept: { 'application/json': ['.sgrgame', '.json'] },
-          }],
-        });
-        const handle = handles[0];
-        if (!handle) return;
-        const file = await handle.getFile();
-        fileText = await file.text();
-        fileName = file.name;
-      } else {
-        // Fallback to file input
-        const result = await new Promise<{ text: string; name: string } | null>((resolve) => {
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = '.sgrgame,.json';
-          input.onchange = async () => {
-            const file = input.files?.[0];
-            if (file) {
-              const text = await file.text();
-              resolve({ text, name: file.name });
-            } else {
-              resolve(null);
-            }
-          };
-          input.oncancel = () => resolve(null);
-          input.click();
-        });
-        if (!result) return;
-        fileText = result.text;
-        fileName = result.name;
-      }
-
-      // Parse and load the project data
-      const data = JSON.parse(fileText);
-      const projectName = data.meta?.name || fileName.replace('.sgrgame', '').replace('.json', '') || 'Untitled Project';
-
-      // Load seasons and episodes
-      const loadedSeasons = (data.seasons || []).map((s: { id: string; name: string; order: number }) => ({
-        id: s.id,
-        name: s.name,
-        order: s.order,
-      }));
-      const loadedEpisodes = (data.episodes || []).map((e: {
-        id: string;
-        seasonId: string;
-        name: string;
-        order: number;
-        startRegion?: string;
-        completionCondition?: { type: 'quest'; questId: string };
-      }) => ({
-        id: e.id,
-        seasonId: e.seasonId,
-        name: e.name,
-        order: e.order,
-        startRegion: e.startRegion,
-        completionCondition: e.completionCondition,
-      }));
-
-      setSeasons(loadedSeasons);
-      setEpisodes(loadedEpisodes);
-
-      // Load other data
-      setNPCs(data.npcs || []);
-      setDialogues(data.dialogues || []);
-      setQuests(data.quests || []);
-      setItems(data.items || []);
-      setInspections(data.inspections || []);
-      setRegions(data.regions || []);
-      setPlayerCaster(data.playerCaster || null);
-      setSpells(data.spells || []);
-      setResonancePoints(data.resonancePoints || []);
-      setVFXDefinitions(data.vfxDefinitions || []);
-
-      // Set current season/episode to first available
-      const firstSeason = loadedSeasons.sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
-      if (firstSeason) {
-        setCurrentSeason(firstSeason.id);
-        const firstEpisode = loadedEpisodes
-          .filter((e: { seasonId: string }) => e.seasonId === firstSeason.id)
-          .sort((a: { order: number }, b: { order: number }) => a.order - b.order)[0];
-        if (firstEpisode) {
-          setCurrentEpisode(firstEpisode.id);
-        }
-      }
-
-      setProjectLoaded(true, projectName);
-      setWelcomeDialogOpen(false);
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        // User cancelled - ignore
-        return;
-      }
-      console.error('Failed to open project:', e);
-      alert('Failed to open project: ' + (e as Error).message);
     }
   };
 
@@ -471,6 +761,210 @@ export function Editor() {
     (r.triggers ?? []).map((t) => ({ id: t.id, name: t.name || t.id }))
   );
 
+  const handleSetPluginEnabled = (pluginId: string, enabled: boolean) => {
+    const existing = plugins.find((entry) => entry.id === pluginId);
+    const nextPlugins = plugins.filter((entry) => entry.id !== pluginId);
+    if (!enabled && !existing) {
+      setPlugins(nextPlugins);
+      setDirty(true);
+      return;
+    }
+    const nextConfig: PluginConfigData = {
+      ...(existing ?? {}),
+      id: pluginId,
+      enabled,
+    };
+    if (pluginId === 'sugaragent' && enabled) {
+      nextConfig.runtimeMode = normalizeSugarAgentRuntimeMode(
+        nextConfig.runtimeMode ?? nextConfig.runtime,
+      );
+      delete nextConfig.runtime;
+    }
+    nextPlugins.push(nextConfig);
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
+
+  const getPluginConfig = (pluginId: string): PluginConfigData | null => (
+    plugins.find((entry) => entry.id === pluginId) ?? null
+  );
+
+  const sugarAgentPluginConfig = getPluginConfig('sugaragent');
+  const sugarAgentGlobalSafetyBounds = normalizeStringArrayValue(
+    sugarAgentPluginConfig?.globalSafetyBounds ?? sugarAgentPluginConfig?.safetyBounds,
+  );
+  const sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
+    sugarAgentPluginConfig?.runtimeMode ?? sugarAgentPluginConfig?.runtime,
+  );
+
+  const handleSetSugarAgentGlobalSafetyBounds = (value: string) => {
+    const nextBounds = parseStringList(value);
+    const existing = sugarAgentPluginConfig;
+    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
+    const nextConfig: PluginConfigData = {
+      ...(existing ?? {}),
+      id: 'sugaragent',
+      enabled: existing?.enabled === false ? false : true,
+      runtimeMode: normalizeSugarAgentRuntimeMode(existing?.runtimeMode ?? existing?.runtime),
+    };
+    if (nextBounds.length > 0) {
+      nextConfig.globalSafetyBounds = nextBounds;
+    } else {
+      delete nextConfig.globalSafetyBounds;
+    }
+    delete nextConfig.safetyBounds;
+    delete nextConfig.runtime;
+    nextPlugins.push(nextConfig);
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
+
+  const handleSetSugarAgentRuntimeMode = (value: string | null) => {
+    const existing = sugarAgentPluginConfig;
+    const mode = normalizeSugarAgentRuntimeMode(value ?? existing?.runtimeMode ?? existing?.runtime);
+    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
+    const nextConfig: PluginConfigData = {
+      ...(existing ?? {}),
+      id: 'sugaragent',
+      enabled: existing?.enabled === false ? false : true,
+      runtimeMode: mode,
+    };
+    delete nextConfig.runtime;
+    nextPlugins.push(nextConfig);
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
+
+  const handleResetSugarAgentRuntime = async () => {
+    if (resettingSugarAgentRuntime) return;
+    setResettingSugarAgentRuntime(true);
+    setSugarAgentRuntimeMessage({
+      kind: 'info',
+      text: 'Resetting SugarAgent runtime cache...',
+    });
+    try {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'unloadModel' }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      const payload = await response.json().catch(() => ({} as { detail?: string }));
+      setSugarAgentRuntimeMessage({
+        kind: 'success',
+        text: payload.detail ?? 'SugarAgent runtime cache cleared.',
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSugarAgentRuntimeMessage({
+        kind: 'error',
+        text: `Could not reset SugarAgent runtime cache: ${detail}`,
+      });
+    } finally {
+      setResettingSugarAgentRuntime(false);
+    }
+  };
+
+  const handleReingestSugarAgentLore = async () => {
+    if (reingestingSugarAgentLore) return;
+    setReingestingSugarAgentLore(true);
+    setSugarAgentRuntimeMessage({
+      kind: 'info',
+      text: 'Re-ingesting lore and clearing runtime cache...',
+    });
+    try {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          op: 'reingestLore',
+          gameId: resolvedGameId,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      const payload = await response.json().catch(() => ({} as {
+        detail?: string;
+        counts?: { chunks?: number; files?: number };
+      }));
+      const chunkCount = typeof payload.counts?.chunks === 'number'
+        ? payload.counts.chunks
+        : null;
+      const detail = payload.detail ?? 'Lore re-ingested and runtime cache cleared.';
+      setSugarAgentRuntimeMessage({
+        kind: 'success',
+        text: chunkCount !== null ? `${detail} (${chunkCount} chunks)` : detail,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSugarAgentRuntimeMessage({
+        kind: 'error',
+        text: `Could not re-ingest lore: ${detail}`,
+      });
+    } finally {
+      setReingestingSugarAgentLore(false);
+    }
+  };
+
+  const handleResetSugarAgentSessions = async () => {
+    if (resettingSugarAgentSessions) return;
+    setResettingSugarAgentSessions(true);
+    setSugarAgentRuntimeMessage({
+      kind: 'info',
+      text: `Clearing all persisted NPC sessions for ${resolvedGameId}...`,
+    });
+    try {
+      const response = await fetch('/__sugaragent/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          op: 'clearSessionsForGame',
+          gameId: resolvedGameId,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || `${response.status} ${response.statusText}`);
+      }
+      const payload = await response.json().catch(() => ({} as {
+        detail?: string;
+        removedFiles?: string[];
+      }));
+      const removedCount = Array.isArray(payload.removedFiles) ? payload.removedFiles.length : null;
+      const detail = payload.detail ?? `Persisted NPC sessions cleared for ${resolvedGameId}.`;
+      setSugarAgentRuntimeMessage({
+        kind: 'success',
+        text: removedCount !== null ? `${detail} (${removedCount} files removed)` : detail,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSugarAgentRuntimeMessage({
+        kind: 'error',
+        text: `Could not clear persisted NPC sessions: ${detail}`,
+      });
+    } finally {
+      setResettingSugarAgentSessions(false);
+    }
+  };
+
+  const handleOpenPluginSettings = useCallback((pluginId: string) => {
+    setPluginsDialogOpen(false);
+
+    if (pluginId === 'sugaragent') {
+      setSugarAgentSettingsOpen(true);
+      return;
+    }
+
+    if (pluginId === 'sugarlang') {
+      sugarlangOpenSettingsHandlerRef.current?.();
+    }
+  }, []);
+
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
       {/* All panels are rendered to maintain hook consistency - they use render props */}
@@ -478,6 +972,8 @@ export function Editor() {
         dialogues={dialogues as any}
         onDialoguesChange={setDialogues as any}
         npcs={npcList}
+        items={itemList}
+        quests={quests as any}
       >
         {(dialoguePanel) => (
           <QuestPanel
@@ -487,6 +983,7 @@ export function Editor() {
             items={itemList}
             dialogues={dialogues.map((d) => ({ id: d.id, name: d.name || d.id }))}
             triggers={triggerList}
+            spells={spells.map((s) => ({ id: s.id, name: s.name }))}
           >
             {(questPanel) => (
               <NPCPanel
@@ -527,6 +1024,10 @@ export function Editor() {
                                       <PlayerPanel
                                         playerCaster={playerCaster}
                                         onPlayerCasterChange={setPlayerCaster}
+                                        playerModel={playerModel}
+                                        onPlayerModelChange={setPlayerModel}
+                                        playerAnimations={playerAnimations}
+                                        onPlayerAnimationsChange={setPlayerAnimations}
                                       >
                                         {(playerPanel) => (
                                       <RegionPanel
@@ -539,7 +1040,24 @@ export function Editor() {
                                 vfxDefinitions={vfxDefinitions.map((v) => ({ id: v.id, name: v.name }))}
                                 episodes={episodeList}
                               >
-                                  {(regionPanel) => {
+                                  {(regionPanel) => (
+                                    <SugarlangPanel
+                                      gameRootPath={gameRootPath}
+                                      gameId={resolvedGameId}
+                                      plugins={plugins}
+                                      onPluginsChange={setPlugins}
+                                      onDirtyChange={handleSugarlangDirtyChange}
+                                      onRegisterSaveHandler={handleSugarlangSaveHandlerChange}
+                                      onRegisterOpenSettingsHandler={handleSugarlangOpenSettingsHandlerChange}
+                                      projectInput={{
+                                        quests: quests as any,
+                                        dialogues: dialogues as any,
+                                        npcs: npcs as any,
+                                        regions: regions as any,
+                                        items: items as any,
+                                      }}
+                                    >
+                                      {(sugarlangPanel) => {
                                         // Select the panel based on active tab
                                         const panelContent =
                                           activeTab === 'dialogues' ? dialoguePanel :
@@ -552,6 +1070,7 @@ export function Editor() {
                                           activeTab === 'player' ? playerPanel :
                                           activeTab === 'inspections' ? inspectionPanel :
                                           activeTab === 'regions' ? regionPanel :
+                                          activeTab === 'sugarlang' ? sugarlangPanel :
                                           npcPanel;
 
                               return (
@@ -562,7 +1081,7 @@ export function Editor() {
                                   padding={0}
                                   styles={{
                                     root: { background: '#1e1e2e' },
-                                    main: { background: '#1e1e2e' },
+                                    main: { background: '#1e1e2e', height: '100vh', overflow: 'hidden' },
                                     header: { background: '#181825', borderBottom: '1px solid #313244' },
                                     navbar: { background: '#1e1e2e', borderRight: '1px solid #313244' },
                                     aside: { background: '#1e1e2e', borderLeft: '1px solid #313244' },
@@ -577,9 +1096,11 @@ export function Editor() {
 
                                       {/* Project menu */}
                                       <ProjectMenu
-                                        onNewProject={() => setNewProjectDialogOpen(true)}
-                                        onOpenProject={handleOpenProjectFromFile}
-                                        onSaveProject={handleSaveProject}
+                                        onNewGame={openNewGameDialog}
+                                        onOpenGame={openOpenGameDialog}
+                                        onSaveGame={handleSaveGame}
+                                        onExportJson={handlePublish}
+                                        onManagePlugins={() => setPluginsDialogOpen(true)}
                                         projectLoaded={projectLoaded}
                                       />
 
@@ -624,13 +1145,6 @@ export function Editor() {
                                           },
                                           tab: {
                                             color: '#6c7086',
-                                            '&[data-active]': {
-                                              color: '#cdd6f4',
-                                              background: '#1e1e2e',
-                                            },
-                                            '&:hover': {
-                                              background: '#313244',
-                                            },
                                           },
                                           list: {
                                             borderBottom: 'none',
@@ -638,8 +1152,16 @@ export function Editor() {
                                         }}
                                       >
                                         <Tabs.List>
-                                          {TABS.map((tab) => (
-                                            <Tabs.Tab key={tab.value} value={tab.value}>
+                                          {tabs.map((tab) => (
+                                            <Tabs.Tab
+                                              key={tab.value}
+                                              value={tab.value}
+                                              c={activeTab === tab.value ? '#cdd6f4' : '#6c7086'}
+                                              style={{
+                                                background: activeTab === tab.value ? '#1e1e2e' : undefined,
+                                                borderRadius: 6,
+                                              }}
+                                            >
                                               <Group gap={6}>
                                                 <span>{tab.icon}</span>
                                                 <span>{tab.label}</span>
@@ -669,24 +1191,30 @@ export function Editor() {
                                         ▶ Preview
                                       </Button>
 
-                                      {/* Publish button */}
-                                      <Button
-                                        variant="subtle"
-                                        disabled={!isEditorEnabled}
-                                        onClick={handlePublish}
-                                        styles={{
-                                          root: {
-                                            background: '#cba6f722',
-                                            color: '#cba6f7',
-                                            '&:hover': { background: '#cba6f744' },
-                                            '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
-                                          },
-                                        }}
-                                      >
-                                        🚀 Publish
-                                      </Button>
+
                                     </Group>
                                   </AppShell.Header>
+
+                                  {/* Save confirmation flash */}
+                                  {saveFlashVisible && (
+                                    <div style={{
+                                      position: 'fixed',
+                                      top: 60,
+                                      left: '50%',
+                                      transform: 'translateX(-50%)',
+                                      zIndex: 9999,
+                                      background: '#1e1e2e',
+                                      border: '1px solid #a6e3a1',
+                                      color: '#a6e3a1',
+                                      padding: '8px 20px',
+                                      borderRadius: 8,
+                                      fontSize: 13,
+                                      fontWeight: 500,
+                                      boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                    }}>
+                                      Project saved
+                                    </div>
+                                  )}
 
                                   <AppShell.Navbar p="md">
                                     {panelContent.list}
@@ -705,7 +1233,9 @@ export function Editor() {
                                   )}
                                         </AppShell>
                                       );
-                                    }}
+                                      }}
+                                    </SugarlangPanel>
+                                  )}
                                   </RegionPanel>
                                   )}
                                 </PlayerPanel>
@@ -730,8 +1260,8 @@ export function Editor() {
       <WelcomeDialog
         opened={welcomeDialogOpen}
         onClose={() => setWelcomeDialogOpen(false)}
-        onCreateProject={handleCreateProject}
-        onOpenProject={handleOpenProject}
+        onCreateGame={openNewGameDialog}
+        onOpenGame={openOpenGameDialog}
       />
 
       {/* Project Explorer */}
@@ -756,11 +1286,39 @@ export function Editor() {
         onDelete={handleDeleteCurrentEpisode}
       />
 
-      {/* New Project Dialog (from menu) */}
+      <NewGameDialog
+        opened={newGameDialogOpen}
+        onClose={closeNewGameDialog}
+        name={newGameName}
+        slug={newGameSlug}
+        rootPath={newGameRootPath}
+        error={newGameDialogOpen ? gameLifecycleError : null}
+        busy={gameLifecycleBusy}
+        browseBusy={pickingNewGameRoot}
+        onNameChange={handleNewGameNameChange}
+        onSlugChange={handleNewGameSlugChange}
+        onRootPathChange={handleNewGameRootPathChange}
+        onBrowseRootPath={handleBrowseNewGameRootPath}
+        onSubmit={handleCreateGame}
+      />
+
+      <OpenGameDialog
+        opened={openGameDialogOpen}
+        onClose={closeOpenGameDialog}
+        path={openGamePath}
+        error={openGameDialogOpen ? gameLifecycleError : null}
+        busy={gameLifecycleBusy}
+        browseBusy={pickingOpenGamePath}
+        onPathChange={setOpenGamePath}
+        onBrowsePath={handleBrowseOpenGamePath}
+        onSubmit={handleOpenGame}
+      />
+
+      {/* Plugins Dialog */}
       <Modal
-        opened={newProjectDialogOpen}
-        onClose={() => setNewProjectDialogOpen(false)}
-        title="Create New Project"
+        opened={pluginsDialogOpen}
+        onClose={() => setPluginsDialogOpen(false)}
+        title="Plugins"
         centered
         styles={{
           header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
@@ -771,26 +1329,131 @@ export function Editor() {
         }}
       >
         <Stack gap="md">
-          <TextInput
-            label="Project Name"
-            placeholder="My Game"
-            value={newProjectName}
-            onChange={(e) => setNewProjectName(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleCreateProject(newProjectName)}
-            autoFocus
-            styles={{
-              input: { background: '#181825', border: '1px solid #313244', color: '#cdd6f4' },
-              label: { color: '#a6adc8' },
-            }}
+          {AVAILABLE_PLUGINS.map((plugin) => (
+            <Group
+              key={plugin.id}
+              align="stretch"
+              style={{
+                border: '1px solid #313244',
+                background: '#181825',
+                borderRadius: 8,
+                padding: 12,
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <Group justify="space-between" align="flex-start" gap="md">
+                <Stack gap={2} style={{ flex: 1 }}>
+                  <Text size="sm" fw={600}>{plugin.name}</Text>
+                  <Text size="xs" c="dimmed">{plugin.description}</Text>
+                </Stack>
+                <Group gap="xs" align="center">
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={() => handleOpenPluginSettings(plugin.id)}
+                    disabled={
+                      !projectLoaded
+                      || !isPluginEnabled(plugins, plugin.id)
+                      || (plugin.id === 'sugarlang' && !sugarlangOpenSettingsHandlerRef.current)
+                    }
+                  >
+                    Settings
+                  </Button>
+                  <Switch
+                    checked={isPluginEnabled(plugins, plugin.id)}
+                    onChange={(event) => handleSetPluginEnabled(plugin.id, event.currentTarget.checked)}
+                    disabled={!projectLoaded}
+                  />
+                </Group>
+              </Group>
+            </Group>
+          ))}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={sugarAgentSettingsOpen}
+        onClose={() => setSugarAgentSettingsOpen(false)}
+        title="SugarAgent Settings"
+        centered
+        size="lg"
+        styles={{
+          header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
+          title: { color: '#cdd6f4', fontWeight: 600 },
+          body: { background: '#1e1e2e', padding: '20px' },
+          content: { background: '#1e1e2e' },
+          close: { color: '#6c7086', '&:hover': { background: '#313244' } },
+        }}
+      >
+        <Stack gap={8}>
+          <Textarea
+            label="Global Safety Bounds"
+            description="Baseline safety policy applied to all SugarAgent NPCs (one per line or comma-separated)."
+            value={sugarAgentGlobalSafetyBounds.join('\n')}
+            onChange={(event) => handleSetSugarAgentGlobalSafetyBounds(event.currentTarget.value)}
+            placeholder={'No profanity\nNo legal advice\nNo medical advice'}
+            minRows={3}
+            autosize
+            disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
           />
-          <Group justify="flex-end" mt="md">
-            <Button variant="subtle" color="gray" onClick={() => setNewProjectDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button color="green" onClick={() => handleCreateProject(newProjectName)}>
-              Create
-            </Button>
+          <Select
+            label="Local Runtime Mode"
+            description="Default is llama. Use mock only for deterministic testing."
+            data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+            value={sugarAgentRuntimeMode}
+            onChange={handleSetSugarAgentRuntimeMode}
+            allowDeselect={false}
+            disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+          />
+          <Group justify="space-between" align="center">
+            <Text size="xs" c="dimmed">
+              Clear preview runtime cache after lore updates.
+            </Text>
+            <Group gap={8}>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={handleReingestSugarAgentLore}
+                loading={reingestingSugarAgentLore}
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              >
+                Re-ingest Lore + Reset
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={handleResetSugarAgentSessions}
+                loading={resettingSugarAgentSessions}
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              >
+                Reset All NPC Sessions (Game)
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={handleResetSugarAgentRuntime}
+                loading={resettingSugarAgentRuntime}
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              >
+                Reset Runtime (Preview)
+              </Button>
+            </Group>
           </Group>
+          {sugarAgentRuntimeMessage && (
+            <Text
+              size="xs"
+              c={
+                sugarAgentRuntimeMessage.kind === 'success'
+                  ? 'green'
+                  : sugarAgentRuntimeMessage.kind === 'error'
+                    ? 'red'
+                    : 'dimmed'
+              }
+            >
+              {sugarAgentRuntimeMessage.text}
+            </Text>
+          )}
         </Stack>
       </Modal>
 

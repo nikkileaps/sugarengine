@@ -1,4 +1,5 @@
 import { InspectionData } from '../inspection/types';
+import { InputManager } from '../core/InputManager';
 
 /**
  * UI component for displaying inspection content (newspapers, signs, lore objects)
@@ -51,7 +52,7 @@ export class InspectionUI {
     // Close hint
     this.closeHint = document.createElement('div');
     this.closeHint.className = 'inspection-close-hint';
-    this.closeHint.innerHTML = 'Press <span class="inspection-key">E</span> or <span class="inspection-key">ESC</span> to close';
+    this.closeHint.innerHTML = 'Press <span class="inspection-key">Enter</span> or <span class="inspection-key">ESC</span> to close';
     this.panel.appendChild(this.closeHint);
 
     this.overlay.appendChild(this.panel);
@@ -223,8 +224,10 @@ export class InspectionUI {
 
   private handleKeyDown(e: KeyboardEvent): void {
     if (!this.isVisible()) return;
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
-    if (e.code === 'Escape' || e.code === 'KeyE') {
+    if (e.code === 'Escape' || e.code === 'Enter') {
       e.preventDefault();
       this.hide();
     }
@@ -302,7 +305,7 @@ export class InspectionUI {
     this.overlay.classList.add('visible');
 
     // Add keydown listener
-    window.addEventListener('keydown', this.boundHandleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'inspection', handleKeyDown: this.boundHandleKeyDown });
   }
 
   /**
@@ -310,7 +313,7 @@ export class InspectionUI {
    */
   hide(): void {
     this.overlay.classList.remove('visible');
-    window.removeEventListener('keydown', this.boundHandleKeyDown);
+    InputManager.getInstance()?.popContext('inspection');
 
     if (this.onClose) {
       this.onClose();
@@ -337,7 +340,6 @@ export class InspectionUI {
    */
   dispose(): void {
     this.hide();
-    window.removeEventListener('keydown', this.boundHandleKeyDown);
     this.overlay.remove();
   }
 }

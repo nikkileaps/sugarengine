@@ -1,4 +1,5 @@
 import { QuestManager, QuestState, QuestObjective } from '../quests';
+import { InputManager } from '../core/InputManager';
 
 /**
  * Full-screen quest journal overlay
@@ -314,7 +315,7 @@ export class QuestJournal {
   show(): void {
     this.refresh();
     this.overlay.classList.add('visible');
-    window.addEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'questJournal', handleKeyDown: this.handleKeyDown });
   }
 
   /**
@@ -322,7 +323,7 @@ export class QuestJournal {
    */
   hide(): void {
     this.overlay.classList.remove('visible');
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('questJournal');
     if (this.onClose) {
       this.onClose();
     }
@@ -531,7 +532,7 @@ export class QuestJournal {
   }
 
   dispose(): void {
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('questJournal');
     this.overlay.remove();
   }
 }

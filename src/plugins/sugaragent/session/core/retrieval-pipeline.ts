@@ -1,0 +1,310 @@
+// @ts-nocheck
+import { retrieveLoreChunks } from '../../lore/lore-lib';
+import { isKnowledgeSeekingQueryType } from './routing';
+import {
+  buildCorrectiveLoreQuery,
+  buildRerankCacheKey,
+  evaluateRetrievalQuality,
+  normalizeConversationModeForPolicy,
+  rerankLoreMatches,
+  resolveRerankBudgetTier,
+  resolveRerankCandidateCap,
+} from './retrieval-governance';
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null;
+}
+
+export function computeRetrievalQualityScore(quality) {
+  if (!isRecord(quality)) return 0;
+  const coverage = typeof quality.coverage === 'number' ? quality.coverage : 0;
+  const support = typeof quality.supportConfidence === 'number' ? quality.supportConfidence : 0;
+  const conflictRisk = typeof quality.conflictRisk === 'number' ? quality.conflictRisk : 1;
+  const score = (coverage * 0.48) + (support * 0.42) + ((1 - conflictRisk) * 0.1);
+  return Number(Math.max(0, Math.min(1, score)).toFixed(4));
+}
+
+export function runGovernedLoreRetrieval({
+  loreArtifacts,
+  canRetrieveLore,
+  shouldAttemptLoreRetrieval,
+  playerMessage,
+  mode,
+  routingIntent,
+  queryType,
+  activeBeatId,
+  loreScopes,
+  selfLoreScopes,
+  relatedLoreScopes,
+  selfEntityId,
+  hasBeatContract,
+  rerankCache,
+  artifactVersion,
+  modelVersion,
+  rerankerClass,
+}) {
+  const normalizedMode = normalizeConversationModeForPolicy(mode);
+  const budgetTier = resolveRerankBudgetTier({
+    mode: normalizedMode,
+    queryType,
+    routingIntent,
+    hasBeatContract,
+  });
+  const candidateCap = resolveRerankCandidateCap(normalizedMode, budgetTier);
+  const knowledgeTurn = isKnowledgeSeekingQueryType(queryType)
+    || routingIntent === 'identity_self'
+    || routingIntent === 'lore_world'
+    || routingIntent === 'lore_other'
+    || routingIntent === 'mixed_knowledge';
+  const scopeOptions = {
+    loreScopes,
+    selfLoreScopes,
+    relatedLoreScopes,
+    selfEntityId,
+    queryType,
+    activeBeatIds: typeof activeBeatId === 'string' ? [activeBeatId] : [],
+  };
+
+  const baseResult = {
+    loreMatches: [],
+    retrievalQuality: {
+      required: knowledgeTurn,
+      pass: !knowledgeTurn,
+      reason: !knowledgeTurn ? 'not_required' : 'no_candidates',
+      coverage: knowledgeTurn ? 0 : 1,
+      conflictRisk: 0,
+      supportConfidence: knowledgeTurn ? 0 : 1,
+      score: knowledgeTurn ? 0 : 1,
+    },
+    governance: {
+      attempted: canRetrieveLore && shouldAttemptLoreRetrieval,
+      candidateCount: 0,
+      selectedCount: 0,
+      correctiveAttempted: false,
+      qualityPath: knowledgeTurn
+        ? (canRetrieveLore && shouldAttemptLoreRetrieval ? 'single_pass' : 'no_scope')
+        : 'not_required',
+      qualityReason: canRetrieveLore && shouldAttemptLoreRetrieval
+        ? 'not_started'
+        : 'retrieval-not-allowed',
+      reranker: {
+        class: rerankerClass,
+        budgetTier,
+        candidateCap,
+        cacheHit: false,
+        cacheKey: null,
+        artifactVersion,
+        modelVersion,
+        latencyMs: 0,
+      },
+      attempts: [],
+      qualityGatePassed: !knowledgeTurn,
+    },
+  };
+
+  if (!canRetrieveLore || !shouldAttemptLoreRetrieval) {
+    return baseResult;
+  }
+
+  const retrieveMaxResults = Math.max(candidateCap * 2, candidateCap);
+  const initialCandidates = retrieveLoreChunks(loreArtifacts, playerMessage, {
+    ...scopeOptions,
+    maxResults: retrieveMaxResults,
+  });
+  const initialCacheKey = buildRerankCacheKey({
+    query: playerMessage,
+    queryType,
+    routingIntent,
+    mode: normalizedMode,
+    budgetTier,
+    loreScopes,
+    selfLoreScopes,
+    relatedLoreScopes,
+    selfEntityId,
+    artifactVersion,
+    modelVersion,
+  });
+  const initialRerank = rerankLoreMatches({
+    candidates: initialCandidates,
+    query: playerMessage,
+    queryType,
+    mode: normalizedMode,
+    budgetTier,
+    cache: rerankCache,
+    cacheKey: initialCacheKey,
+  });
+  const initialSelected = initialRerank.ranked.slice(0, Math.min(3, candidateCap));
+  const initialQuality = evaluateRetrievalQuality({
+    query: playerMessage,
+    mode: normalizedMode,
+    queryType,
+    routeIntent: routingIntent,
+    selectedMatches: initialSelected,
+  });
+  const initialQualityScore = computeRetrievalQualityScore(initialQuality);
+
+  let finalRanked = initialRerank.ranked;
+  let finalSelected = initialSelected;
+  let finalQuality = {
+    ...initialQuality,
+    score: initialQualityScore,
+  };
+  let qualityPath = 'single_pass';
+  let qualityReason = initialQuality.reason;
+  let totalRerankLatencyMs = initialRerank.latencyMs;
+  let cacheHit = initialRerank.cacheHit;
+  let cacheKey = initialCacheKey;
+  let correctiveAttempted = false;
+
+  const attemptLogs = [
+    {
+      attempt: 'initial',
+      query: playerMessage,
+      candidateCount: initialCandidates.length,
+      selectedCount: initialSelected.length,
+      quality: {
+        coverage: initialQuality.coverage,
+        conflictRisk: initialQuality.conflictRisk,
+        supportConfidence: initialQuality.supportConfidence,
+        score: initialQualityScore,
+        reason: initialQuality.reason,
+        pass: initialQuality.pass,
+      },
+      reranker: {
+        cacheHit: initialRerank.cacheHit,
+        latencyMs: initialRerank.latencyMs,
+      },
+    },
+  ];
+
+  if (knowledgeTurn && !initialQuality.pass) {
+    correctiveAttempted = true;
+    const correctiveQuery = buildCorrectiveLoreQuery(playerMessage, queryType, routingIntent);
+    let correctiveLoreScopes = [...loreScopes];
+    let correctiveSelfLoreScopes = [...selfLoreScopes];
+    let correctiveRelatedLoreScopes = [...relatedLoreScopes];
+
+    if (queryType === 'self_query' || routingIntent === 'identity_self') {
+      if (correctiveSelfLoreScopes.length > 0) {
+        correctiveLoreScopes = [...correctiveSelfLoreScopes];
+      }
+      correctiveRelatedLoreScopes = [];
+    } else if (queryType === 'world_query' || routingIntent === 'lore_world') {
+      correctiveSelfLoreScopes = [];
+      correctiveRelatedLoreScopes = [];
+    } else if (queryType === 'other_query' || routingIntent === 'lore_other') {
+      correctiveSelfLoreScopes = [];
+      if (correctiveRelatedLoreScopes.length > 0) {
+        correctiveLoreScopes = [];
+      }
+    }
+
+    const correctiveCandidates = retrieveLoreChunks(loreArtifacts, correctiveQuery, {
+      ...scopeOptions,
+      maxResults: retrieveMaxResults,
+      loreScopes: correctiveLoreScopes,
+      selfLoreScopes: correctiveSelfLoreScopes,
+      relatedLoreScopes: correctiveRelatedLoreScopes,
+    });
+    const correctiveCacheKey = buildRerankCacheKey({
+      query: correctiveQuery,
+      queryType,
+      routingIntent,
+      mode: normalizedMode,
+      budgetTier,
+      loreScopes: correctiveLoreScopes,
+      selfLoreScopes: correctiveSelfLoreScopes,
+      relatedLoreScopes: correctiveRelatedLoreScopes,
+      selfEntityId,
+      artifactVersion,
+      modelVersion,
+    });
+    const correctiveRerank = rerankLoreMatches({
+      candidates: correctiveCandidates,
+      query: correctiveQuery,
+      queryType,
+      mode: normalizedMode,
+      budgetTier,
+      cache: rerankCache,
+      cacheKey: correctiveCacheKey,
+    });
+    const correctiveSelected = correctiveRerank.ranked.slice(0, Math.min(3, candidateCap));
+    const correctiveQuality = evaluateRetrievalQuality({
+      query: playerMessage,
+      mode: normalizedMode,
+      queryType,
+      routeIntent: routingIntent,
+      selectedMatches: correctiveSelected,
+    });
+    const correctiveQualityScore = computeRetrievalQualityScore(correctiveQuality);
+
+    attemptLogs.push({
+      attempt: 'corrective',
+      query: correctiveQuery,
+      candidateCount: correctiveCandidates.length,
+      selectedCount: correctiveSelected.length,
+      quality: {
+        coverage: correctiveQuality.coverage,
+        conflictRisk: correctiveQuality.conflictRisk,
+        supportConfidence: correctiveQuality.supportConfidence,
+        score: correctiveQualityScore,
+        reason: correctiveQuality.reason,
+        pass: correctiveQuality.pass,
+      },
+      reranker: {
+        cacheHit: correctiveRerank.cacheHit,
+        latencyMs: correctiveRerank.latencyMs,
+      },
+    });
+
+    const useCorrective = correctiveQualityScore >= initialQualityScore;
+    if (useCorrective) {
+      finalRanked = correctiveRerank.ranked;
+      finalSelected = correctiveSelected;
+      finalQuality = {
+        ...correctiveQuality,
+        score: correctiveQualityScore,
+      };
+      cacheHit = correctiveRerank.cacheHit;
+      cacheKey = correctiveCacheKey;
+      qualityReason = correctiveQuality.reason;
+    } else {
+      qualityReason = initialQuality.reason;
+    }
+    totalRerankLatencyMs += correctiveRerank.latencyMs;
+    qualityPath = finalQuality.pass ? 'corrective_pass' : 'corrective_fail';
+  } else if (knowledgeTurn && initialQuality.pass) {
+    qualityPath = 'single_pass';
+  } else if (!knowledgeTurn) {
+    qualityPath = 'not_required';
+  }
+
+  const knowledgeGatePassed = !knowledgeTurn || finalQuality.pass;
+  const loreMatches = knowledgeGatePassed
+    ? finalRanked.slice(0, Math.max(2, Math.min(4, candidateCap)))
+    : [];
+  return {
+    loreMatches,
+    retrievalQuality: finalQuality,
+    governance: {
+      attempted: true,
+      candidateCount: finalRanked.length,
+      selectedCount: finalSelected.length,
+      correctiveAttempted,
+      qualityPath,
+      qualityReason,
+      reranker: {
+        class: rerankerClass,
+        budgetTier,
+        candidateCap,
+        cacheHit,
+        cacheKey,
+        artifactVersion,
+        modelVersion,
+        latencyMs: totalRerankLatencyMs,
+      },
+      attempts: attemptLogs,
+      qualityGatePassed: knowledgeGatePassed,
+    },
+  };
+}

@@ -44,7 +44,12 @@ Connect the save manager to game systems for state capture/restoration.
 saveManager.setGameSystems(
   engine: SugarEngine,
   questManager: QuestManager,
-  inventoryManager: InventoryManager
+  inventoryManager: InventoryManager,
+  casterManager?: CasterManager,
+  pluginBridge?: {
+    serializePluginState(): Record<string, unknown>;
+    loadPluginState(state: Record<string, unknown> | undefined): void;
+  }
 ): void
 ```
 
@@ -270,6 +275,14 @@ interface GameSaveData {
   world: {
     collectedPickups: { [regionPath: string]: string[] };
   };
+
+  caster?: {
+    battery: number;
+    resonance: number;
+  };
+
+  // Optional plugin-local save data (ADR-024)
+  plugins?: Record<string, unknown>;
 }
 ```
 

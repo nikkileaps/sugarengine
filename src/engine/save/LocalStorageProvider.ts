@@ -1,13 +1,64 @@
 import { BaseStorageProvider } from './StorageProvider';
 import { GameSaveData, SaveSlotMetadata, SaveResult, StorageCapabilities } from './types';
 
-const STORAGE_PREFIX = 'sugarengine_save_';
+const DEFAULT_STORAGE_PREFIX = 'sugarengine_save_';
 
 /**
  * Browser localStorage implementation.
  * Best for web builds and development.
  */
 export class LocalStorageProvider extends BaseStorageProvider {
+  private readonly namespace: string;
+  private readonly storagePrefix: string;
+
+  constructor(namespace?: string) {
+    super();
+    this.namespace = typeof namespace === 'string' ? namespace.trim() : '';
+    this.storagePrefix = this.namespace
+      ? `${DEFAULT_STORAGE_PREFIX}${this.namespace}_`
+      : DEFAULT_STORAGE_PREFIX;
+  }
+
+  /**
+   * Copy legacy unscoped save keys into this provider's namespace on first run.
+   * Legacy keys: sugarengine_save_<slotId>
+   * Namespaced keys: sugarengine_save_<namespace>_<slotId>
+   */
+  async migrateLegacySaves(slotIds: string[]): Promise<void> {
+    if (!this.namespace) return;
+
+    try {
+      const markerKey = `${this.storagePrefix}legacy_migrated_v1`;
+      if (localStorage.getItem(markerKey) === '1') {
+        return;
+      }
+
+      let migratedCount = 0;
+      for (const slotId of slotIds) {
+        const namespacedKey = this.getKey(slotId);
+        if (localStorage.getItem(namespacedKey) !== null) {
+          continue;
+        }
+
+        const legacyKey = `${DEFAULT_STORAGE_PREFIX}${slotId}`;
+        const legacyData = localStorage.getItem(legacyKey);
+        if (legacyData === null) {
+          continue;
+        }
+
+        localStorage.setItem(namespacedKey, legacyData);
+        migratedCount += 1;
+      }
+
+      localStorage.setItem(markerKey, '1');
+      if (migratedCount > 0) {
+        console.info(`[SaveMigration] Migrated ${migratedCount} legacy localStorage slot(s) into namespace '${this.namespace}'.`);
+      }
+    } catch (err) {
+      console.warn('[SaveMigration] Failed localStorage migration:', err);
+    }
+  }
+
   getCapabilities(): StorageCapabilities {
     return {
       supportsMultipleSlots: true,
@@ -94,6 +145,6 @@ export class LocalStorageProvider extends BaseStorageProvider {
   }
 
   private getKey(slotId: string): string {
-    return `${STORAGE_PREFIX}${slotId}`;
+    return `${this.storagePrefix}${slotId}`;
   }
 }

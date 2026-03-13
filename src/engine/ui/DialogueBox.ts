@@ -1,4 +1,5 @@
-import { DialogueNode, DialogueNext } from '../dialogue';
+import { DialogueNode, DialogueNext, PLAYER_VO, EXCERPT } from '../dialogue';
+import { InputManager } from '../core/InputManager';
 
 export type DialogueBoxCallback = (selected?: DialogueNext) => void;
 export type DialogueCancelCallback = () => void;
@@ -16,6 +17,8 @@ export class DialogueBox {
   private cursorEl: HTMLSpanElement;
   private choicesEl: HTMLDivElement;
   private continueHint: HTMLDivElement;
+
+  private textContainer: HTMLDivElement = null!;
 
   private typewriterInterval: number | null = null;
   private fullText = '';
@@ -114,7 +117,8 @@ export class DialogueBox {
     this.innerBox.appendChild(this.speakerEl);
 
     // Text content with cursor
-    const textContainer = document.createElement('div');
+    this.textContainer = document.createElement('div');
+    const textContainer = this.textContainer;
     textContainer.style.cssText = `
       font-size: 17px;
       line-height: 1.6;
@@ -159,14 +163,16 @@ export class DialogueBox {
       display: none;
       animation: dialoguePulse 2s ease-in-out infinite;
     `;
-    this.continueHint.innerHTML = '▼ Press <span style="color: rgba(240, 230, 216, 0.6); font-weight: 500;">E</span> to continue';
+    this.continueHint.innerHTML = '▼ Press <span style="color: rgba(240, 230, 216, 0.6); font-weight: 500;">Enter</span> to continue';
     this.innerBox.appendChild(this.continueHint);
 
     parentContainer.appendChild(this.container);
 
-    // Listen for E key to advance dialogue
-    window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+    // Bind handler for context stack
+    this.boundHandleKeyDown = (e: KeyboardEvent) => this.handleKeyDown(e);
   }
+
+  private boundHandleKeyDown: (e: KeyboardEvent) => void;
 
   private injectStyles(): void {
     if (document.getElementById('dialogue-box-styles')) return;
@@ -236,7 +242,6 @@ export class DialogueBox {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
-    if (!this.isVisible()) return;
 
     // Escape to cancel/close dialogue
     if (e.code === 'Escape') {
@@ -246,7 +251,7 @@ export class DialogueBox {
       return;
     }
 
-    if (e.code === 'KeyE') {
+    if (e.code === 'Enter') {
       if (this.isTyping) {
         // Skip typewriter, show full text
         this.skipTypewriter();
@@ -278,12 +283,42 @@ export class DialogueBox {
     this.onCancel = onCancel ?? null;
     this.currentNext = node.next ?? [];
 
+    // Detect special speaker types for styling
+    const isPlayerVO = node.speakerId === PLAYER_VO.id;
+    const isExcerpt = node.speakerId === EXCERPT.id;
+
     // Set speaker
     if (node.speaker) {
       this.speakerEl.textContent = node.speaker;
       this.speakerEl.style.display = 'inline-block';
+
+      if (isExcerpt) {
+        this.speakerEl.style.background = 'linear-gradient(135deg, rgba(212, 196, 160, 0.25) 0%, rgba(180, 160, 120, 0.15) 100%)';
+        this.speakerEl.style.borderColor = 'rgba(212, 196, 160, 0.3)';
+        this.speakerEl.style.color = '#d4c4a0';
+        this.speakerEl.style.fontStyle = 'italic';
+        this.speakerEl.style.fontFamily = 'Georgia, "Times New Roman", serif';
+      } else {
+        this.speakerEl.style.background = 'linear-gradient(135deg, rgba(136, 180, 220, 0.25) 0%, rgba(100, 140, 180, 0.15) 100%)';
+        this.speakerEl.style.borderColor = 'rgba(136, 180, 220, 0.3)';
+        this.speakerEl.style.color = '#a8d4f0';
+        this.speakerEl.style.fontStyle = 'normal';
+        this.speakerEl.style.fontFamily = "'Segoe UI', system-ui, sans-serif";
+      }
     } else {
       this.speakerEl.style.display = 'none';
+    }
+
+    // Apply text styling for special speaker types
+    if (isExcerpt) {
+      this.textContainer.style.fontStyle = 'italic';
+      this.textContainer.style.fontFamily = 'Georgia, "Times New Roman", serif';
+    } else if (isPlayerVO) {
+      this.textContainer.style.fontStyle = 'italic';
+      this.textContainer.style.fontFamily = 'inherit';
+    } else {
+      this.textContainer.style.fontStyle = 'normal';
+      this.textContainer.style.fontFamily = 'inherit';
     }
 
     // Clear previous
@@ -304,6 +339,7 @@ export class DialogueBox {
     this.startTypewriter(node.text);
 
     this.container.style.display = 'block';
+    InputManager.getInstance()?.pushContext({ name: 'dialogueBox', handleKeyDown: this.boundHandleKeyDown });
   }
 
   private startTypewriter(text: string): void {
@@ -381,6 +417,7 @@ export class DialogueBox {
 
   hide(): void {
     this.container.style.display = 'none';
+    InputManager.getInstance()?.popContext('dialogueBox');
     if (this.typewriterInterval) {
       clearInterval(this.typewriterInterval);
       this.typewriterInterval = null;
@@ -396,6 +433,7 @@ export class DialogueBox {
 
   dispose(): void {
     this.hide();
+    InputManager.getInstance()?.popContext('dialogueBox');
     this.container.remove();
   }
 }

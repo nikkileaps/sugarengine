@@ -5,6 +5,9 @@ node_modules/
 dist/
 dist-game/
 src-tauri/target/
+public/games/
+.sugarengine/
+games/.active-game
 
 # Netlify
 .netlify/
@@ -23,3 +26,13 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# SugarAgent bundled runtime assets (large binaries/models)
+src/plugins/sugaragent/runtime/bundle/*
+!src/plugins/sugaragent/runtime/bundle/.gitkeep
+
+# SugarAgent sim local session files
+.sugaragent-sim-sessions/
+
+# SugarAgent eval run artifacts
+.sugaragent-evals/

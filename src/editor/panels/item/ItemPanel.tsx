@@ -27,6 +27,10 @@ export interface ItemEntry {
   stackable: boolean;
   maxStack?: number;
   giftable: boolean;
+  model?: string;
+  modelScale?: number;
+  modelColor?: string;
+  view?: import('../../../engine/inventory/types').ItemView;
 }
 
 export interface ItemPanelResult {

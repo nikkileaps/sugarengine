@@ -22,6 +22,13 @@ type TauriFsAPI = {
 export class TauriFileProvider extends BaseStorageProvider {
   private initialized = false;
   private basePath: string = '';
+  private appDataPath: string = '';
+  private readonly namespace: string;
+
+  constructor(namespace?: string) {
+    super();
+    this.namespace = (namespace ?? '').trim();
+  }
 
   getCapabilities(): StorageCapabilities {
     return {
@@ -40,7 +47,9 @@ export class TauriFileProvider extends BaseStorageProvider {
 
       // Get app data directory
       const appData = await pathApi.appDataDir();
-      this.basePath = `${appData}${SAVE_DIRECTORY}`;
+      this.appDataPath = appData;
+      const namespaceSuffix = this.namespace ? `/${this.namespace}` : '';
+      this.basePath = `${appData}${SAVE_DIRECTORY}${namespaceSuffix}`;
 
       // Create saves directory if it doesn't exist
       const dirExists = await fsApi.exists(this.basePath);
@@ -163,6 +172,55 @@ export class TauriFileProvider extends BaseStorageProvider {
     const data = await this.load(slotId);
     if (!data) return null;
     return this.extractMetadata(slotId, data);
+  }
+
+  /**
+   * Copy legacy unscoped save files (saves/<slot>.json) into the game namespace
+   * (saves/<namespace>/<slot>.json) on first run.
+   */
+  async migrateLegacySaves(slotIds: string[]): Promise<void> {
+    if (!this.initialized || !this.namespace) return;
+
+    try {
+      const { exists, readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs' as string);
+
+      const markerPath = `${this.basePath}/.legacy-migrated-v1`;
+      if (await exists(markerPath)) {
+        return;
+      }
+
+      const legacyBasePath = `${this.appDataPath}${SAVE_DIRECTORY}`;
+      if (legacyBasePath === this.basePath) {
+        return;
+      }
+      if (!await exists(legacyBasePath)) {
+        await writeTextFile(markerPath, new Date().toISOString());
+        return;
+      }
+
+      let migratedCount = 0;
+      for (const slotId of slotIds) {
+        const legacyPath = `${legacyBasePath}/${slotId}.json`;
+        const targetPath = this.getFilePath(slotId);
+
+        const legacyExists = await exists(legacyPath);
+        if (!legacyExists) continue;
+
+        const targetExists = await exists(targetPath);
+        if (targetExists) continue;
+
+        const data = await readTextFile(legacyPath);
+        await writeTextFile(targetPath, data);
+        migratedCount += 1;
+      }
+
+      await writeTextFile(markerPath, new Date().toISOString());
+      if (migratedCount > 0) {
+        console.info(`[SaveMigration] Migrated ${migratedCount} legacy Tauri slot(s) into namespace '${this.namespace}'.`);
+      }
+    } catch (err) {
+      console.warn('[SaveMigration] Failed Tauri save migration:', err);
+    }
   }
 
   private getFilePath(slotId: string): string {

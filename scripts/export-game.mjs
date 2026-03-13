@@ -1,43 +1,115 @@
 #!/usr/bin/env node
 /**
- * Export project data for production build.
+ * Export project data for production builds.
  *
  * Usage:
- *   node scripts/export-game.mjs [path/to/project.sgrgame]
- *
- * If no path is provided, looks for project.sgrgame in current directory.
- * Outputs to public/game.json for Vite to include in build.
+ *   node scripts/export-game.mjs --slug rackwick-city
+ *   node scripts/export-game.mjs --slug wordlark --project games/wordlark/project.sgrgame
+ *   node scripts/export-game.mjs --slug rackwick-city --project /path/to/project.sgrgame --out /tmp/game.json
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { resolveGameSelection } from './lib/active-game.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 
-async function exportGame() {
-  // Get project file path from args or default
-  const projectPath = process.argv[2] || path.join(projectRoot, 'project.sgrgame');
-  const outputPath = path.join(projectRoot, 'public', 'game.json');
+function parseArgs(argv) {
+  const result = {
+    slug: process.env.GAME_SLUG || '',
+    projectPath: '',
+    outPath: '',
+  };
 
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--slug') {
+      result.slug = argv[i + 1] || result.slug;
+      i++;
+      continue;
+    }
+    if (arg === '--project') {
+      result.projectPath = argv[i + 1] || '';
+      i++;
+      continue;
+    }
+    if (arg === '--out') {
+      result.outPath = argv[i + 1] || '';
+      i++;
+      continue;
+    }
+    if (!arg.startsWith('--') && !result.projectPath) {
+      // Back-compat positional project file argument.
+      result.projectPath = arg;
+    }
+  }
+
+  return result;
+}
+
+function normalizeGameMeta(project, slug) {
+  const inputMeta = typeof project.meta === 'object' && project.meta !== null
+    ? project.meta
+    : {};
+
+  const gameId = typeof inputMeta.gameId === 'string' && inputMeta.gameId.trim()
+    ? inputMeta.gameId.trim()
+    : slug;
+
+  const name = typeof inputMeta.name === 'string' && inputMeta.name.trim()
+    ? inputMeta.name.trim()
+    : slug;
+
+  return {
+    ...inputMeta,
+    gameId,
+    name,
+    contentBasePath: `games/${slug}/assets/`,
+  };
+}
+
+async function exportGame() {
+  const args = parseArgs(process.argv.slice(2));
+  const selection = await resolveGameSelection({
+    cliSlug: args.slug,
+    cliPath: args.projectPath,
+  });
+  const slug = selection?.slug ?? '';
+  if (!slug) {
+    console.error('✗ Missing game selection. Use --slug <game-slug>, set GAME_SLUG, or run: npm run game:use -- <game-slug|/path/to/project.sgrgame>.');
+    process.exit(1);
+  }
+
+  const projectPath = selection?.projectFilePath;
+  if (!projectPath) {
+    console.error(`✗ Could not resolve a project path for '${slug}'.`);
+    console.error('  Open the game in SugarEngine or run: npm run game:use -- /path/to/project.sgrgame');
+    process.exit(1);
+  }
+  const outputPath = args.outPath
+    ? (path.isAbsolute(args.outPath) ? args.outPath : path.join(projectRoot, args.outPath))
+    : path.join(projectRoot, 'public', 'games', slug, 'game.json');
+
+  console.log(`Slug: ${slug}`);
   console.log(`Reading project from: ${projectPath}`);
 
   try {
     const content = await fs.readFile(projectPath, 'utf-8');
     const project = JSON.parse(content);
 
-    // Transform to game format (add defaultEpisode if not present)
     const gameData = {
       ...project,
+      meta: normalizeGameMeta(project, slug),
       defaultEpisode: project.defaultEpisode || project.episodes?.[0]?.id,
     };
 
-    // Ensure public directory exists
-    await fs.mkdir(path.join(projectRoot, 'public'), { recursive: true });
+    // Ensure output directory exists
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
     // Write game.json
-    await fs.writeFile(outputPath, JSON.stringify(gameData, null, 2));
+    await fs.writeFile(outputPath, `${JSON.stringify(gameData, null, 2)}\n`);
 
     console.log(`✓ Exported to: ${outputPath}`);
     console.log(`  Episodes: ${project.episodes?.length || 0}`);
@@ -50,10 +122,9 @@ async function exportGame() {
     if (err.code === 'ENOENT') {
       console.error(`✗ Project file not found: ${projectPath}`);
       console.error('');
-      console.error('Usage: node scripts/export-game.mjs [path/to/project.sgrgame]');
+      console.error('Usage: node scripts/export-game.mjs --slug <game-slug> [--project path/to/project.sgrgame]');
       console.error('');
-      console.error('First, save your project from the editor, then run this script');
-      console.error('with the path to your saved .sgrgame file.');
+      console.error('Open the game in SugarEngine or pass --project explicitly.');
       process.exit(1);
     }
     console.error('✗ Export failed:', err.message);

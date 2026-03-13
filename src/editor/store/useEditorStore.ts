@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import type { EnvironmentAnimationEntry } from '../../engine/shaders';
 
-export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance' | 'vfx';
+export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance' | 'vfx' | 'sugarlang';
 
 export interface ValidationError {
   type: 'error' | 'warning';
@@ -24,6 +24,20 @@ export interface NPCData {
   faction?: string;
   behaviorTree?: import('../../engine/behavior/types').BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
+  interactionMode?: 'scripted' | 'agent' | 'hybrid';
+  agentProfile?: {
+    persona?: string;
+    tone?: string;
+    constraints?: string[];
+    safetyBounds?: string[]; // Legacy alias, accepted for backward compatibility.
+    loreScopes?: string[];
+    selfEntityId?: string;
+    selfLoreScopes?: string[];
+    relatedLoreScopes?: string[];
+  };
+  model?: string;
+  modelHeight?: number;
+  animations?: Record<string, string>;
 }
 
 export interface DialogueData {
@@ -41,6 +55,19 @@ export interface QuestData {
     objectives: { id: string; type: string; target: string; description: string }[];
   }[];
   episodeId?: string;
+  agentBeatContracts?: {
+    id: string;
+    npcId: string;
+    objective: string;
+    requiredFacts: string[];
+    forbiddenFacts?: string[];
+    completionRule: 'player_ack' | 'player_action' | 'engine_flag';
+    completionTarget?: string;
+    maxTurns?: number;
+    fallbackScriptId?: string;
+    stageId?: string;
+    objectiveId?: string;
+  }[];
 }
 
 export interface ItemData {
@@ -52,6 +79,10 @@ export interface ItemData {
   stackable: boolean;
   maxStack?: number;
   giftable: boolean;
+  model?: string;
+  modelScale?: number;
+  modelColor?: string;
+  view?: import('../../engine/inventory/types').ItemView;
 }
 
 export interface InspectionData {
@@ -61,6 +92,9 @@ export interface InspectionData {
   headerImage?: string;
   content?: string;
   sections?: { heading?: string; text: string }[];
+  model?: string;
+  modelScale?: number;
+  modelColor?: string;
 }
 
 export interface ResonancePointData {
@@ -167,6 +201,12 @@ export interface EpisodeData {
   };
 }
 
+export interface PluginConfigData {
+  id: string;
+  enabled?: boolean;
+  [key: string]: unknown;
+}
+
 interface EditorState {
   // UI state
   activeTab: EditorTab;
@@ -178,10 +218,17 @@ interface EditorState {
   // Project state
   projectLoaded: boolean;
   projectName: string | null;
+  gameId: string | null;
+  gameRootPath: string | null;
+  projectFilePath: string | null;
+  projectCreatedAt: string | null;
+  projectVersion: string | null;
+  defaultEpisodeId: string | null;
 
   // Project data
   seasons: SeasonData[];
   episodes: EpisodeData[];
+  plugins: PluginConfigData[];
   npcs: NPCData[];
   dialogues: DialogueData[];
   quests: QuestData[];
@@ -189,6 +236,14 @@ interface EditorState {
   inspections: InspectionData[];
   regions: RegionData[];
   playerCaster: PlayerCasterData | null;
+  playerModel: string | null;
+  playerAnimations: Record<string, string>;  // clip name → FBX/GLB path (e.g. { idle: 'models/idle.fbx' })
+  titleScreen: {
+    cameraPosition?: { x: number; y: number; z: number };
+    cameraLookAt?: { x: number; y: number; z: number };
+    hidePlayer?: boolean;
+    transitionDuration?: number;
+  } | null;
   spells: SpellData[];
   resonancePoints: ResonancePointData[];
   vfxDefinitions: VFXDefinitionData[];
@@ -209,10 +264,21 @@ interface EditorState {
   setCurrentEpisode: (episodeId: string | null) => void;
   setEpisodeFilter: (filter: 'all' | 'current') => void;
   setProjectLoaded: (loaded: boolean, name?: string | null) => void;
+  setProjectContext: (context: {
+    loaded: boolean;
+    name?: string | null;
+    gameId?: string | null;
+    gameRootPath?: string | null;
+    projectFilePath?: string | null;
+    projectCreatedAt?: string | null;
+    projectVersion?: string | null;
+    defaultEpisodeId?: string | null;
+  }) => void;
 
   // Data actions
   setSeasons: (seasons: SeasonData[]) => void;
   setEpisodes: (episodes: EpisodeData[]) => void;
+  setPlugins: (plugins: PluginConfigData[]) => void;
   updateEpisode: (id: string, updates: Partial<EpisodeData>) => void;
   setNPCs: (npcs: NPCData[]) => void;
   setDialogues: (dialogues: DialogueData[]) => void;
@@ -221,6 +287,9 @@ interface EditorState {
   setInspections: (inspections: InspectionData[]) => void;
   setRegions: (regions: RegionData[]) => void;
   setPlayerCaster: (playerCaster: PlayerCasterData | null) => void;
+  setPlayerModel: (playerModel: string | null) => void;
+  setPlayerAnimations: (playerAnimations: Record<string, string>) => void;
+  setTitleScreen: (titleScreen: EditorState['titleScreen']) => void;
   setSpells: (spells: SpellData[]) => void;
   setResonancePoints: (resonancePoints: ResonancePointData[]) => void;
   setVFXDefinitions: (vfxDefinitions: VFXDefinitionData[]) => void;
@@ -235,6 +304,12 @@ export const useEditorStore = create<EditorState>((set) => ({
   searchQuery: '',
   projectLoaded: false,
   projectName: null,
+  gameId: null,
+  gameRootPath: null,
+  projectFilePath: null,
+  projectCreatedAt: null,
+  projectVersion: null,
+  defaultEpisodeId: null,
   currentSeasonId: null,
   currentEpisodeId: null,
   episodeFilter: 'all',
@@ -242,6 +317,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   // Project data
   seasons: [],
   episodes: [],
+  plugins: [],
   npcs: [],
   dialogues: [],
   quests: [],
@@ -249,6 +325,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   inspections: [],
   regions: [],
   playerCaster: null,
+  playerModel: null,
+  playerAnimations: {},
+  titleScreen: null,
   spells: [],
   resonancePoints: [],
   vfxDefinitions: [],
@@ -265,10 +344,21 @@ export const useEditorStore = create<EditorState>((set) => ({
   setCurrentEpisode: (episodeId) => set({ currentEpisodeId: episodeId }),
   setEpisodeFilter: (filter) => set({ episodeFilter: filter }),
   setProjectLoaded: (loaded, name = null) => set({ projectLoaded: loaded, projectName: name }),
+  setProjectContext: (context) => set({
+    projectLoaded: context.loaded,
+    projectName: context.name ?? null,
+    gameId: context.gameId ?? null,
+    gameRootPath: context.gameRootPath ?? null,
+    projectFilePath: context.projectFilePath ?? null,
+    projectCreatedAt: context.projectCreatedAt ?? null,
+    projectVersion: context.projectVersion ?? null,
+    defaultEpisodeId: context.defaultEpisodeId ?? null,
+  }),
 
   // Data actions
   setSeasons: (seasons) => set({ seasons }),
   setEpisodes: (episodes) => set({ episodes }),
+  setPlugins: (plugins) => set({ plugins }),
   updateEpisode: (id, updates) => set((state) => ({
     episodes: state.episodes.map((e) => (e.id === id ? { ...e, ...updates } : e)),
   })),
@@ -279,6 +369,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   setInspections: (inspections) => set({ inspections }),
   setRegions: (regions) => set({ regions }),
   setPlayerCaster: (playerCaster) => set({ playerCaster }),
+  setPlayerModel: (playerModel) => set({ playerModel }),
+  setPlayerAnimations: (playerAnimations) => set({ playerAnimations }),
+  setTitleScreen: (titleScreen) => set({ titleScreen }),
   setSpells: (spells) => set({ spells }),
   setResonancePoints: (resonancePoints) => set({ resonancePoints }),
   setVFXDefinitions: (vfxDefinitions) => set({ vfxDefinitions }),

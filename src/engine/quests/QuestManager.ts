@@ -44,10 +44,11 @@ export type ConditionCheckHandler = (condition: ConditionExpression) => boolean;
 /**
  * Manages quest state, progression, and events
  *
- * Handles three node types (ADR-016):
+ * Handles four node types (ADR-016):
  * - objective: Player actions (shows in HUD, waits for player)
  * - narrative: Auto-triggered system actions (voiceover, dialogue, event)
  * - condition: State checks / gates (waits until condition is true)
+ * - branch: One-shot routing (evaluates once, routes to pass or fail path)
  */
 export class QuestManager {
   private loader: QuestLoader;
@@ -65,6 +66,10 @@ export class QuestManager {
   // Track pending condition nodes that need evaluation
   // Map<questId, Set<nodeId>>
   private pendingConditions: Map<string, Set<string>> = new Map();
+
+  // Track condition nodes whose fail targets have already been activated
+  // (so we don't re-activate them on repeated evaluations)
+  private failTargetsActivated: Map<string, Set<string>> = new Map();
 
   // Event handlers
   private onQuestStart: QuestEventHandler | null = null;
@@ -244,6 +249,8 @@ export class QuestManager {
     this.completedQuests.add(questId);
     this.pendingConditions.delete(questId);
 
+    this.failTargetsActivated.delete(questId);
+
     // Untrack if this was the tracked quest
     if (this.trackedQuestId === questId) {
       this.trackedQuestId = this.getFirstActiveQuestId();
@@ -264,6 +271,8 @@ export class QuestManager {
     this.activeQuests.delete(questId);
     this.pendingConditions.delete(questId);
 
+    this.failTargetsActivated.delete(questId);
+
     // Untrack if this was the tracked quest
     if (this.trackedQuestId === questId) {
       this.trackedQuestId = this.getFirstActiveQuestId();
@@ -278,6 +287,8 @@ export class QuestManager {
   abandonQuest(questId: string): void {
     this.activeQuests.delete(questId);
     this.pendingConditions.delete(questId);
+
+    this.failTargetsActivated.delete(questId);
     if (this.trackedQuestId === questId) {
       this.trackedQuestId = this.getFirstActiveQuestId();
     }
@@ -297,6 +308,8 @@ export class QuestManager {
     for (const action of actions) {
       if (this.onBeatAction) {
         this.onBeatAction(action);
+      } else {
+        console.warn(`[QuestManager] No beat action handler set!`);
       }
     }
   }
@@ -363,8 +376,9 @@ export class QuestManager {
 
   /**
    * Mark an objective/node as complete
+   * @param skipCascade - If true, don't activate dependent nodes (used by branch-false path)
    */
-  completeObjective(questId: string, objectiveId: string): void {
+  completeObjective(questId: string, objectiveId: string, options?: { skipCascade?: boolean }): void {
     const state = this.activeQuests.get(questId);
     if (!state) return;
 
@@ -394,7 +408,11 @@ export class QuestManager {
     this.executeActions(objective.onComplete);
 
     // Cascade: check if this completion unlocks other objectives
-    this.cascadeActivateObjectives(questId, objectiveId);
+    // (skipCascade is used by branch nodes on the false path — they complete
+    //  without activating pass dependents, since fail targets were activated instead)
+    if (!options?.skipCascade) {
+      this.cascadeActivateObjectives(questId, objectiveId);
+    }
 
     // Check if stage is complete
     this.checkStageComplete(questId);
@@ -422,10 +440,11 @@ export class QuestManager {
       if (!obj.prerequisites.includes(completedObjectiveId)) continue;
 
       // Check if ALL prerequisites are now satisfied
-      const allPrereqsMet = obj.prerequisites.every(prereqId => {
+      const prereqStatus = obj.prerequisites.map(prereqId => {
         const prereqObj = state.objectiveProgress.get(prereqId);
-        return prereqObj?.completed === true;
+        return { prereqId, completed: prereqObj?.completed === true, desc: prereqObj?.description };
       });
+      const allPrereqsMet = prereqStatus.every(p => p.completed);
 
       if (allPrereqsMet) {
         this.activateNode(questId, obj);
@@ -479,8 +498,10 @@ export class QuestManager {
 
     state.currentStageId = stageId;
 
-    // Clear pending conditions for this quest
+    // Clear pending conditions, auto-triggers, and fail tracking for this quest
     this.pendingConditions.delete(questId);
+
+    this.failTargetsActivated.delete(questId);
 
     // Initialize objectives for new stage
     for (const obj of newStage.objectives) {
@@ -505,6 +526,17 @@ export class QuestManager {
   private initializeStageObjectives(questId: string, stage: import('./types').QuestStage): void {
     // Clear and create fresh active set for this quest
     this.activeObjectives.set(questId, new Set());
+    this.failTargetsActivated.set(questId, new Set());
+
+    // Collect all fail target IDs - these should NOT auto-start
+    const allFailTargets = new Set<string>();
+    for (const obj of stage.objectives) {
+      if (obj.failTargets) {
+        for (const ftId of obj.failTargets) {
+          allFailTargets.add(ftId);
+        }
+      }
+    }
 
     // Determine entry objectives
     const entryObjectiveIds = new Set<string>();
@@ -512,12 +544,15 @@ export class QuestManager {
     if (stage.startObjectives && stage.startObjectives.length > 0) {
       // Use explicit start objectives if defined
       for (const id of stage.startObjectives) {
-        entryObjectiveIds.add(id);
+        if (!allFailTargets.has(id)) {
+          entryObjectiveIds.add(id);
+        }
       }
     } else {
       // Otherwise, objectives without prerequisites are entry points
+      // (excluding fail targets, which are activated by condition failure)
       for (const obj of stage.objectives) {
-        if (!obj.prerequisites || obj.prerequisites.length === 0) {
+        if ((!obj.prerequisites || obj.prerequisites.length === 0) && !allFailTargets.has(obj.id)) {
           entryObjectiveIds.add(obj.id);
         }
       }
@@ -537,7 +572,8 @@ export class QuestManager {
    *
    * - objective: Add to active set, show in HUD, wait for player action
    * - narrative: Auto-fire trigger, complete when content finishes
-   * - condition: Register for evaluation, check immediately
+   * - condition: Register for evaluation, check immediately (gate)
+   * - branch: Evaluate once, route to pass or fail path (one-shot)
    */
   private activateNode(questId: string, obj: QuestObjective): void {
     const nodeType: BeatNodeType = obj.nodeType ?? 'objective';
@@ -557,6 +593,9 @@ export class QuestManager {
         break;
       case 'condition':
         this.activateConditionNode(questId, obj);
+        break;
+      case 'branch':
+        this.activateBranchNode(questId, obj);
         break;
     }
   }
@@ -594,7 +633,8 @@ export class QuestManager {
 
   /**
    * Activate a condition node (state check / gate)
-   * Evaluates continuously, completes when condition is true
+   * Evaluates continuously, completes when condition is true.
+   * Gates just wait — no fail path. Use conditional dialogue (ADR-019) for hints.
    */
   private activateConditionNode(questId: string, obj: QuestObjective): void {
     // Check immediately - condition might already be satisfied
@@ -602,7 +642,6 @@ export class QuestManager {
       this.completeObjective(questId, obj.id);
       return;
     }
-
     // Register for continuous evaluation
     let condSet = this.pendingConditions.get(questId);
     if (!condSet) {
@@ -610,6 +649,54 @@ export class QuestManager {
       this.pendingConditions.set(questId, condSet);
     }
     condSet.add(obj.id);
+  }
+
+  /**
+   * Activate a branch node (one-shot routing)
+   * Evaluates once: if true → complete normally (cascades to pass dependents),
+   * if false → activate fail targets and complete without cascading.
+   */
+  private activateBranchNode(questId: string, obj: QuestObjective): void {
+    if (obj.condition && this.checkCondition(obj.condition)) {
+      // Condition is true → complete normally (pass path)
+      this.completeObjective(questId, obj.id);
+    } else {
+      // Condition is false → activate fail targets, complete without cascading
+      this.activateFailTargets(questId, obj);
+      this.completeObjective(questId, obj.id, { skipCascade: true });
+    }
+  }
+
+  /**
+   * Activate fail target nodes for a condition that evaluated to false.
+   * Only activates once per condition (tracked to prevent re-activation).
+   */
+  private activateFailTargets(questId: string, conditionObj: QuestObjective): void {
+    if (!conditionObj.failTargets || conditionObj.failTargets.length === 0) return;
+
+    // Check if we already activated fail targets for this condition
+    let activated = this.failTargetsActivated.get(questId);
+    if (!activated) {
+      activated = new Set();
+      this.failTargetsActivated.set(questId, activated);
+    }
+    if (activated.has(conditionObj.id)) return;
+    activated.add(conditionObj.id);
+
+    // Find and activate each fail target
+    const state = this.activeQuests.get(questId);
+    const loaded = this.loadedQuests.get(questId);
+    if (!state || !loaded) return;
+
+    const currentStage = loaded.stageMap.get(state.currentStageId);
+    if (!currentStage) return;
+
+    for (const targetId of conditionObj.failTargets) {
+      const targetObj = currentStage.objectives.find(o => o.id === targetId);
+      if (targetObj && !state.objectiveProgress.get(targetId)?.completed) {
+        this.activateNode(questId, targetObj);
+      }
+    }
   }
 
   /**
@@ -644,7 +731,8 @@ export class QuestManager {
         const obj = state.objectiveProgress.get(nodeId);
         if (!obj || obj.completed) continue;
 
-        if (obj.condition && this.checkCondition(obj.condition)) {
+        const result = obj.condition ? this.checkCondition(obj.condition) : false;
+        if (result) {
           completions.push({ questId, nodeId });
         }
       }
@@ -926,6 +1014,8 @@ export class QuestManager {
     this.completedQuests.clear();
     this.activeObjectives.clear();
     this.pendingConditions.clear();
+
+    this.failTargetsActivated.clear();
     this.trackedQuestId = null;
   }
 

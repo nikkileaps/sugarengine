@@ -1,5 +1,5 @@
 /**
- * ProjectExplorer - Dialog for browsing and selecting projects/episodes
+ * ProjectExplorer - Dialog for browsing and selecting game episodes
  * Shows a tree view of seasons/episodes
  */
 
@@ -124,7 +124,7 @@ export function ProjectExplorer({
     <Modal
       opened={opened}
       onClose={onClose}
-      title="Project Explorer"
+      title="Game Explorer"
       size="md"
       centered
       styles={{

@@ -17,7 +17,7 @@ import {
 } from '@mantine/core';
 import { useEditorStore, PlayerCasterData } from '../../store';
 
-type PlayerSection = 'caster' | 'spawn';
+type PlayerSection = 'model' | 'caster' | 'spawn';
 
 export interface PlayerPanelResult {
   list: ReactNode;
@@ -28,6 +28,10 @@ export interface PlayerPanelResult {
 interface PlayerPanelProps {
   playerCaster: PlayerCasterData | null;
   onPlayerCasterChange: (playerCaster: PlayerCasterData | null) => void;
+  playerModel: string | null;
+  onPlayerModelChange: (playerModel: string | null) => void;
+  playerAnimations: Record<string, string>;
+  onPlayerAnimationsChange: (anims: Record<string, string>) => void;
   children: (result: PlayerPanelResult) => ReactNode;
 }
 
@@ -37,13 +41,19 @@ const DEFAULT_CASTER: PlayerCasterData = {
   initialResonance: 0,    // Start with no resonance, must visit resonance points
 };
 
+const ANIM_SLOTS = ['idle', 'walk', 'run', 'jump'] as const;
+
 export function PlayerPanel({
   playerCaster,
   onPlayerCasterChange,
+  playerModel,
+  onPlayerModelChange,
+  playerAnimations,
+  onPlayerAnimationsChange,
   children,
 }: PlayerPanelProps) {
   const setDirty = useEditorStore((s) => s.setDirty);
-  const [selectedSection, setSelectedSection] = useState<PlayerSection>('caster');
+  const [selectedSection, setSelectedSection] = useState<PlayerSection>('model');
 
   // Ensure we have a caster config (use defaults if null)
   const caster = playerCaster ?? DEFAULT_CASTER;
@@ -62,6 +72,27 @@ export function PlayerPanel({
         <Text size="sm" fw={500}>Player Settings</Text>
 
         <Stack gap={4}>
+          <Group
+            p="xs"
+            gap="xs"
+            onClick={() => setSelectedSection('model')}
+            style={{
+              background: selectedSection === 'model'
+                ? 'var(--mantine-color-blue-9)'
+                : 'var(--mantine-color-dark-6)',
+              borderRadius: 'var(--mantine-radius-sm)',
+              cursor: 'pointer',
+            }}
+          >
+            <Text size="lg">🧍</Text>
+            <Stack gap={0} style={{ flex: 1 }}>
+              <Text size="sm" fw={500}>Model</Text>
+              <Text size="xs" c="dimmed">
+                Player character model
+              </Text>
+            </Stack>
+          </Group>
+
           <Group
             p="xs"
             gap="xs"
@@ -110,6 +141,81 @@ export function PlayerPanel({
     // Content panel (center) - shows selected section only
     content: (
       <Stack p="md" gap="lg">
+        {selectedSection === 'model' && (
+          <>
+            <Title order={3}>Player Model</Title>
+
+            <Text size="sm" c="dimmed">
+              Path to the player character model file (FBX or GLB). Relative to the current game's asset root.
+            </Text>
+
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Group gap="xs">
+                  <Text size="lg">🧍</Text>
+                  <Text fw={500}>Model File</Text>
+                </Group>
+
+                <TextInput
+                  label="Model Path"
+                  description="e.g. models/player.fbx or models/player.glb"
+                  value={playerModel || ''}
+                  onChange={(e) => {
+                    const val = e.currentTarget.value.trim();
+                    onPlayerModelChange(val.length > 0 ? val : null);
+                    setDirty(true);
+                  }}
+                  placeholder="models/player.glb"
+                />
+
+                {playerModel && (
+                  <Badge
+                    size="sm"
+                    variant="light"
+                    color={playerModel.endsWith('.fbx') ? 'orange' : 'blue'}
+                  >
+                    {playerModel.endsWith('.fbx') ? 'FBX' : playerModel.endsWith('.glb') || playerModel.endsWith('.gltf') ? 'GLTF' : 'Unknown'}
+                  </Badge>
+                )}
+              </Stack>
+            </Paper>
+
+            <Paper p="md" withBorder>
+              <Stack gap="md">
+                <Group gap="xs">
+                  <Text size="lg">🎬</Text>
+                  <Text fw={500}>Animation Clips</Text>
+                </Group>
+
+                <Text size="xs" c="dimmed">
+                  Separate FBX/GLB files for each animation. The base model provides the mesh and skeleton;
+                  these files provide the animation data.
+                </Text>
+
+                {ANIM_SLOTS.map((slot) => (
+                  <TextInput
+                    key={slot}
+                    label={slot.charAt(0).toUpperCase() + slot.slice(1)}
+                    value={playerAnimations[slot] || ''}
+                    onChange={(e) => {
+                      const val = e.currentTarget.value.trim();
+                      const next = { ...playerAnimations };
+                      if (val.length > 0) {
+                        next[slot] = val;
+                      } else {
+                        delete next[slot];
+                      }
+                      onPlayerAnimationsChange(next);
+                      setDirty(true);
+                    }}
+                    placeholder={`models/player-${slot}.fbx`}
+                  />
+                ))}
+              </Stack>
+            </Paper>
+          </>
+        )}
+
         {selectedSection === 'caster' && (
           <>
             <Title order={3}>Caster Settings</Title>
@@ -363,6 +469,9 @@ export function PlayerPanel({
     // Inspector panel (right) - summary view
     inspector: (
       <Stack gap="md" p="sm">
+        <Text size="sm" fw={500} c="dimmed">Model</Text>
+        <Text size="xs" c="dimmed">{playerModel || 'models/player.glb (default)'}</Text>
+
         <Text size="sm" fw={500} c="dimmed">Caster Summary</Text>
 
         <div>

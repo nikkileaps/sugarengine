@@ -1,7 +1,7 @@
 /**
  * Quest objective types (subtypes for objective beat nodes)
  */
-export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'custom';
+export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'trigger' | 'castSpell' | 'custom';
 
 // ============================================
 // Beat Node Types (ADR-016)
@@ -13,7 +13,7 @@ export type ObjectiveType = 'talk' | 'voiceover' | 'location' | 'collect' | 'tri
  * - narrative: System auto-triggers something (voiceover, dialogue, event)
  * - condition: System checks something (gate/wait until state is true)
  */
-export type BeatNodeType = 'objective' | 'narrative' | 'condition';
+export type BeatNodeType = 'objective' | 'narrative' | 'condition' | 'branch';
 
 /**
  * Narrative subtypes (auto-triggered system actions)
@@ -23,7 +23,7 @@ export type NarrativeSubtype = 'voiceover' | 'dialogue' | 'cutscene' | 'event';
 /**
  * Condition operators for condition beat nodes
  */
-export type ConditionOperator = 'hasItem' | 'hasFlag' | 'questComplete' | 'stageComplete' | 'custom';
+export type ConditionOperator = 'hasItem' | 'hasFlag' | 'questComplete' | 'stageComplete' | 'canCastSpell' | 'custom';
 
 /**
  * Condition expression - evaluated by condition nodes to gate flow
@@ -68,6 +68,11 @@ export interface BeatAction {
   type: ActionType;
   target?: string;              // Flag name, item ID, NPC ID, sound path, etc.
   value?: unknown;              // Flag value, quantity, position, state, etc.
+
+  // moveNpc/teleportNPC destination — 'position' (fixed XYZ) or 'player' (resolve at runtime)
+  moveTarget?: 'position' | 'player';
+  // Distance to stop from the player when moveTarget='player' (default: 1.5)
+  moveOffset?: number;
 
   // Legacy fields for moveNpc backward compat (ADR-015)
   npcId?: string;
@@ -142,6 +147,7 @@ export interface QuestObjective {
 
   // === Condition-specific (ADR-016) ===
   condition?: ConditionExpression;    // Expression evaluated by condition nodes
+  failTargets?: string[];            // Node IDs activated when condition is false (fail edge)
 
   // === Display control (ADR-016) ===
   showInHUD?: boolean;                // Default true for objectives, false for others
