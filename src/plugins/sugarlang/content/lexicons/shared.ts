@@ -291,7 +291,9 @@ function buildGeneratedEntries(
     const normalized = normalizeLexeme(pair.targetForm);
     if (!normalized || seenForms.has(normalized)) continue;
 
-    let lexicalEntryId = `common.${language}.${String(generatedEntries.length + 1).padStart(4, '0')}.${slugify(pair.targetForm)}`;
+    const glossSlug = slugify(pair.gloss);
+    const formSlug = slugify(pair.targetForm);
+    let lexicalEntryId = `common.${language}.${glossSlug}.${formSlug}`;
     while (seenIds.has(lexicalEntryId)) {
       lexicalEntryId = `${lexicalEntryId}-alt`;
     }

@@ -209,7 +209,6 @@ export function generateDraftScaffold(
     const scenario: ScenarioBrief = {
       scenarioId,
       associatedQuestId: quest.id,
-      communicativeTask: `[TODO: Describe the communicative task for "${quest.name}"]`,
       successCriteria: quest.stages.flatMap((s) =>
         s.objectives.map((o) => o.description || `Complete: ${o.type} ${o.target}`),
       ),

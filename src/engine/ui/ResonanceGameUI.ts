@@ -16,6 +16,7 @@ import type {
   ResonanceGameResult,
 } from '../resonance';
 import { generatePattern, checkAnswer } from '../resonance';
+import { InputManager } from '../core/InputManager';
 
 const MAX_ATTEMPTS = 3;
 
@@ -433,7 +434,7 @@ export class ResonanceGameUI {
     this.startAnimation();
 
     // Add keyboard listener
-    window.addEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'resonanceGame', handleKeyDown: this.handleKeyDown });
   }
 
   /**
@@ -652,7 +653,7 @@ export class ResonanceGameUI {
    */
   private hide(): void {
     this.stopAnimation();
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('resonanceGame');
 
     // Cleanup afterglow canvas
     this.afterglowCanvas = null;
@@ -1235,7 +1236,7 @@ export class ResonanceGameUI {
    */
   dispose(): void {
     this.stopAnimation();
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('resonanceGame');
     this.overlay.remove();
   }
 }

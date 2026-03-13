@@ -1,4 +1,5 @@
 import { InventoryManager, InventorySlot, ItemDefinition } from '../../inventory';
+import { InputManager } from '../../core/InputManager';
 
 /**
  * Grid-based inventory bag overlay
@@ -218,7 +219,7 @@ export class InventoryUI {
   show(): void {
     this.refresh();
     this.overlay.classList.add('visible');
-    window.addEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'inventory', handleKeyDown: this.handleKeyDown });
   }
 
   /**
@@ -227,7 +228,7 @@ export class InventoryUI {
   hide(): void {
     this.overlay.classList.remove('visible');
     this.tooltip.classList.remove('visible');
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('inventory');
     if (this.onClose) {
       this.onClose();
     }
@@ -361,7 +362,7 @@ export class InventoryUI {
   }
 
   dispose(): void {
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('inventory');
     this.overlay.remove();
   }
 }

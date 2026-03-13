@@ -1,9 +1,8 @@
 /**
  * SceneTurnEditor — read/write editing surface for scene language pack turns.
  *
- * Select scenario + language + band, then edit individual turns:
- * targetText, initialDelivery, supportText, responseMode, responseData,
- * evaluation, focus/reinforcement/ambient vocabulary, repairOptions, emotion, speakerName.
+ * Phase 3 (ADR-015): provenance indicators, auto-manual on edit,
+ * Reset to Generated, no Add Turn button.
  */
 
 import {
@@ -21,10 +20,12 @@ import {
   Accordion,
   Button,
   Divider,
+  Tooltip,
 } from '@mantine/core';
 import type {
   SceneLanguagePack,
   SceneTurn,
+  EditStatus,
 } from '../../../plugins/sugarlang/types';
 import type { ResponseContractMode } from '../../../engine/conversation/types';
 
@@ -42,6 +43,91 @@ const RESPONSE_MODES: { value: ResponseContractMode; label: string }[] = [
   { value: 'free_form', label: 'Free Form' },
 ];
 
+// ---------------------------------------------------------------------------
+// Provenance indicator helpers (ADR-015 Phase 3)
+// ---------------------------------------------------------------------------
+
+interface ProvenanceInfo {
+  color: string;
+  label: string;
+  tooltip: string;
+}
+
+function getProvenanceInfo(turn: SceneTurn): ProvenanceInfo {
+  if (turn.orphaned) {
+    return { color: '#6c7086', label: 'orphaned', tooltip: 'Source quest node no longer exists' };
+  }
+
+  const status: EditStatus = turn.editStatus ?? 'generated';
+  const stale = turn.stale === true;
+
+  switch (status) {
+    case 'generated':
+      return { color: '#a6e3a1', label: 'generated', tooltip: 'Freshly generated from quest source' };
+    case 'reviewed':
+      return stale
+        ? { color: '#f9e2af', label: 'stale', tooltip: 'Reviewed — source changed since review' }
+        : { color: '#89b4fa', label: 'reviewed', tooltip: 'Human-approved' };
+    case 'manual':
+      return stale
+        ? { color: '#fab387', label: 'stale', tooltip: 'Manually edited — source changed since edit' }
+        : { color: '#cba6f7', label: 'manual', tooltip: 'Hand-edited by author' };
+    default:
+      return { color: '#a6e3a1', label: 'generated', tooltip: 'Generated' };
+  }
+}
+
+function ProvenanceDot({ turn }: { turn: SceneTurn }) {
+  const info = getProvenanceInfo(turn);
+  return (
+    <Tooltip label={info.tooltip}>
+      <div
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: info.color,
+          flexShrink: 0,
+        }}
+      />
+    </Tooltip>
+  );
+}
+
+function countIssues(turns: SceneTurn[]): { stale: number; orphaned: number } {
+  let stale = 0;
+  let orphaned = 0;
+  for (const turn of turns) {
+    if (turn.orphaned) orphaned += 1;
+    else if (turn.stale) stale += 1;
+  }
+  return { stale, orphaned };
+}
+
+// ---------------------------------------------------------------------------
+// Substantive fields — editing these auto-sets editStatus to 'manual'
+// ---------------------------------------------------------------------------
+
+const SUBSTANTIVE_KEYS = new Set<keyof SceneTurn>([
+  'targetText',
+  'initialDelivery',
+  'supportText',
+  'responseMode',
+  'responseData',
+  'focusLexicalEntryIds',
+  'reinforcementLexicalEntryIds',
+  'ambientLexicalEntryIds',
+  'evaluation',
+]);
+
+function isSubstantiveEdit(patch: Partial<SceneTurn>): boolean {
+  return Object.keys(patch).some((key) => SUBSTANTIVE_KEYS.has(key as keyof SceneTurn));
+}
+
+// ---------------------------------------------------------------------------
+// SceneTurnEditor
+// ---------------------------------------------------------------------------
+
 interface SceneTurnEditorProps {
   sceneLanguagePacks: Map<string, SceneLanguagePack>;
   onUpdateSceneLanguagePack: (key: string, updated: SceneLanguagePack) => void;
@@ -49,6 +135,12 @@ interface SceneTurnEditorProps {
   onSelectPackKey: (key: string | null) => void;
   selectedBandId: string | null;
   onSelectBandId: (id: string | null) => void;
+  /** Copy a refinement packet to clipboard for a specific turn. */
+  onCopyRefinementPacket?: (turnId: string) => void;
+  /** Copy a refinement packet for the entire selected band. */
+  onCopyBandRefinementPacket?: () => void;
+  /** Open the proposal import modal. */
+  onOpenImportProposal?: () => void;
 }
 
 export function SceneTurnEditor({
@@ -58,6 +150,9 @@ export function SceneTurnEditor({
   onSelectPackKey,
   selectedBandId,
   onSelectBandId,
+  onCopyRefinementPacket,
+  onCopyBandRefinementPacket,
+  onOpenImportProposal,
 }: SceneTurnEditorProps) {
   const packEntries = Array.from(sceneLanguagePacks.entries());
   const selectedPack = selectedPackKey ? sceneLanguagePacks.get(selectedPackKey) : null;
@@ -66,55 +161,49 @@ export function SceneTurnEditor({
   const updateTurn = (turnIndex: number, patch: Partial<SceneTurn>) => {
     if (!selectedPackKey || !selectedPack || !selectedBandId) return;
 
+    // Auto-set editStatus to 'manual' when substantive fields change (ADR-015)
+    const autoManual = isSubstantiveEdit(patch);
+
     const updatedPack: SceneLanguagePack = {
       ...selectedPack,
       bands: selectedPack.bands.map((band) => {
         if (band.bandId !== selectedBandId) return band;
         return {
           ...band,
-          turns: band.turns.map((turn, i) =>
-            i === turnIndex ? { ...turn, ...patch } : turn,
-          ),
+          turns: band.turns.map((turn, i) => {
+            if (i !== turnIndex) return turn;
+            const merged = { ...turn, ...patch };
+            if (autoManual && merged.editStatus !== 'manual') {
+              merged.editStatus = 'manual';
+            }
+            return merged;
+          }),
         };
       }),
     };
     onUpdateSceneLanguagePack(selectedPackKey, updatedPack);
   };
 
-  const addTurn = () => {
-    if (!selectedPackKey || !selectedPack || !selectedBandId) return;
-
-    const band = selectedPack.bands.find((b) => b.bandId === selectedBandId);
-    const nextIndex = (band?.turns.length ?? 0) + 1;
-    const turnId = `${selectedBandId.toLowerCase()}-${selectedPack.targetLanguage}-${String(nextIndex).padStart(2, '0')}`;
-
-    const newTurn: SceneTurn = {
-      turnId,
-      targetText: '',
-      focusLexicalEntryIds: [],
-      reinforcementLexicalEntryIds: [],
-      ambientLexicalEntryIds: [],
-      responseMode: 'short_text',
-    };
-
-    const updatedPack: SceneLanguagePack = {
-      ...selectedPack,
-      bands: selectedPack.bands.map((b) => {
-        if (b.bandId !== selectedBandId) return b;
-        return { ...b, turns: [...b.turns, newTurn] };
-      }),
-    };
-    onUpdateSceneLanguagePack(selectedPackKey, updatedPack);
-  };
-
-  const removeTurn = (turnIndex: number) => {
+  const resetTurnToGenerated = (turnIndex: number) => {
     if (!selectedPackKey || !selectedPack || !selectedBandId) return;
 
     const updatedPack: SceneLanguagePack = {
       ...selectedPack,
-      bands: selectedPack.bands.map((b) => {
-        if (b.bandId !== selectedBandId) return b;
-        return { ...b, turns: b.turns.filter((_, i) => i !== turnIndex) };
+      bands: selectedPack.bands.map((band) => {
+        if (band.bandId !== selectedBandId) return band;
+        return {
+          ...band,
+          turns: band.turns.map((turn, i) => {
+            if (i !== turnIndex) return turn;
+            return {
+              ...turn,
+              editStatus: 'generated' as EditStatus,
+              stale: false,
+              orphaned: false,
+              generationNote: undefined,
+            };
+          }),
+        };
       }),
     };
     onUpdateSceneLanguagePack(selectedPackKey, updatedPack);
@@ -158,18 +247,34 @@ export function SceneTurnEditor({
           <Divider />
           <Text size="xs" fw={500}>Band</Text>
           <Group gap={4}>
-            {selectedPack.bands.map((band) => (
-              <Badge
-                key={band.bandId}
-                size="sm"
-                color={selectedBandId === band.bandId ? 'blue' : 'gray'}
-                variant={selectedBandId === band.bandId ? 'filled' : 'light'}
-                style={{ cursor: 'pointer' }}
-                onClick={() => onSelectBandId(band.bandId)}
-              >
-                {band.bandId} ({band.turns.length})
-              </Badge>
-            ))}
+            {selectedPack.bands.map((band) => {
+              const issues = countIssues(band.turns);
+              return (
+                <Badge
+                  key={band.bandId}
+                  size="sm"
+                  color={selectedBandId === band.bandId ? 'blue' : 'gray'}
+                  variant={selectedBandId === band.bandId ? 'filled' : 'light'}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => onSelectBandId(band.bandId)}
+                  rightSection={
+                    (issues.stale > 0 || issues.orphaned > 0) ? (
+                      <Badge
+                        size="xs"
+                        color={issues.stale > 0 ? 'yellow' : 'gray'}
+                        variant="filled"
+                        circle
+                        style={{ marginLeft: 4 }}
+                      >
+                        {issues.stale + issues.orphaned}
+                      </Badge>
+                    ) : null
+                  }
+                >
+                  {band.bandId} ({band.turns.length})
+                </Badge>
+              );
+            })}
           </Group>
         </>
       )}
@@ -181,23 +286,23 @@ export function SceneTurnEditor({
           <ScrollArea h={200}>
             <Stack gap={2}>
               {selectedBand.turns.map((turn, i) => (
-                <Text
+                <Group
                   key={turn.turnId}
-                  size="xs"
+                  gap={6}
                   p={4}
                   style={{
                     borderRadius: 4,
                     background: 'rgba(255,255,255,0.03)',
                   }}
                 >
-                  {i + 1}. {turn.turnId}
-                </Text>
+                  <ProvenanceDot turn={turn} />
+                  <Text size="xs" style={{ flex: 1 }} truncate>
+                    {i + 1}. {turn.turnId}
+                  </Text>
+                </Group>
               ))}
             </Stack>
           </ScrollArea>
-          <Button size="xs" variant="light" onClick={addTurn}>
-            + Add Turn
-          </Button>
         </>
       )}
     </Stack>
@@ -212,27 +317,70 @@ export function SceneTurnEditor({
             {selectedPack!.scenarioId} / {selectedPack!.targetLanguage} / {selectedBandId}
           </Title>
           <Badge size="sm">{selectedBand.turns.length} turn(s)</Badge>
+          {(() => {
+            const issues = countIssues(selectedBand.turns);
+            return (
+              <>
+                {issues.stale > 0 && (
+                  <Badge size="sm" color="yellow" variant="light">
+                    {issues.stale} stale
+                  </Badge>
+                )}
+                {issues.orphaned > 0 && (
+                  <Badge size="sm" color="gray" variant="light">
+                    {issues.orphaned} orphaned
+                  </Badge>
+                )}
+              </>
+            );
+          })()}
+          <div style={{ flex: 1 }} />
+          {onCopyBandRefinementPacket && (
+            <Tooltip label="Copy a refinement packet for all generated turns in this band to clipboard">
+              <Button size="xs" variant="light" color="violet" onClick={onCopyBandRefinementPacket}>
+                Refine Band
+              </Button>
+            </Tooltip>
+          )}
+          {onOpenImportProposal && (
+            <Tooltip label="Import an LLM refinement proposal (JSON)">
+              <Button size="xs" variant="light" color="teal" onClick={onOpenImportProposal}>
+                Import Proposal
+              </Button>
+            </Tooltip>
+          )}
         </Group>
 
         <Accordion variant="separated" multiple>
-          {selectedBand.turns.map((turn, i) => (
-            <Accordion.Item key={turn.turnId} value={turn.turnId}>
-              <Accordion.Control>
-                <Group gap="xs">
-                  <Text size="sm" fw={500}>{turn.turnId}</Text>
-                  <Badge size="xs" color="blue">{turn.responseMode.replace(/_/g, ' ')}</Badge>
-                  {turn.speakerName && <Badge size="xs" color="gray">{turn.speakerName}</Badge>}
-                </Group>
-              </Accordion.Control>
-              <Accordion.Panel>
-                <TurnEditor
-                  turn={turn}
-                  onChange={(patch) => updateTurn(i, patch)}
-                  onRemove={() => removeTurn(i)}
-                />
-              </Accordion.Panel>
-            </Accordion.Item>
-          ))}
+          {selectedBand.turns.map((turn, i) => {
+            const prov = getProvenanceInfo(turn);
+            return (
+              <Accordion.Item key={turn.turnId} value={turn.turnId}>
+                <Accordion.Control>
+                  <Group gap="xs">
+                    <ProvenanceDot turn={turn} />
+                    <Text size="sm" fw={500}>{turn.turnId}</Text>
+                    <Badge size="xs" color="blue">{turn.responseMode.replace(/_/g, ' ')}</Badge>
+                    {turn.speakerName && <Badge size="xs" color="gray">{turn.speakerName}</Badge>}
+                    <Badge size="xs" variant="light" style={{ color: prov.color, borderColor: prov.color }}>
+                      {prov.label}
+                    </Badge>
+                    {turn.turnRole && (
+                      <Badge size="xs" variant="light" color="grape">{turn.turnRole.replace(/_/g, ' ')}</Badge>
+                    )}
+                  </Group>
+                </Accordion.Control>
+                <Accordion.Panel>
+                  <TurnEditor
+                    turn={turn}
+                    onChange={(patch) => updateTurn(i, patch)}
+                    onResetToGenerated={() => resetTurnToGenerated(i)}
+                    onCopyRefinementPacket={onCopyRefinementPacket ? () => onCopyRefinementPacket(turn.turnId) : undefined}
+                  />
+                </Accordion.Panel>
+              </Accordion.Item>
+            );
+          })}
         </Accordion>
       </Stack>
     </ScrollArea>
@@ -252,20 +400,35 @@ export function SceneTurnEditor({
 function TurnEditor({
   turn,
   onChange,
-  onRemove,
+  onResetToGenerated,
+  onCopyRefinementPacket,
 }: {
   turn: SceneTurn;
   onChange: (patch: Partial<SceneTurn>) => void;
-  onRemove: () => void;
+  onResetToGenerated: () => void;
+  onCopyRefinementPacket?: () => void;
 }) {
+  const canReset = turn.editStatus === 'manual' || turn.editStatus === 'reviewed';
+
   return (
     <Stack gap="sm">
+      {/* Provenance info bar */}
+      {(turn.stale || turn.orphaned) && (
+        <Paper p="xs" withBorder style={{ borderColor: turn.stale ? '#f9e2af' : '#6c7086' }}>
+          <Text size="xs" c={turn.stale ? 'yellow' : 'dimmed'}>
+            {turn.stale
+              ? 'Source content has changed since this turn was last edited. Re-sync or use "Reset to Generated" to update.'
+              : 'This turn\'s source quest node no longer exists. It may be safe to remove.'}
+          </Text>
+        </Paper>
+      )}
+
       <Group gap="md" grow>
         <TextInput
           label="Turn ID"
           size="xs"
           value={turn.turnId}
-          onChange={(e) => onChange({ turnId: e.currentTarget.value })}
+          readOnly
         />
         <TextInput
           label="Speaker"
@@ -362,10 +525,30 @@ function TurnEditor({
         onChange={(evaluation) => onChange({ evaluation })}
       />
 
+      {/* Provenance metadata (read-only) */}
+      <Paper p="xs" withBorder bg="dark.7">
+        <Group gap="xs">
+          <Text size="xs" c="dimmed">Status: {turn.editStatus ?? 'generated'}</Text>
+          {turn.sourceHash && <Text size="xs" c="dimmed">Hash: {turn.sourceHash}</Text>}
+          {turn.generationNote && <Text size="xs" c="dimmed">Note: {turn.generationNote}</Text>}
+        </Group>
+      </Paper>
+
       <Group justify="flex-end">
-        <Button size="xs" variant="subtle" color="red" onClick={onRemove}>
-          Remove Turn
-        </Button>
+        {onCopyRefinementPacket && (
+          <Tooltip label="Copy a refinement packet for this turn to clipboard. Paste into an external AI assistant.">
+            <Button size="xs" variant="subtle" color="violet" onClick={onCopyRefinementPacket}>
+              Refine with AI
+            </Button>
+          </Tooltip>
+        )}
+        {canReset && (
+          <Tooltip label="Re-derive this turn from the current quest source. Discards manual edits.">
+            <Button size="xs" variant="subtle" color="yellow" onClick={onResetToGenerated}>
+              Reset to Generated
+            </Button>
+          </Tooltip>
+        )}
       </Group>
     </Stack>
   );

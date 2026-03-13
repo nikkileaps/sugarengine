@@ -1,4 +1,5 @@
 import { DialogueNode, DialogueNext, PLAYER_VO, EXCERPT } from '../dialogue';
+import { InputManager } from '../core/InputManager';
 
 export type DialogueBoxCallback = (selected?: DialogueNext) => void;
 export type DialogueCancelCallback = () => void;
@@ -162,14 +163,16 @@ export class DialogueBox {
       display: none;
       animation: dialoguePulse 2s ease-in-out infinite;
     `;
-    this.continueHint.innerHTML = '▼ Press <span style="color: rgba(240, 230, 216, 0.6); font-weight: 500;">E</span> to continue';
+    this.continueHint.innerHTML = '▼ Press <span style="color: rgba(240, 230, 216, 0.6); font-weight: 500;">Enter</span> to continue';
     this.innerBox.appendChild(this.continueHint);
 
     parentContainer.appendChild(this.container);
 
-    // Listen for E key to advance dialogue
-    window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+    // Bind handler for context stack
+    this.boundHandleKeyDown = (e: KeyboardEvent) => this.handleKeyDown(e);
   }
+
+  private boundHandleKeyDown: (e: KeyboardEvent) => void;
 
   private injectStyles(): void {
     if (document.getElementById('dialogue-box-styles')) return;
@@ -239,7 +242,6 @@ export class DialogueBox {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
-    if (!this.isVisible()) return;
 
     // Escape to cancel/close dialogue
     if (e.code === 'Escape') {
@@ -249,7 +251,7 @@ export class DialogueBox {
       return;
     }
 
-    if (e.code === 'KeyE') {
+    if (e.code === 'Enter') {
       if (this.isTyping) {
         // Skip typewriter, show full text
         this.skipTypewriter();
@@ -337,6 +339,7 @@ export class DialogueBox {
     this.startTypewriter(node.text);
 
     this.container.style.display = 'block';
+    InputManager.getInstance()?.pushContext({ name: 'dialogueBox', handleKeyDown: this.boundHandleKeyDown });
   }
 
   private startTypewriter(text: string): void {
@@ -414,6 +417,7 @@ export class DialogueBox {
 
   hide(): void {
     this.container.style.display = 'none';
+    InputManager.getInstance()?.popContext('dialogueBox');
     if (this.typewriterInterval) {
       clearInterval(this.typewriterInterval);
       this.typewriterInterval = null;
@@ -429,6 +433,7 @@ export class DialogueBox {
 
   dispose(): void {
     this.hide();
+    InputManager.getInstance()?.popContext('dialogueBox');
     this.container.remove();
   }
 }

@@ -1,3 +1,5 @@
+import { InputManager } from '../core/InputManager';
+
 export interface AgentConversationSessionView {
   npcId: string;
   npcName?: string;
@@ -99,14 +101,16 @@ export class AgentConversationUI {
     this.container.appendChild(this.panel);
     parent.appendChild(this.container);
 
-    window.addEventListener('keydown', (event) => {
-      if (!this.visible) return;
+    // Bind handler for context stack
+    this.boundHandleKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'Escape') {
         event.preventDefault();
         this.closeHandler?.();
       }
-    });
+    };
   }
+
+  private boundHandleKeyDown: (e: KeyboardEvent) => void = () => {};
 
   private injectStyles(): void {
     if (document.getElementById('agent-chat-styles')) return;
@@ -305,12 +309,14 @@ export class AgentConversationUI {
     this.addLine('system', 'Conversation started. Type your message.');
     this.container.classList.add('visible');
     this.visible = true;
+    InputManager.getInstance()?.pushContext({ name: 'agentConversation', handleKeyDown: this.boundHandleKeyDown });
     this.inputEl.focus();
   }
 
   hide(): void {
     this.container.classList.remove('visible');
     this.visible = false;
+    InputManager.getInstance()?.popContext('agentConversation');
     this.activeSession = null;
     this.historyEl.innerHTML = '';
     this.inputEl.value = '';

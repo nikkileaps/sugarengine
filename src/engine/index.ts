@@ -12,6 +12,7 @@ export type { GameConfig, GameEventHandlers, TitleScreenConfig } from './core/Ga
 export { GameCamera } from './core/GameCamera';
 export type { GameCameraConfig } from './core/GameCamera';
 export { InputManager } from './core/InputManager';
+export type { InputContext } from './core/InputManager';
 export { PostProcessing } from './core/PostProcessing';
 
 // ECS

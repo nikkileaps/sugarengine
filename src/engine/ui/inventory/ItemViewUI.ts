@@ -1,4 +1,5 @@
 import { ItemDefinition, ItemView } from '../../inventory';
+import { InputManager } from '../../core/InputManager';
 import { ReadableView, LayoutResult, createCloseHint, createHeader } from './layoutTypes';
 import { bookStyles, renderBook } from './BookLayout';
 import { newspaperStyles, renderNewspaper } from './NewspaperLayout';
@@ -416,7 +417,7 @@ export class ItemViewUI {
     this.panel.style.animation = 'itemviewSlideIn 0.25s ease-out forwards';
 
     this.overlay.classList.add('visible');
-    window.addEventListener('keydown', this.boundHandleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'itemView', handleKeyDown: this.boundHandleKeyDown });
   }
 
   private renderReadable(item: ItemDefinition, view: ReadableView): LayoutResult | null {
@@ -637,7 +638,7 @@ export class ItemViewUI {
 
   hide(): void {
     this.overlay.classList.remove('visible');
-    window.removeEventListener('keydown', this.boundHandleKeyDown);
+    InputManager.getInstance()?.popContext('itemView');
     this.onUseCallback = null;
 
     // Notify layout
@@ -660,7 +661,6 @@ export class ItemViewUI {
 
   dispose(): void {
     this.hide();
-    window.removeEventListener('keydown', this.boundHandleKeyDown);
     this.overlay.remove();
   }
 }

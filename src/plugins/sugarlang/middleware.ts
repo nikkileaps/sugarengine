@@ -215,9 +215,7 @@ export function createSugarlangMiddleware(
     };
     setState(session, state);
 
-    // Set communicative task from the scenario brief.
     if (scenario) {
-      constraints.communicativeTask = scenario.communicativeTask;
       constraints.sceneSemantics = {
         scenarioId,
         activeReferents: scenario.activeReferents,

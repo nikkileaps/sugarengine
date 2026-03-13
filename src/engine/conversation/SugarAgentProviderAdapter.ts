@@ -83,7 +83,6 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
             supportLanguagePolicy: constraints.supportLanguagePolicy,
             targetLanguage: constraints.targetLanguage,
             supportLanguage: constraints.supportLanguage,
-            communicativeTask: constraints.communicativeTask,
             correctionPosture: constraints.hardConstraints['correctionPosture'] as string | undefined,
             availableTrackedLexicalEntryIds: constraints.availableTrackedLexicalEntryIds,
             teachingSubset: constraints.teachingSubset,
@@ -114,8 +113,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
         ` posture=${pedagogyContext.correctionPosture ?? 'none'}` +
         ` trackedPool=${pedagogyContext.availableTrackedLexicalEntryIds?.length ?? 0}` +
         ` focus=${pedagogyContext.teachingSubset?.focusLexicalEntryIds.length ?? 0}` +
-        ` grounding=${pedagogyContext.groundingScope?.length ?? 0} refs` +
-        ` task=${pedagogyContext.communicativeTask ?? '?'}`,
+        ` grounding=${pedagogyContext.groundingScope?.length ?? 0} refs`,
       );
     }
 

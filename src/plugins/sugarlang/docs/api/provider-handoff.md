@@ -95,7 +95,6 @@ pedagogyContext: {
   supportLanguagePolicy: 'target_only',
   targetLanguage: 'es',
   supportLanguage: 'en',
-  communicativeTask: 'Find the lost luggage',
   correctionPosture: 'none',
   groundingScope: [
     { conceptId: 'object.suitcase', targetForm: 'maleta', worldObjectId: 'suitcase-01' }

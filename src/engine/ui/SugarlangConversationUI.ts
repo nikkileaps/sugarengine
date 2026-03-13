@@ -11,6 +11,7 @@
  */
 
 import type { ConversationTurnEnvelope, PlayerInput } from '../conversation/types';
+import { InputManager } from '../core/InputManager';
 import { SupportStrip } from './SupportStrip';
 import type { GlossaryChipData } from './SupportStrip';
 import { ResponseModeUI } from './ResponseModeUI';
@@ -63,6 +64,7 @@ export class SugarlangConversationUI {
   private repairHandler: RepairHandler | null = null;
   private visible = false;
   private awaitingAdvance = false;
+  private boundHandleKeyDown: (e: KeyboardEvent) => void = () => {};
 
   constructor(parent: HTMLElement) {
     this.injectStyles();
@@ -103,20 +105,20 @@ export class SugarlangConversationUI {
     this.container.appendChild(this.panel);
     parent.appendChild(this.container);
 
-    window.addEventListener('keydown', (event) => {
-      if (!this.visible) return;
+    // Bind handler for context stack
+    this.boundHandleKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'Escape') {
         event.preventDefault();
         this.closeHandler?.();
         return;
       }
       // Advance past NPC-only delivery turns (free_form with no response widget)
-      if (this.awaitingAdvance && (event.code === 'KeyE' || event.code === 'Enter' || event.code === 'Space')) {
+      if (this.awaitingAdvance && event.code === 'Enter') {
         event.preventDefault();
         this.awaitingAdvance = false;
         this.submitHandler?.({ text: '' });
       }
-    });
+    };
   }
 
   setOnSubmit(handler: SugarlangSubmitHandler): void {
@@ -137,6 +139,7 @@ export class SugarlangConversationUI {
   show(): void {
     this.container.classList.add('visible');
     this.visible = true;
+    InputManager.getInstance()?.pushContext({ name: 'sugarlangConversation', handleKeyDown: this.boundHandleKeyDown });
   }
 
   /**
@@ -218,6 +221,7 @@ export class SugarlangConversationUI {
   hide(): void {
     this.container.classList.remove('visible');
     this.visible = false;
+    InputManager.getInstance()?.popContext('sugarlangConversation');
     this.supportStrip.hide();
     this.responseModeUI.hide();
     this.repairArea.innerHTML = '';

@@ -216,8 +216,6 @@ export function deserializeScenarioBrief(json: string): {
   const d = envelope.data as Record<string, unknown>;
   const ctx = 'ScenarioBrief';
   requireString(d, 'scenarioId', errors, ctx);
-  requireString(d, 'communicativeTask', errors, ctx);
-
   if (!Array.isArray(d.supportedBands)) {
     errors.push(`${ctx}: missing "supportedBands" array`);
   } else {

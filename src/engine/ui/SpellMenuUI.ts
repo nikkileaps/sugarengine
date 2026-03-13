@@ -1,4 +1,5 @@
 import { CasterManager, SpellDefinition } from '../caster';
+import { InputManager } from '../core/InputManager';
 
 /**
  * Full-screen spell selection menu
@@ -398,7 +399,7 @@ export class SpellMenuUI {
   show(): void {
     this.refresh();
     this.overlay.classList.add('visible');
-    window.addEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'spellMenu', handleKeyDown: this.handleKeyDown });
   }
 
   /**
@@ -406,7 +407,7 @@ export class SpellMenuUI {
    */
   hide(): void {
     this.overlay.classList.remove('visible');
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('spellMenu');
     this.onCloseHandler?.();
   }
 
@@ -542,7 +543,7 @@ export class SpellMenuUI {
   }
 
   dispose(): void {
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('spellMenu');
     this.overlay.remove();
   }
 }

@@ -62,6 +62,15 @@ interface TreeWalkState {
   targetLanguage: string;
   /** Speaker UUID → display name map built from scenario npcIds/npcNames. */
   speakerNameMap: Map<string, string>;
+  /** Interaction ID for turn ID construction. */
+  interactionId: string;
+  /**
+   * Authored scene turns keyed by turnId. Used to overlay reviewed/manual
+   * content over the programmatic rendering (ADR-015 Phase 4).
+   */
+  authoredTurns: Map<string, SceneTurn>;
+  /** Dialogue node index — tracks the t{n} counter per interaction for turn ID construction. */
+  nodeIndex: number;
   complete: boolean;
 }
 
@@ -464,9 +473,19 @@ export function createSugarlangScriptedProvider(
       // "Player" for any speaker matching typical player conventions
       speakerNameMap.set('Player', 'Player');
 
+      // Build authored turn map from scene language pack (ADR-015 Phase 4)
+      const authoredTurns = new Map<string, SceneTurn>();
+      const bandContent = resolveSceneBandContent(contentBundle, scenarioId, targetLang, bandId);
+      if (bandContent) {
+        for (const turn of bandContent.turns) {
+          authoredTurns.set(turn.turnId, turn);
+        }
+      }
+
       console.log(
         `[SL·provider] tree-walk mode for "${scenarioId}" dialogue=${interaction.sourceDialogueId}` +
         ` nodes=${tree.nodes.length} vocabMatches=${vocabMatches.length} band=${bandId}` +
+        ` authoredTurns=${authoredTurns.size}` +
         ` speakerNames=[${Array.from(speakerNameMap.entries()).map(([k, v]) => `${k.substring(0, 8)}→${v}`).join(', ')}]`,
       );
 
@@ -481,6 +500,9 @@ export function createSugarlangScriptedProvider(
         bandId,
         targetLanguage: targetLang,
         speakerNameMap,
+        interactionId: interaction.interactionId,
+        authoredTurns,
+        nodeIndex: 0,
         complete: false,
       };
     }
@@ -635,7 +657,7 @@ export function createSugarlangScriptedProvider(
     }
 
     const lexicon = contentBundle.lexicons.get(state.targetLanguage);
-    const output = renderNodeForBand(
+    let output = renderNodeForBand(
       node,
       state.rolePlan,
       lexicon ?? { targetLanguage: state.targetLanguage, entries: [] },
@@ -644,6 +666,35 @@ export function createSugarlangScriptedProvider(
       constraints,
       state.speakerNameMap,
     );
+
+    // ADR-015 Phase 4: overlay authored turn content for reviewed/manual turns.
+    // Increment node counter (matches generateBandedTurns turn numbering).
+    state.nodeIndex += 1;
+    const turnId = `${state.interactionId}--${state.bandId}--t${state.nodeIndex}`;
+    const authored = state.authoredTurns.get(turnId);
+    if (authored && authored.editStatus && authored.editStatus !== 'generated') {
+      // Use the authored utterance instead of the programmatically rendered one.
+      const authoredUtterance = authored.initialDelivery ?? authored.targetText;
+      output = {
+        ...output,
+        utterance: authoredUtterance,
+        diagnostics: {
+          ...(output.diagnostics as Record<string, unknown> ?? {}),
+          targetText: authored.targetText,
+          authoredOverlay: true,
+        },
+      };
+      // Re-build response contract from the authored text (the blanks need
+      // to be placed based on the authored rendering, not the programmatic one).
+      const isPlayerLine =
+        node.speaker === PLAYER.id ||
+        node.speaker === PLAYER_VO.id ||
+        node.speakerId === PLAYER.id ||
+        node.speakerId === PLAYER_VO.id;
+      if (isPlayerLine) {
+        output.responseContract = buildPlayerLineContract(authoredUtterance, state.bandId, state.rolePlan);
+      }
+    }
 
     // End nodes (no next) show their text first — closeConversation fires
     // on the subsequent advance when produceTurn is called with playerInput

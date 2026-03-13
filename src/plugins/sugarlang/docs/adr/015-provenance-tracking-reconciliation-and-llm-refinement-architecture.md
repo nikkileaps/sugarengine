@@ -159,7 +159,7 @@ The refinement packet sent to the LLM contains:
 
 ```
 scenarioContext:
-  scenarioId, communicativeTask, npcNames, activeReferents
+  scenarioId, npcNames, activeReferents
 
 bandContext:
   bandId, mixingLevel, supportLanguagePolicy, responsePosture
@@ -293,28 +293,6 @@ Sugarlang's `manual` edit status and "Reset to Generated" action follow this sam
 Git's merge model resolves concurrent changes by comparing both sides against a common ancestor. When both sides change the same region, it produces a conflict for manual resolution. When changes don't overlap, it merges silently.
 
 Sugarlang's reconciliation workflow follows this spirit: `generated` turns auto-merge (silently regenerate), `manual` turns with source changes produce conflicts for author resolution.
-
-## Implementation Phases
-
-### Phase 1: Provenance Fields and Source Hashing
-
-Add `sourceHash`, `editStatus`, and `generationNote` to the turn data model. Compute source hashes during Sync From Quest. Serialize provenance fields in artifacts. All existing turns default to `editStatus: 'generated'`.
-
-### Phase 2: Sync Respects Edit Status
-
-Update Sync From Quest to check `editStatus` and `sourceHash` before overwriting. Implement the sync behavior table. Flag stale and orphaned turns.
-
-### Phase 3: Editor Indicators and Reconciliation UI
-
-Add colored dot indicators to the turn list. Build the reconciliation panel. Remove "+ Add Turn". Add "Reset to Generated" per turn.
-
-### Phase 4: LLM Refinement Integration
-
-Build the refinement packet assembler. Implement per-turn, per-band, and per-scenario refinement actions. Wire to the AI invocation strategy from ADR-011. Add "Refine with AI" button.
-
-### Phase 5: Polish and Workflow Tuning
-
-Tune the reconciliation UX based on real authoring experience. Add bulk actions (approve all stale, re-refine all reviewed, etc.). Add undo support for reconciliation decisions.
 
 ## Consequences
 

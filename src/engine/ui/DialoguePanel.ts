@@ -1,4 +1,5 @@
 import { DialogueNode, DialogueNext, DialoguePresenter, PLAYER, PLAYER_VO, EXCERPT } from '../dialogue';
+import { InputManager } from '../core/InputManager';
 
 /**
  * Disco Elysium-style dialogue panel — right side of screen.
@@ -86,8 +87,11 @@ export class DialoguePanel implements DialoguePresenter {
     this.container.appendChild(this.panel);
     parentContainer.appendChild(this.container);
 
-    window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+    // Bind handler for context stack
+    this.boundHandleKeyDown = (e: KeyboardEvent) => this.handleKeyDown(e);
   }
+
+  private boundHandleKeyDown: (e: KeyboardEvent) => void;
 
   // ---------------------------------------------------------------------------
   // DialoguePresenter — lifecycle
@@ -96,10 +100,12 @@ export class DialoguePanel implements DialoguePresenter {
   show(): void {
     this.visibleSince = performance.now();
     this.container.classList.add('visible');
+    InputManager.getInstance()?.pushContext({ name: 'dialoguePanel', handleKeyDown: this.boundHandleKeyDown });
   }
 
   hide(): void {
     this.container.classList.remove('visible');
+    InputManager.getInstance()?.popContext('dialoguePanel');
     this.stopTypewriter();
     this.isTyping = false;
     this.hasActiveWidget = false;
@@ -401,7 +407,7 @@ export class DialoguePanel implements DialoguePresenter {
 
     const hint = document.createElement('div');
     hint.className = 'dialogue-continue-hint';
-    hint.innerHTML = 'Press <span style="color: rgba(240, 230, 216, 0.6);">E</span> to continue';
+    hint.innerHTML = 'Press <span style="color: rgba(240, 230, 216, 0.6);">Enter</span> to continue';
     this.actionsContainer.appendChild(hint);
   }
 
@@ -410,7 +416,6 @@ export class DialoguePanel implements DialoguePresenter {
   // ---------------------------------------------------------------------------
 
   private handleKeyDown(e: KeyboardEvent): void {
-    if (!this.isVisible()) return;
     if (e.timeStamp < this.visibleSince) return;
 
     if (e.code === 'Escape') {
@@ -419,7 +424,7 @@ export class DialoguePanel implements DialoguePresenter {
       return;
     }
 
-    if (e.code === 'KeyE' || e.code === 'Space') {
+    if (e.code === 'Enter') {
       e.preventDefault();
       if (this.isTyping) {
         this.skipTypewriter();

@@ -78,6 +78,7 @@ const HELLO_LEXICON = makeLexicon([
   { lexicalEntryId: 'color.red', targetForm: 'roja', gloss: 'red', introductionBand: 'B1', category: 'color' },
   { lexicalEntryId: 'verb.is_located', targetForm: 'esta', gloss: 'is / is located', introductionBand: 'B1', category: 'verb' },
   { lexicalEntryId: 'verb.help', targetForm: 'ayudar', gloss: 'help', introductionBand: 'B2', category: 'verb' },
+  { lexicalEntryId: 'phrase.can_you', targetForm: 'puedes', gloss: 'can you', introductionBand: 'B2', category: 'phrase' },
   { lexicalEntryId: 'phrase.where_is', targetForm: 'donde esta', gloss: 'where is', introductionBand: 'B2', category: 'phrase' },
   { lexicalEntryId: 'object.door', targetForm: 'puerta', gloss: 'door', introductionBand: 'B3', category: 'object' },
 ]);
@@ -270,8 +271,8 @@ describe('generateBandedTurns', () => {
     expect(rendered.toLowerCase()).toContain('ayudar');
   });
 
-  // 13. B3-B4 rendering — all matched + function words swapped
-  it('B3 rendering swaps all matched + function words', () => {
+  // 13. B3-B4 rendering — all matched vocabulary swapped
+  it('B3 rendering swaps all matched vocabulary', () => {
     const matches = matchVocabulary('Hello. Can you help?', HELLO_LEXICON);
     const roles = assignVocabularyRoles(matches, 'B3');
 
@@ -279,7 +280,7 @@ describe('generateBandedTurns', () => {
 
     expect(rendered.toLowerCase()).toContain('hola');
     expect(rendered.toLowerCase()).toContain('ayudar');
-    // "can you" is a multi-word function word → "puedes"
+    // "can you" is a lexicon phrase entry → "puedes"
     expect(rendered.toLowerCase()).toContain('puedes');
   });
 
@@ -334,8 +335,8 @@ describe('generateBandedTurns', () => {
     expect(evaluation!.acceptedAnswers).toEqual(['hola', 'soy']);
   });
 
-  // 18. All turns marked generationSource: 'derived'
-  it('marks all turns with generationSource derived', () => {
+  // 18. All turns have provenance fields (ADR-015)
+  it('marks all turns with editStatus generated and a non-empty sourceHash', () => {
     const result = generateBandedTurns(makeInput({
       dialogueLines: [
         makeLine({ text: 'Hello!', speaker: 'Rosa' }),
@@ -346,7 +347,9 @@ describe('generateBandedTurns', () => {
 
     for (const band of result.bands) {
       for (const turn of band.turns) {
-        expect(turn.generationSource).toBe('derived');
+        expect(turn.editStatus).toBe('generated');
+        expect(turn.sourceHash).toBeDefined();
+        expect(turn.sourceHash!.length).toBe(12);
       }
     }
   });

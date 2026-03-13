@@ -1,7 +1,7 @@
 /**
  * ScenarioEditor — editable panel for ScenarioBrief artifacts.
  *
- * Allows editing: communicativeTask, supportedBands, npcIds/npcNames,
+ * Allows editing: supportedBands, npcIds/npcNames,
  * activeReferents, successCriteria.
  */
 
@@ -83,13 +83,6 @@ export function ScenarioEditor({
           <Title order={6} mb="xs">Scenario: {scenario.scenarioId}</Title>
 
           <Stack gap="sm">
-            <TextInput
-              label="Communicative Task"
-              value={scenario.communicativeTask}
-              onChange={(e) => update({ communicativeTask: e.currentTarget.value })}
-              size="sm"
-            />
-
             <Select
               label="Associated Quest"
               placeholder="Select a quest"

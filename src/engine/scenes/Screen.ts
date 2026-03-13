@@ -1,4 +1,5 @@
 import { MenuItem, ScreenShowOptions } from './types';
+import { InputManager } from '../core/InputManager';
 
 /**
  * Abstract base class for menu screens
@@ -39,7 +40,7 @@ export abstract class Screen {
     this.isActive = true;
     this.selectedIndex = this.findFirstEnabledIndex();
     this.updateSelection();
-    window.addEventListener('keydown', this.handleKeyDown, true);
+    InputManager.getInstance()?.pushContext({ name: this.getClassName(), handleKeyDown: this.handleKeyDown });
   }
 
   /**
@@ -48,7 +49,7 @@ export abstract class Screen {
   hide(): void {
     this.element.classList.remove('visible');
     this.isActive = false;
-    window.removeEventListener('keydown', this.handleKeyDown, true);
+    InputManager.getInstance()?.popContext(this.getClassName());
   }
 
   /**
@@ -69,8 +70,6 @@ export abstract class Screen {
    * Handle keyboard input
    */
   protected handleKeyDown(e: KeyboardEvent): void {
-    if (!this.isActive) return;
-
     switch (e.code) {
       case 'ArrowUp':
         e.preventDefault();
@@ -208,7 +207,7 @@ export abstract class Screen {
    * Clean up resources
    */
   dispose(): void {
-    window.removeEventListener('keydown', this.handleKeyDown, true);
+    InputManager.getInstance()?.popContext(this.getClassName());
     this.element.remove();
   }
 }

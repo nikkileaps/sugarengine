@@ -24,6 +24,7 @@ import {
   Switch,
   Text,
   TextInput,
+  Textarea,
   Tooltip,
   Title,
 } from '@mantine/core';
@@ -48,9 +49,15 @@ import {
   type ScaffoldProjectInput,
 } from '../../../plugins/sugarlang/content/draft-scaffold';
 import { syncInteractionsFromQuest } from '../../../plugins/sugarlang/content/sync-from-quest';
-// generate-banded-turns pure functions are still available for future use;
-// runtime now walks dialogue trees per-node (Plan 005).
-import { getSharedLexicon, getAvailableSharedLanguages } from '../../../plugins/sugarlang/content/lexicons';
+import { generateBandedTurns, walkDialogueForTurnDerivation } from '../../../plugins/sugarlang/content/generate-banded-turns';
+import { reconcileTurns, type ReconciliationSummary, type StaleTurnPair } from '../../../plugins/sugarlang/content/reconcile-turns';
+import { ReconciliationModal, type ResolvedTurn } from './ReconciliationModal';
+import {
+  assembleRefinementPacket,
+  parseRefinementProposal,
+  applyRefinementProposal,
+} from '../../../plugins/sugarlang/content/refinement-packet';
+import { getSharedLexicon, getAvailableSharedLanguages, mergeExplicitSeedEntries } from '../../../plugins/sugarlang/content/lexicons';
 import type {
   ArtifactValidationResult,
 } from '../../../plugins/sugarlang/content/artifacts';
@@ -62,6 +69,7 @@ import type {
   ScenarioBrief,
   SceneLanguagePack,
   SugarlangContentBundle,
+  LearnerBandId,
 } from '../../../plugins/sugarlang/types';
 import { BandMatrixEditor } from './BandMatrixEditor';
 import { ScenarioEditor } from './ScenarioEditor';
@@ -223,12 +231,6 @@ function getScenarioArtifactPaths(
   ];
 }
 
-function summarizeScenarioTask(task: string): string {
-  const normalized = task.trim();
-  if (normalized.length <= 80) return normalized;
-  return `${normalized.slice(0, 77)}...`;
-}
-
 function findGeneratedScenarioId(files: Map<string, string>): string | null {
   for (const path of files.keys()) {
     if (
@@ -310,6 +312,10 @@ export function SugarlangPanel({
   const [selectedQuestIdForCreation, setSelectedQuestIdForCreation] = useState<string | null>(null);
   const [pluginSettingsOpen, setPluginSettingsOpen] = useState(false);
   const [pluginSettingsTab, setPluginSettingsTab] = useState<PluginSettingsTab>('band-policies');
+  const [proposalModalOpen, setProposalModalOpen] = useState(false);
+  const [proposalJson, setProposalJson] = useState('');
+  const [reconciliationPairs, setReconciliationPairs] = useState<StaleTurnPair[]>([]);
+  const [reconciliationPackKey, setReconciliationPackKey] = useState<string | null>(null);
 
   const sugarlangPlugin = plugins.find((plugin) => plugin.id === 'sugarlang');
   const isEnabled = sugarlangPlugin?.enabled !== false;
@@ -355,7 +361,7 @@ export function SugarlangPanel({
     const query = searchQuery.trim().toLowerCase();
     return scenarioEntries.filter((scenario) =>
       scenario.scenarioId.toLowerCase().includes(query)
-      || scenario.communicativeTask.toLowerCase().includes(query)
+      || (scenario.associatedQuestId ?? '').toLowerCase().includes(query)
       || scenario.npcIds.some((npcId) => npcId.toLowerCase().includes(query))
       || (scenario.npcNames ?? []).some((name) => name.toLowerCase().includes(query)),
     );
@@ -371,8 +377,9 @@ export function SugarlangPanel({
   );
 
   const selectedScenarioPackEntries = useMemo(
-    () => getScenarioPackEntries(state.editBundle, selectedScenarioId),
-    [state.editBundle, selectedScenarioId],
+    () => getScenarioPackEntries(state.editBundle, selectedScenarioId)
+      .filter(([, pack]) => !disabledLanguages.has(pack.targetLanguage)),
+    [state.editBundle, selectedScenarioId, disabledLanguages],
   );
 
   const selectedScenarioGrounding = useMemo<GroundingMap | null>(
@@ -499,9 +506,32 @@ export function SugarlangPanel({
         }
       }
 
+      // Merge any new explicit entries from the code seed into persisted lexicons.
+      // This ensures hand-authored entries added to es.ts/it.ts/en.ts are picked up
+      // without wiping manual edits or regenerating the whole lexicon.
+      const mergedLanguages: string[] = [];
+      for (const language of bundleLanguages) {
+        const current = repairedBundle.lexicons.get(language);
+        if (!current) continue;
+        const { pack, added } = mergeExplicitSeedEntries(current, language);
+        if (added > 0) {
+          repairedBundle.lexicons.set(language, pack);
+          mergedLanguages.push(language);
+          await writePluginArtifact(
+            gameRootPath,
+            gameId,
+            'sugarlang',
+            artifactPaths.lexicon(language),
+            serializeLexiconPack(pack, 'draft'),
+          );
+          console.log(`[SL·Editor] merged ${added} new explicit lexicon entries for "${language}"`);
+        }
+      }
+
       const nextFiles = Array.from(new Set([
         ...files,
         ...repairedLexicons.map((repaired) => artifactPaths.lexicon(repaired.language)),
+        ...mergedLanguages.map((lang) => artifactPaths.lexicon(lang)),
       ])).sort();
       const validation = validateContentBundle(repairedBundle);
 
@@ -519,12 +549,15 @@ export function SugarlangPanel({
         editBundle: cloneBundle(repairedBundle),
         validation,
         loadErrors: errors,
-        loadWarnings: repairedLexicons.length > 0
-          ? [
-            ...warnings,
-            `Seeded bundle lexicons for ${repairedLexicons.map((repaired) => repaired.language).join(', ')} from the shared language files.`,
-          ]
-          : warnings,
+        loadWarnings: [
+          ...warnings,
+          ...(repairedLexicons.length > 0
+            ? [`Seeded bundle lexicons for ${repairedLexicons.map((repaired) => repaired.language).join(', ')} from the shared language files.`]
+            : []),
+          ...(mergedLanguages.length > 0
+            ? [`Merged new explicit lexicon entries for ${mergedLanguages.join(', ')} from code.`]
+            : []),
+        ],
         loading: false,
       });
     } catch (error) {
@@ -735,6 +768,19 @@ export function SugarlangPanel({
       scenarioId: selectedScenarioId,
     });
 
+    // Build dialogue lookup for turn generation
+    const dialogueMap = new Map(
+      (projectInput.dialogues ?? []).map((d: any) => [d.id, d]),
+    );
+    const npcMap = new Map(
+      (projectInput.npcs ?? []).map((n: any) => [n.id, n.name as string]),
+    );
+    const currentInteractionIds = new Set(
+      syncResult.interactions.map((ix) => ix.interactionId),
+    );
+
+    const stalePairsByPack = new Map<string, StaleTurnPair[]>();
+
     setState((current) => {
       if (!current.editBundle) return current;
       const currentScenario = current.editBundle.scenarios.get(selectedScenarioId);
@@ -759,13 +805,149 @@ export function SugarlangPanel({
       const nextQuestBindings = new Map(current.editBundle.questBindings);
       nextQuestBindings.set(selectedScenarioId, clonePlain(generatedBindings));
 
-      // Refresh lexicons from shared source so saved artifacts have correct glosses
+      // Use the persisted lexicons as-is — sync reads from them, never regenerates them.
+      // Lexicon changes happen through the lexicon editor, not through quest sync.
       const nextLexicons = new Map(current.editBundle.lexicons);
-      for (const [lang] of current.editBundle.lexicons) {
-        const fresh = getSharedLexicon(lang);
-        if (fresh.entries.length > 0) {
-          nextLexicons.set(lang, fresh);
+
+      // Generate fresh banded turns and reconcile with existing packs (ADR-015 Phase 2)
+      const nextScenePacks = new Map(current.editBundle.sceneLanguagePacks);
+      const totalSummary: ReconciliationSummary = {
+        regenerated: 0,
+        flaggedStale: 0,
+        flaggedOrphaned: 0,
+        skipped: 0,
+        added: 0,
+      };
+
+      for (const [packKey, existingPack] of current.editBundle.sceneLanguagePacks) {
+        if (existingPack.scenarioId !== selectedScenarioId) continue;
+        if (disabledLanguages.has(existingPack.targetLanguage)) continue;
+
+        const lang = existingPack.targetLanguage;
+        const lexicon = nextLexicons.get(lang);
+        if (!lexicon) continue;
+
+        // Generate fresh turns for all interactions in this language
+        const allFreshBands: import('../../../plugins/sugarlang/types').SceneBandRealization[] = [];
+        for (const interaction of syncResult.interactions) {
+          const dlgTree = interaction.sourceDialogueId
+            ? dialogueMap.get(interaction.sourceDialogueId)
+            : null;
+
+          const dialogueLines = dlgTree
+            ? walkDialogueForTurnDerivation(dlgTree as any)
+            : [];
+
+          if (dialogueLines.length === 0) continue;
+
+          const npcName = interaction.npcId
+            ? npcMap.get(interaction.npcId) ?? interaction.npcName
+            : interaction.npcName;
+
+          const generated = generateBandedTurns({
+            interaction,
+            dialogueLines,
+            lexicon,
+            targetLanguage: lang,
+            supportLanguage: existingPack.supportLanguage,
+            bands: (generatedScenario.supportedBands ?? currentScenario.supportedBands),
+            npcName,
+          });
+
+          allFreshBands.push(...generated.bands);
         }
+
+        // Merge fresh bands by bandId (multiple interactions → single band)
+        const mergedFreshByBand = new Map<string, import('../../../plugins/sugarlang/types').SceneBandRealization>();
+        for (const fb of allFreshBands) {
+          const existing = mergedFreshByBand.get(fb.bandId);
+          if (existing) {
+            existing.turns.push(...fb.turns);
+          } else {
+            mergedFreshByBand.set(fb.bandId, { ...fb, turns: [...fb.turns] });
+          }
+        }
+        const mergedFreshBands = Array.from(mergedFreshByBand.values());
+
+        // Reconcile existing turns with fresh turns
+        const { bands: reconciledBands, summary, stalePairs } = reconcileTurns(
+          existingPack.bands,
+          mergedFreshBands,
+          currentInteractionIds,
+        );
+
+        totalSummary.regenerated += summary.regenerated;
+        totalSummary.flaggedStale += summary.flaggedStale;
+        totalSummary.flaggedOrphaned += summary.flaggedOrphaned;
+        totalSummary.skipped += summary.skipped;
+        totalSummary.added += summary.added;
+
+        if (stalePairs.length > 0) {
+          stalePairsByPack.set(packKey, stalePairs);
+        }
+
+        nextScenePacks.set(packKey, {
+          ...existingPack,
+          bands: reconciledBands,
+        });
+      }
+
+      // Create new packs for enabled languages that don't have one yet
+      const existingPackLangs = new Set(
+        Array.from(nextScenePacks.values())
+          .filter((p) => p.scenarioId === selectedScenarioId)
+          .map((p) => p.targetLanguage),
+      );
+      for (const [lang, lexicon] of nextLexicons) {
+        if (existingPackLangs.has(lang)) continue;
+        if (disabledLanguages.has(lang)) continue;
+
+        // Generate fresh turns for this new language
+        const newBands: import('../../../plugins/sugarlang/types').SceneBandRealization[] = [];
+        for (const interaction of syncResult.interactions) {
+          const dlgTree = interaction.sourceDialogueId
+            ? dialogueMap.get(interaction.sourceDialogueId)
+            : null;
+          const dialogueLines = dlgTree
+            ? walkDialogueForTurnDerivation(dlgTree as any)
+            : [];
+          if (dialogueLines.length === 0) continue;
+
+          const npcName = interaction.npcId
+            ? npcMap.get(interaction.npcId) ?? interaction.npcName
+            : interaction.npcName;
+
+          const generated = generateBandedTurns({
+            interaction,
+            dialogueLines,
+            lexicon,
+            targetLanguage: lang,
+            supportLanguage: lang === 'en' ? 'es' : 'en',
+            bands: (generatedScenario.supportedBands ?? currentScenario.supportedBands),
+            npcName,
+          });
+          newBands.push(...generated.bands);
+        }
+
+        // Merge bands by bandId
+        const mergedByBand = new Map<string, import('../../../plugins/sugarlang/types').SceneBandRealization>();
+        for (const fb of newBands) {
+          const existing = mergedByBand.get(fb.bandId);
+          if (existing) {
+            existing.turns.push(...fb.turns);
+          } else {
+            mergedByBand.set(fb.bandId, { ...fb, turns: [...fb.turns] });
+          }
+        }
+
+        const packKey = `languages/${lang}/scenes/${selectedScenarioId}.json`;
+        nextScenePacks.set(packKey, {
+          scenarioId: selectedScenarioId,
+          targetLanguage: lang,
+          supportLanguage: lang === 'en' ? 'es' : 'en',
+          bands: Array.from(mergedByBand.values()),
+        });
+        totalSummary.added += newBands.reduce((sum, b) => sum + b.turns.length, 0);
       }
 
       return {
@@ -776,25 +958,170 @@ export function SugarlangPanel({
           groundingMaps: nextGroundingMaps,
           questBindings: nextQuestBindings,
           lexicons: nextLexicons,
+          sceneLanguagePacks: nextScenePacks,
         },
       };
     });
 
+    // Open reconciliation modal if stale turns were detected (pick first pack with stale pairs)
+    const firstStalePack = stalePairsByPack.entries().next();
+    if (!firstStalePack.done) {
+      const [packKey, pairs] = firstStalePack.value;
+      setReconciliationPairs(pairs);
+      setReconciliationPackKey(packKey);
+    }
+
+    const totalStalePairCount = Array.from(stalePairsByPack.values()).reduce((sum, p) => sum + p.length, 0);
     const allWarnings = [...warnings, ...syncResult.warnings];
     const issueCount = errors.length + allWarnings.length;
     const interactionCount = syncResult.interactions.length;
+    const staleNote = totalStalePairCount > 0
+      ? ` ${totalStalePairCount} stale turn(s) need review.`
+      : '';
     setActionFeedback(
-      issueCount > 0
-        ? `Synced "${selectedScenarioId}" from quest "${quest.name}": ${interactionCount} interaction(s), ${issueCount} issue(s). Save the game to persist.`
-        : `Synced "${selectedScenarioId}" from quest "${quest.name}": ${interactionCount} interaction(s). Save the game to persist.`,
+      `Synced "${selectedScenarioId}" from quest "${quest.name}": ${interactionCount} interaction(s)`
+      + (issueCount > 0 ? `, ${issueCount} issue(s)` : '')
+      + staleNote
+      + '. Save the game to persist.',
     );
   }, [
     availableQuests,
+    disabledLanguages,
     projectInput,
     selectedScenario,
     selectedScenarioId,
     state.editBundle,
   ]);
+
+  // ---------------------------------------------------------------------------
+  // LLM Refinement handlers (ADR-015 Phase 4)
+  // ---------------------------------------------------------------------------
+
+  const handleCopyRefinementPacket = useCallback((turnId: string) => {
+    if (!state.editBundle || !selectedScenarioId || !selectedTurnPackKey || !selectedTurnBandId) return;
+
+    const scenario = state.editBundle.scenarios.get(selectedScenarioId);
+    const pack = state.editBundle.sceneLanguagePacks.get(selectedTurnPackKey);
+    if (!scenario || !pack) return;
+
+    const lexicon = state.editBundle.lexicons.get(pack.targetLanguage);
+    const packet = assembleRefinementPacket({
+      scenario,
+      pack,
+      bandId: selectedTurnBandId as LearnerBandId,
+      bandPolicies: state.editBundle.bandPolicies,
+      lexicon,
+      targetTurnId: turnId,
+    });
+
+    navigator.clipboard.writeText(JSON.stringify(packet, null, 2)).then(
+      () => setActionFeedback(`Refinement packet for "${turnId}" copied to clipboard.`),
+      () => setActionFeedback('Failed to copy to clipboard.'),
+    );
+  }, [state.editBundle, selectedScenarioId, selectedTurnPackKey, selectedTurnBandId]);
+
+  const handleCopyBandRefinementPacket = useCallback(() => {
+    if (!state.editBundle || !selectedScenarioId || !selectedTurnPackKey || !selectedTurnBandId) return;
+
+    const scenario = state.editBundle.scenarios.get(selectedScenarioId);
+    const pack = state.editBundle.sceneLanguagePacks.get(selectedTurnPackKey);
+    if (!scenario || !pack) return;
+
+    const lexicon = state.editBundle.lexicons.get(pack.targetLanguage);
+    const packet = assembleRefinementPacket({
+      scenario,
+      pack,
+      bandId: selectedTurnBandId as LearnerBandId,
+      bandPolicies: state.editBundle.bandPolicies,
+      lexicon,
+    });
+
+    navigator.clipboard.writeText(JSON.stringify(packet, null, 2)).then(
+      () => setActionFeedback(`Band ${selectedTurnBandId} refinement packet copied (${packet.targetTurnIds.length} turn(s)).`),
+      () => setActionFeedback('Failed to copy to clipboard.'),
+    );
+  }, [state.editBundle, selectedScenarioId, selectedTurnPackKey, selectedTurnBandId]);
+
+  const handleApplyProposal = useCallback(() => {
+    if (!state.editBundle || !selectedTurnPackKey || !selectedTurnBandId) return;
+
+    const { proposal, error } = parseRefinementProposal(proposalJson);
+    if (error || !proposal) {
+      setActionFeedback(`Proposal parse error: ${error}`);
+      return;
+    }
+
+    const pack = state.editBundle.sceneLanguagePacks.get(selectedTurnPackKey);
+    if (!pack) return;
+
+    const band = pack.bands.find((b) => b.bandId === selectedTurnBandId);
+    if (!band) return;
+
+    const { band: updatedBand, appliedTurnIds } = applyRefinementProposal(band, proposal);
+
+    if (appliedTurnIds.length === 0) {
+      setActionFeedback('No turns matched the proposal. Check that turn IDs match.');
+      return;
+    }
+
+    const updatedPack = {
+      ...pack,
+      bands: pack.bands.map((b) => (b.bandId === selectedTurnBandId ? updatedBand : b)),
+    };
+
+    setState((current) => {
+      if (!current.editBundle) return current;
+      const nextPacks = new Map(current.editBundle.sceneLanguagePacks);
+      nextPacks.set(selectedTurnPackKey, updatedPack);
+      return {
+        ...current,
+        editBundle: { ...current.editBundle, sceneLanguagePacks: nextPacks },
+      };
+    });
+
+    setProposalModalOpen(false);
+    setProposalJson('');
+    setActionFeedback(`Applied proposal: ${appliedTurnIds.length} turn(s) updated to 'reviewed'.`);
+  }, [state.editBundle, selectedTurnPackKey, selectedTurnBandId, proposalJson]);
+
+  const handleReconciliationResolve = useCallback((resolved: ResolvedTurn[]) => {
+    if (!reconciliationPackKey) return;
+
+    setState((current) => {
+      if (!current.editBundle) return current;
+
+      const pack = current.editBundle.sceneLanguagePacks.get(reconciliationPackKey);
+      if (!pack) return current;
+
+      // Build a lookup: turnId → resolved turn
+      const resolvedMap = new Map(resolved.map((r) => [r.turnId, r]));
+
+      const updatedBands = pack.bands.map((band) => ({
+        ...band,
+        turns: band.turns.map((turn) => {
+          const resolution = resolvedMap.get(turn.turnId);
+          return resolution ? resolution.turn : turn;
+        }),
+      }));
+
+      const nextPacks = new Map(current.editBundle.sceneLanguagePacks);
+      nextPacks.set(reconciliationPackKey, { ...pack, bands: updatedBands });
+
+      return {
+        ...current,
+        editBundle: { ...current.editBundle, sceneLanguagePacks: nextPacks },
+      };
+    });
+
+    const kept = resolved.filter((r) => r.decision === 'keep').length;
+    const accepted = resolved.filter((r) => r.decision === 'accept').length;
+    const edited = resolved.filter((r) => r.decision === 'edit').length;
+    setActionFeedback(
+      `Reconciled ${resolved.length} stale turn(s): ${kept} kept, ${accepted} accepted, ${edited} edited.`,
+    );
+    setReconciliationPairs([]);
+    setReconciliationPackKey(null);
+  }, [reconciliationPackKey]);
 
   const handleDeleteScenario = useCallback(() => {
     if (!selectedScenarioId || !state.editBundle) return;
@@ -985,6 +1312,9 @@ export function SugarlangPanel({
         onSelectPackKey: setSelectedTurnPackKey,
         selectedBandId: selectedTurnBandId,
         onSelectBandId: setSelectedTurnBandId,
+        onCopyRefinementPacket: handleCopyRefinementPacket,
+        onCopyBandRefinementPacket: handleCopyBandRefinementPacket,
+        onOpenImportProposal: () => setProposalModalOpen(true),
       })
       : null
   );
@@ -1024,7 +1354,8 @@ export function SugarlangPanel({
       <ScrollArea h="100%" offsetScrollbars>
         <Stack gap="xs">
           {filteredScenarios.map((scenario) => {
-            const packEntries = getScenarioPackEntries(state.editBundle, scenario.scenarioId);
+            const packEntries = getScenarioPackEntries(state.editBundle, scenario.scenarioId)
+              .filter(([, pack]) => !disabledLanguages.has(pack.targetLanguage));
             const languages = getScenarioLanguages(packEntries);
             return (
               <Paper
@@ -1047,10 +1378,6 @@ export function SugarlangPanel({
                       {packEntries.length} pack{packEntries.length === 1 ? '' : 's'}
                     </Badge>
                   </Group>
-
-                  <Text size="xs" c="dimmed">
-                    {summarizeScenarioTask(scenario.communicativeTask)}
-                  </Text>
 
                   <Group gap={4}>
                     {scenario.supportedBands.map((bandId) => (
@@ -1128,9 +1455,9 @@ export function SugarlangPanel({
               </Badge>
             )}
           </Group>
-          {selectedScenario && (
-            <Text size="sm" c="dimmed">
-              {selectedScenario.communicativeTask}
+          {selectedScenario?.associatedQuestId && (
+            <Text size="xs" c="dimmed">
+              Quest: {selectedScenario.associatedQuestId}
             </Text>
           )}
         </Stack>
@@ -1214,13 +1541,15 @@ export function SugarlangPanel({
               display: 'grid',
               gridTemplateColumns: '260px minmax(0, 1fr)',
               minHeight: 0,
+              height: '100%',
               flex: 1,
+              overflow: 'hidden',
             }}
           >
-            <div style={{ borderRight: '1px solid #313244', minWidth: 0 }}>
+            <div style={{ borderRight: '1px solid #313244', minWidth: 0, overflow: 'auto', height: '100%' }}>
               {languageEditor.list}
             </div>
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, height: '100%', overflow: 'hidden' }}>
               {languageEditor.content}
             </div>
           </div>
@@ -1340,6 +1669,51 @@ export function SugarlangPanel({
         </Stack>
       </Modal>
 
+      <Modal
+        opened={proposalModalOpen}
+        onClose={() => { setProposalModalOpen(false); setProposalJson(''); }}
+        title="Import Refinement Proposal"
+        centered
+        size="lg"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            Paste the JSON proposal from your external AI assistant. The proposal should contain a
+            "turns" array with turnId and proposedTargetText for each refined turn.
+          </Text>
+          <Textarea
+            label="Proposal JSON"
+            placeholder='{"turns": [{"turnId": "...", "proposedTargetText": "..."}]}'
+            autosize
+            minRows={8}
+            maxRows={20}
+            value={proposalJson}
+            onChange={(e) => setProposalJson(e.currentTarget.value)}
+            styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
+          />
+          <Group justify="flex-end">
+            <Button size="xs" variant="subtle" color="gray" onClick={() => { setProposalModalOpen(false); setProposalJson(''); }}>
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              color="teal"
+              onClick={handleApplyProposal}
+              disabled={!proposalJson.trim()}
+            >
+              Apply Proposal
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <ReconciliationModal
+        opened={reconciliationPairs.length > 0}
+        stalePairs={reconciliationPairs}
+        onResolve={handleReconciliationResolve}
+        onClose={() => { setReconciliationPairs([]); setReconciliationPackKey(null); }}
+      />
+
       {contentHeader}
 
       <Group
@@ -1367,7 +1741,7 @@ export function SugarlangPanel({
         </Alert>
       )}
 
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {contentBody}
       </div>
     </Stack>
@@ -1618,7 +1992,6 @@ function ScenarioOverviewContent({
         <Paper p="sm" withBorder>
           <Title order={6} mb="xs">Scenario Brief</Title>
           <Stack gap={6}>
-            <Text size="sm">{scenario.communicativeTask}</Text>
             <Text size="xs"><b>NPCs:</b> {(scenario.npcNames ?? scenario.npcIds).join(', ') || 'None'}</Text>
             <Text size="xs"><b>Supported Bands:</b> {scenario.supportedBands.join(', ')}</Text>
             <Text size="xs"><b>Active Referents:</b> {scenario.activeReferents.join(', ') || 'None'}</Text>
@@ -1647,17 +2020,60 @@ function ScenarioOverviewContent({
                       </Badge>
                     </Group>
 
-                    <Group gap={6}>
-                      {pack.bands.map((band) => (
-                        <Badge key={band.bandId} size="xs" variant="light" color="gray">
-                          {band.bandId}: {band.turns.length} turn{band.turns.length === 1 ? '' : 's'}
-                          {band.providerPolicy ? ` | ${band.providerPolicy}` : ''}
-                        </Badge>
-                      ))}
-                    </Group>
+                    <Stack gap={4}>
+                      {pack.bands.map((band) => {
+                        const counts = { generated: 0, reviewed: 0, manual: 0, stale: 0, orphaned: 0 };
+                        for (const t of band.turns) {
+                          if (t.stale) counts.stale++;
+                          else if (t.orphaned) counts.orphaned++;
+                          else {
+                            const s = t.editStatus ?? 'generated';
+                            if (s in counts) counts[s as keyof typeof counts]++;
+                            else counts.generated++;
+                          }
+                        }
+                        const total = band.turns.length;
+                        return (
+                          <Group key={band.bandId} gap={8} wrap="nowrap">
+                            <Text size="xs" fw={600} w={24} ta="center" style={{ flexShrink: 0 }}>{band.bandId}</Text>
+                            {total > 0 ? (
+                              <Tooltip
+                                label={`${counts.generated} generated, ${counts.reviewed} reviewed, ${counts.manual} manual${counts.stale ? `, ${counts.stale} stale` : ''}${counts.orphaned ? `, ${counts.orphaned} orphaned` : ''}`}
+                                withArrow
+                              >
+                                <div style={{ flex: 1, display: 'flex', height: 14, borderRadius: 4, overflow: 'hidden', border: '1px solid #313244' }}>
+                                  {counts.generated > 0 && <div style={{ width: `${(counts.generated / total) * 100}%`, background: '#585b70' }} />}
+                                  {counts.reviewed > 0 && <div style={{ width: `${(counts.reviewed / total) * 100}%`, background: '#89b4fa' }} />}
+                                  {counts.manual > 0 && <div style={{ width: `${(counts.manual / total) * 100}%`, background: '#cba6f7' }} />}
+                                  {counts.stale > 0 && <div style={{ width: `${(counts.stale / total) * 100}%`, background: '#f9e2af' }} />}
+                                  {counts.orphaned > 0 && <div style={{ width: `${(counts.orphaned / total) * 100}%`, background: '#f38ba8' }} />}
+                                </div>
+                              </Tooltip>
+                            ) : (
+                              <Text size="xs" c="dimmed">no turns</Text>
+                            )}
+                            <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{total}</Text>
+                          </Group>
+                        );
+                      })}
+                    </Stack>
                   </Stack>
                 </Paper>
               ))}
+              <Group gap="md" mt={4}>
+                {[
+                  { color: '#585b70', label: 'Generated' },
+                  { color: '#89b4fa', label: 'Reviewed' },
+                  { color: '#cba6f7', label: 'Manual' },
+                  { color: '#f9e2af', label: 'Stale' },
+                  { color: '#f38ba8', label: 'Orphaned' },
+                ].map((item) => (
+                  <Group key={item.label} gap={4}>
+                    <div style={{ width: 10, height: 10, borderRadius: 2, background: item.color }} />
+                    <Text size="xs" c="dimmed">{item.label}</Text>
+                  </Group>
+                ))}
+              </Group>
             </Stack>
           )}
         </Paper>

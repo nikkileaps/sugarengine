@@ -114,8 +114,6 @@ export interface ProviderConstraintBundle {
   /** Response contract the provider should aim to satisfy. */
   responseContract?: ResponseContract;
 
-  /** Scene semantics and communicative task. */
-  communicativeTask?: string;
   sceneSemantics?: Record<string, unknown>;
 
   /** Grounding scope — what referents the turn may use. */

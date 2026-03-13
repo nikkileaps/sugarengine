@@ -83,7 +83,6 @@ describe('artifact round-trip: Find the Luggage', () => {
       const restored = bundle.scenarios.get(id);
       expect(restored, `Missing scenario ${id}`).toBeDefined();
       expect(restored!.scenarioId).toBe(original.scenarioId);
-      expect(restored!.communicativeTask).toBe(original.communicativeTask);
       expect(restored!.supportedBands).toEqual(original.supportedBands);
       expect(restored!.activeReferents.length).toBe(original.activeReferents.length);
     }
@@ -152,7 +151,7 @@ describe('individual deserializer error handling', () => {
       schemaVersion: 1,
       artifactType: 'grounding_map',
       status: 'draft',
-      data: { scenarioId: 'x', communicativeTask: 'y', supportedBands: ['B0'] },
+      data: { scenarioId: 'x', supportedBands: ['B0'] },
     });
     const { data, errors } = deserializeScenarioBrief(json);
     expect(data).toBeNull();
@@ -169,7 +168,6 @@ describe('individual deserializer error handling', () => {
     const { data, errors } = deserializeScenarioBrief(json);
     expect(data).toBeNull();
     expect(errors.some((e) => e.includes('scenarioId'))).toBe(true);
-    expect(errors.some((e) => e.includes('communicativeTask'))).toBe(true);
   });
 
   it('rejects invalid band IDs', () => {
@@ -179,7 +177,6 @@ describe('individual deserializer error handling', () => {
       status: 'draft',
       data: {
         scenarioId: 'test',
-        communicativeTask: 'test task',
         supportedBands: ['B0', 'INVALID'],
         activeReferents: [],
         npcIds: [],
@@ -278,7 +275,6 @@ describe('cross-reference validation', () => {
     const { bundle } = deserializeContentBundle(new Map());
     bundle.scenarios.set('lonely', {
       scenarioId: 'lonely',
-      communicativeTask: 'test',
       supportedBands: ['B0'],
       activeReferents: [],
       npcIds: [],

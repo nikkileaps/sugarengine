@@ -9,7 +9,6 @@ import type { ScenarioBrief, GroundingMap, GroundedQuestBinding } from '../../ty
 
 export const FIND_THE_LUGGAGE_SCENARIO: ScenarioBrief = {
   scenarioId: 'find-the-luggage',
-  communicativeTask: 'Help an NPC identify and recover a missing piece of luggage',
   successCriteria: [
     'Player confirms recognition of the target suitcase',
     'Player selects or describes the correct suitcase',

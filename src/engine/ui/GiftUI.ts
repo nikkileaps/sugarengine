@@ -1,4 +1,5 @@
 import { InventoryManager, InventorySlot, ItemDefinition } from '../inventory';
+import { InputManager } from '../core/InputManager';
 
 export type GiftHandler = (npcId: string, itemId: string) => void;
 
@@ -197,7 +198,7 @@ export class GiftUI {
     this.currentNpcId = npcId;
     this.refresh();
     this.overlay.classList.add('visible');
-    window.addEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.pushContext({ name: 'gift', handleKeyDown: this.handleKeyDown });
   }
 
   /**
@@ -206,7 +207,7 @@ export class GiftUI {
   hide(): void {
     this.overlay.classList.remove('visible');
     this.currentNpcId = null;
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('gift');
     if (this.onClose) {
       this.onClose();
     }
@@ -307,7 +308,7 @@ export class GiftUI {
   }
 
   dispose(): void {
-    window.removeEventListener('keydown', this.handleKeyDown);
+    InputManager.getInstance()?.popContext('gift');
     this.overlay.remove();
   }
 }

@@ -3,7 +3,22 @@ export interface InputState {
   moveY: number;  // -1 to 1 (up/down, maps to Z in world)
 }
 
+/**
+ * Named input context pushed onto the stack when a UI overlay needs keyboard input.
+ * Only the topmost context receives key events; everything below is blocked.
+ */
+export interface InputContext {
+  name: string;
+  handleKeyDown: (e: KeyboardEvent) => void;
+}
+
 export class InputManager {
+  /** Singleton accessor — available after the first InputManager is constructed. */
+  private static instance: InputManager | null = null;
+  static getInstance(): InputManager | null {
+    return InputManager.instance;
+  }
+
   private keys: Set<string> = new Set();
   private keysJustPressed: Set<string> = new Set();
   private gamepadIndex: number | null = null;
@@ -12,14 +27,67 @@ export class InputManager {
   // Movement lock system - movement is allowed only when no locks exist
   private movementLocks = new Set<string>();
 
+  // Input context stack — UI overlays push/pop contexts to claim keyboard input
+  private contextStack: InputContext[] = [];
+
   constructor() {
+    InputManager.instance = this;
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
     window.addEventListener('keyup', (e) => this.onKeyUp(e));
     window.addEventListener('gamepadconnected', (e) => this.onGamepadConnected(e));
     window.addEventListener('gamepaddisconnected', (e) => this.onGamepadDisconnected(e));
   }
 
+  // ---------------------------------------------------------------------------
+  // Context stack
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Push a named input context. While any context is on the stack, game-level
+   * key polling (isInteractPressed, isJournalPressed, etc.) is suppressed and
+   * only the topmost context's handleKeyDown receives key events.
+   */
+  pushContext(ctx: InputContext): void {
+    // Prevent duplicate pushes of the same context name
+    if (this.contextStack.some(c => c.name === ctx.name)) return;
+    this.contextStack.push(ctx);
+  }
+
+  /**
+   * Remove a named context from the stack. Safe to call even if the context
+   * was never pushed or has already been removed.
+   */
+  popContext(name: string): void {
+    const idx = this.contextStack.findIndex(c => c.name === name);
+    if (idx >= 0) this.contextStack.splice(idx, 1);
+  }
+
+  /**
+   * Check whether any UI context is currently claiming input.
+   */
+  hasActiveContext(): boolean {
+    return this.contextStack.length > 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Key event routing
+  // ---------------------------------------------------------------------------
+
   private onKeyDown(e: KeyboardEvent): void {
+    // Don't capture keys when focus is in a text input or textarea
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+    // If a UI context is active, route to the topmost context only.
+    // Still track held keys so movement resumes cleanly when context is popped.
+    if (this.contextStack.length > 0) {
+      const top = this.contextStack[this.contextStack.length - 1]!;
+      top.handleKeyDown(e);
+      this.keys.add(e.code);
+      return;
+    }
+
+    // No UI context: normal game input tracking
     if (!this.keys.has(e.code)) {
       this.keysJustPressed.add(e.code);
     }

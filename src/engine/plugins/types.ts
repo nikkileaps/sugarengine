@@ -62,7 +62,6 @@ export interface PluginPedagogyContext {
   supportLanguagePolicy?: string;
   targetLanguage?: string;
   supportLanguage?: string;
-  communicativeTask?: string;
   correctionPosture?: string;
   /** Response contract the provider should aim to satisfy. */
   responseContract?: {

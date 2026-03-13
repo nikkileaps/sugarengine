@@ -234,7 +234,6 @@ describe('pedagogyContext on PluginAgentContext', () => {
         supportLanguagePolicy: 'light_support',
         targetLanguage: 'es',
         supportLanguage: 'en',
-        communicativeTask: 'Find the luggage',
         correctionPosture: 'delayed',
         responseContract: { mode: 'short_text' },
         groundingScope: [{ lexicalEntryId: 'object.suitcase', targetForm: 'maleta' }],

@@ -20,6 +20,7 @@ import type {
   SceneBandRealization,
   SceneTurn,
 } from '../types';
+import { computeSourceHash, computeLexiconFingerprint } from './source-hash';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -68,6 +69,7 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
     .join(' ');
 
   const vocabMatches = matchVocabulary(matchableText, lexicon);
+  const lexiconFingerprint = computeLexiconFingerprint(lexicon.entries);
 
   const bandRealizations: SceneBandRealization[] = [];
 
@@ -95,7 +97,16 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
           ambientLexicalEntryIds: rolePlan.ambient.map((e) => e.lexicalEntryId),
           responseMode: 'free_form',
           turnRole: 'player_delivery',
-          generationSource: 'derived',
+          editStatus: 'generated',
+          sourceHash: computeSourceHash({
+            sourceText: expandContractions(line.text),
+            speakerId: line.speakerId,
+            speakerName: line.speaker,
+            bandId,
+            targetLanguage,
+            questNodeId: interaction.sourceQuestNodeId,
+            lexiconFingerprint,
+          }),
           speakerId: line.speakerId,
           speakerName: line.speaker,
         });
@@ -104,6 +115,16 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
 
       // NPC delivery turn — no response contract unless the line has choices
       const renderedText = renderLineForBand(line.text, targetLanguage, bandId, rolePlan, lexicon);
+      const lineHash = computeSourceHash({
+        sourceText: line.text,
+        speakerId: line.speakerId,
+        speakerName: line.speaker,
+        choiceLabels: line.choiceLabels.length > 0 ? line.choiceLabels : undefined,
+        bandId,
+        targetLanguage,
+        questNodeId: interaction.sourceQuestNodeId,
+        lexiconFingerprint,
+      });
       const npcTurn: SceneTurn = {
         turnId,
         targetText: renderLineForBand(line.text, targetLanguage, bandId, rolePlan, lexicon, true),
@@ -113,7 +134,8 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
         ambientLexicalEntryIds: rolePlan.ambient.map((e) => e.lexicalEntryId),
         responseMode: 'free_form',
         turnRole: 'npc_delivery',
-        generationSource: 'derived',
+        editStatus: 'generated',
+        sourceHash: lineHash,
         speakerId: line.speakerId ?? interaction.npcId,
         speakerName: npcName ?? line.speaker,
       };
@@ -135,6 +157,18 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
 
         const responseData = buildResponseData(responseMode, translatedChoices);
 
+        // Learner response hash is based on choice labels only (not parent
+        // NPC text). This ensures the response turn is only flagged stale
+        // when the actual choices change, not when the upstream NPC line is
+        // edited independently.
+        const responseHash = computeSourceHash({
+          sourceText: line.choiceLabels.map((l) => expandContractions(l)).join('|'),
+          bandId,
+          targetLanguage,
+          questNodeId: interaction.sourceQuestNodeId,
+          lexiconFingerprint,
+        });
+
         turns.push({
           turnId: responseTurnId,
           targetText: translatedChoices.join(' / '),
@@ -147,7 +181,8 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
           repairOptions: buildRepairLadder(bandId, rolePlan, npcName),
           turnRole: 'learner_response',
           responseSource: 'explicit_choice',
-          generationSource: 'derived',
+          editStatus: 'generated',
+          sourceHash: responseHash,
         });
       }
     }
@@ -262,7 +297,7 @@ function isExcerptSpeaker(speakerId?: string, speaker?: string): boolean {
  * Multi-word glosses match first (sorted by length descending).
  */
 export function matchVocabulary(englishText: string, lexicon: LexiconPack): VocabMatch[] {
-  const lowerText = englishText.toLowerCase();
+  const lowerText = expandContractions(englishText).toLowerCase();
   const matches: VocabMatch[] = [];
   const matchedEntryIds = new Set<string>();
 
@@ -297,6 +332,74 @@ export function matchVocabulary(englishText: string, lexicon: LexiconPack): Voca
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ---------------------------------------------------------------------------
+// Contraction expansion
+// ---------------------------------------------------------------------------
+
+const CONTRACTIONS: Array<[RegExp, string]> = [
+  // Pronoun + be
+  [/\bI'm\b/gi, 'I am'],
+  [/\byou're\b/gi, 'you are'],
+  [/\bhe's\b/gi, 'he is'],
+  [/\bshe's\b/gi, 'she is'],
+  [/\bit's\b/gi, 'it is'],
+  [/\bwe're\b/gi, 'we are'],
+  [/\bthey're\b/gi, 'they are'],
+  [/\bthat's\b/gi, 'that is'],
+  [/\bthere's\b/gi, 'there is'],
+  [/\bhere's\b/gi, 'here is'],
+  [/\bwhat's\b/gi, 'what is'],
+  [/\bwho's\b/gi, 'who is'],
+  [/\bhow's\b/gi, 'how is'],
+  [/\bwhere's\b/gi, 'where is'],
+  // Pronoun + have
+  [/\bI've\b/gi, 'I have'],
+  [/\byou've\b/gi, 'you have'],
+  [/\bwe've\b/gi, 'we have'],
+  [/\bthey've\b/gi, 'they have'],
+  // Pronoun + will
+  [/\bI'll\b/gi, 'I will'],
+  [/\byou'll\b/gi, 'you will'],
+  [/\bhe'll\b/gi, 'he will'],
+  [/\bshe'll\b/gi, 'she will'],
+  [/\bit'll\b/gi, 'it will'],
+  [/\bwe'll\b/gi, 'we will'],
+  [/\bthey'll\b/gi, 'they will'],
+  // Pronoun + would/had
+  [/\bI'd\b/gi, 'I would'],
+  [/\byou'd\b/gi, 'you would'],
+  [/\bhe'd\b/gi, 'he would'],
+  [/\bshe'd\b/gi, 'she would'],
+  [/\bwe'd\b/gi, 'we would'],
+  [/\bthey'd\b/gi, 'they would'],
+  // Negations
+  [/\bdon't\b/gi, 'do not'],
+  [/\bdoesn't\b/gi, 'does not'],
+  [/\bdidn't\b/gi, 'did not'],
+  [/\bisn't\b/gi, 'is not'],
+  [/\baren't\b/gi, 'are not'],
+  [/\bwasn't\b/gi, 'was not'],
+  [/\bweren't\b/gi, 'were not'],
+  [/\bwon't\b/gi, 'will not'],
+  [/\bcan't\b/gi, 'cannot'],
+  [/\bcouldn't\b/gi, 'could not'],
+  [/\bshouldn't\b/gi, 'should not'],
+  [/\bwouldn't\b/gi, 'would not'],
+  [/\bhaven't\b/gi, 'have not'],
+  [/\bhasn't\b/gi, 'has not'],
+  [/\bhadn't\b/gi, 'had not'],
+  // Other
+  [/\blet's\b/gi, 'let us'],
+];
+
+export function expandContractions(text: string): string {
+  let result = text;
+  for (const [pattern, expansion] of CONTRACTIONS) {
+    result = result.replace(pattern, expansion);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,12 +449,8 @@ export function assignVocabularyRoles(matches: VocabMatch[], band: LearnerBandId
     }
   }
 
-  // Everything not eligible (above current band) goes to ambient
-  for (const match of matches) {
-    if (bandRank(match.entry.introductionBand) > currentRank) {
-      ambient.push(match.entry);
-    }
-  }
+  // Entries above the current band don't participate in substitution —
+  // they haven't been "introduced" to the learner yet.
 
   return { focus, reinforcement, ambient };
 }
@@ -366,23 +465,23 @@ export function assignVocabularyRoles(matches: VocabMatch[], band: LearnerBandId
  * - B0 (full_support): swap only focus entries
  * - B1 (heavy_support): swap focus + reinforcement
  * - B2 (light_support): swap all matched vocabulary
- * - B3-B4 (target_dominant/target_only): swap all + function words
+ * - B3-B4 (target_dominant/target_only): swap all matched vocabulary
  *
  * When `fullTarget` is true, always renders everything swapped (for targetText).
  */
 export function renderLineForBand(
   englishLine: string,
-  targetLanguage: string,
+  _targetLanguage: string,
   band: LearnerBandId,
   rolePlan: RolePlan,
   _lexicon: LexiconPack,
   fullTarget = false,
-  /** Swap all matched vocab entries regardless of band budget, but keep
-   *  function-word rules band-gated. Used for choice labels so short text
-   *  always gets the target-language treatment even at B0. */
+  /** Swap all matched vocab entries regardless of band budget. Used for
+   *  choice labels so short text always gets the target-language treatment
+   *  even at B0. */
   allVocab = false,
 ): string {
-  let result = englishLine;
+  let result = expandContractions(englishLine);
 
   // Determine which entries to substitute based on band
   let entriesToSwap: LexiconEntry[];
@@ -422,16 +521,6 @@ export function renderLineForBand(
     }
   }
 
-  // Add function words at B3-B4 (or fullTarget)
-  if (fullTarget || band === 'B3' || band === 'B4') {
-    const funcWords = FUNCTION_WORDS[targetLanguage];
-    if (funcWords) {
-      for (const [en, tl] of Object.entries(funcWords)) {
-        substitutions.push({ pattern: en, replacement: tl });
-      }
-    }
-  }
-
   // Sort longest-first for correct multi-word matching
   substitutions.sort((a, b) => b.pattern.length - a.pattern.length);
 
@@ -450,150 +539,7 @@ export function renderLineForBand(
 }
 
 // ---------------------------------------------------------------------------
-// 5. FUNCTION_WORDS
-// ---------------------------------------------------------------------------
-
-export const FUNCTION_WORDS: Record<string, Record<string, string>> = {
-  es: {
-    'I am': 'soy',
-    "I'm": 'soy',
-    'my name is': 'me llamo',
-    'you are': 'eres',
-    "you're": 'eres',
-    'he is': 'él es',
-    'she is': 'ella es',
-    'it is': 'es',
-    'we are': 'somos',
-    'they are': 'son',
-    'do you have': 'tienes',
-    'I have': 'tengo',
-    'do you see': 'ves',
-    'I see': 'veo',
-    'I need': 'necesito',
-    'I want': 'quiero',
-    'can you': 'puedes',
-    'I can': 'puedo',
-    'thank you': 'gracias',
-    'good morning': 'buenos días',
-    'good afternoon': 'buenas tardes',
-    'good evening': 'buenas noches',
-    'excuse me': 'disculpe',
-    'the': 'el',
-    'a': 'un',
-    'an': 'un',
-    'is': 'es',
-    'are': 'son',
-    'am': 'soy',
-    'my': 'mi',
-    'your': 'tu',
-    'his': 'su',
-    'her': 'su',
-    'our': 'nuestro',
-    'their': 'su',
-    'this': 'este',
-    'that': 'ese',
-    'in': 'en',
-    'on': 'en',
-    'at': 'en',
-    'of': 'de',
-    'to': 'a',
-    'for': 'para',
-    'with': 'con',
-    'from': 'de',
-    'and': 'y',
-    'but': 'pero',
-    'or': 'o',
-    'not': 'no',
-    'yes': 'sí',
-    'no': 'no',
-    'please': 'por favor',
-    'where': 'donde',
-    'what': 'qué',
-    'how': 'cómo',
-    'who': 'quién',
-    'when': 'cuándo',
-    'why': 'por qué',
-    'I': 'yo',
-    'you': 'tú',
-    'he': 'él',
-    'she': 'ella',
-    'we': 'nosotros',
-    'they': 'ellos',
-    'here': 'aquí',
-    'there': 'allí',
-  },
-  it: {
-    'I am': 'sono',
-    "I'm": 'sono',
-    'my name is': 'mi chiamo',
-    'you are': 'sei',
-    "you're": 'sei',
-    'he is': 'lui è',
-    'she is': 'lei è',
-    'it is': 'è',
-    'we are': 'siamo',
-    'they are': 'sono',
-    'do you have': 'hai',
-    'I have': 'ho',
-    'do you see': 'vedi',
-    'I see': 'vedo',
-    'I need': 'ho bisogno di',
-    'I want': 'voglio',
-    'can you': 'puoi',
-    'I can': 'posso',
-    'thank you': 'grazie',
-    'good morning': 'buongiorno',
-    'good afternoon': 'buon pomeriggio',
-    'good evening': 'buonasera',
-    'excuse me': 'scusi',
-    'the': 'il',
-    'a': 'un',
-    'an': 'un',
-    'is': 'è',
-    'are': 'sono',
-    'am': 'sono',
-    'my': 'mio',
-    'your': 'tuo',
-    'his': 'suo',
-    'her': 'sua',
-    'our': 'nostro',
-    'their': 'loro',
-    'this': 'questo',
-    'that': 'quello',
-    'in': 'in',
-    'on': 'su',
-    'at': 'a',
-    'of': 'di',
-    'to': 'a',
-    'for': 'per',
-    'with': 'con',
-    'from': 'da',
-    'and': 'e',
-    'but': 'ma',
-    'or': 'o',
-    'not': 'non',
-    'yes': 'sì',
-    'no': 'no',
-    'please': 'per favore',
-    'where': 'dove',
-    'what': 'che',
-    'how': 'come',
-    'who': 'chi',
-    'when': 'quando',
-    'why': 'perché',
-    'I': 'io',
-    'you': 'tu',
-    'he': 'lui',
-    'she': 'lei',
-    'we': 'noi',
-    'they': 'loro',
-    'here': 'qui',
-    'there': 'lì',
-  },
-};
-
-// ---------------------------------------------------------------------------
-// 6. selectResponseModeForBand
+// 5. selectResponseModeForBand
 // ---------------------------------------------------------------------------
 
 export function selectResponseModeForBand(band: LearnerBandId): ResponseContractMode {

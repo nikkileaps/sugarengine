@@ -87,8 +87,6 @@ export interface ScenarioBrief {
   scenarioId: string;
   /** Source quest this scenario is derived from, when one exists. */
   associatedQuestId?: string;
-  /** The communicative task the learner must accomplish. */
-  communicativeTask: string;
   /** What counts as task success. */
   successCriteria: string[];
   /** World referents active in this scenario. */
@@ -111,7 +109,7 @@ export interface ScenarioBrief {
 // ---------------------------------------------------------------------------
 
 export type TurnRole = 'npc_delivery' | 'player_delivery' | 'learner_response';
-export type GenerationSource = 'derived' | 'polished' | 'manual';
+export type EditStatus = 'generated' | 'reviewed' | 'manual';
 export type ResponseSource = 'explicit_choice' | 'generic';
 
 /** Quest-success hook: how interaction success recommends quest progression. */
@@ -281,8 +279,16 @@ export interface SceneTurn {
   turnRole?: TurnRole;
   /** How the response options were sourced. */
   responseSource?: ResponseSource;
-  /** How this turn was generated. */
-  generationSource?: GenerationSource;
+  /** Source content fingerprint for change detection (ADR-015). */
+  sourceHash?: string;
+  /** Provenance status: generated (safe to overwrite), reviewed (human-approved), manual (hand-edited). */
+  editStatus?: EditStatus;
+  /** Optional note explaining manual edit or LLM refinement. */
+  generationNote?: string;
+  /** True when the source content has changed since this turn was reviewed/manually edited. */
+  stale?: boolean;
+  /** True when the source quest node no longer exists. */
+  orphaned?: boolean;
 }
 
 /** Band-specific scene realization. */

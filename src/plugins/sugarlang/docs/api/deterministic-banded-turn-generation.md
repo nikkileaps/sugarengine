@@ -73,7 +73,7 @@ The bundle as a whole should also include:
 
 - `focus`, `reinforcement`, and `ambient` vocabulary entry ids
 - `responseSource` (`explicit_choice` or `generic`) on each `learner_response` turn
-- `generationSource` (`derived`, `polished`, or `manual`) for re-sync idempotency
+- `editStatus` (`generated`, `reviewed`, or `manual`) and `sourceHash` for provenance tracking (see ADR-015)
 - quest-success hook
 
 ## Band-Based Lexical Substitution
@@ -152,7 +152,7 @@ For each target language and band variant, the persisted interaction overlay sho
   - evaluation target (for `learner_response` only)
   - `responseSource` (`explicit_choice` or `generic`, for `learner_response` only)
 - allowed quest-success hook
-- `generationSource` (`derived`, `polished`, or `manual`)
+- `editStatus` (`generated`, `reviewed`, or `manual`), `sourceHash`, and optional `generationNote` (see ADR-015)
 
 That persistence rule is what makes later review, preview, and manual refinement possible.
 
@@ -191,7 +191,7 @@ That later pass should not silently change:
 
 Unless the operation explicitly allows a broader structural rewrite.
 
-When a turn is polished by an LLM, its `generationSource` changes from `derived` to `polished`. When manually edited, it changes to `manual`. Re-sync only overwrites turns where `generationSource == 'derived'`. If the source dialogue has changed under a `polished` or `manual` turn, it is flagged as stale but not overwritten.
+When a turn is approved after LLM polish, its `editStatus` changes from `generated` to `reviewed`. When manually edited, it changes to `manual`. Re-sync only overwrites turns where `editStatus == 'generated'`. If the source dialogue has changed under a `reviewed` or `manual` turn (detected via `sourceHash` mismatch), it is flagged as stale but not overwritten. See ADR-015 for the full provenance tracking, reconciliation, and LLM refinement architecture.
 
 ## Product Rule
 
