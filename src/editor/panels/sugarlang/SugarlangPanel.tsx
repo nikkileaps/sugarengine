@@ -20,11 +20,11 @@ import {
   ScrollArea,
   SegmentedControl,
   Select,
+  SimpleGrid,
   Stack,
   Switch,
   Text,
   TextInput,
-  Textarea,
   Tooltip,
   Title,
 } from '@mantine/core';
@@ -57,6 +57,8 @@ import {
   parseRefinementProposal,
   applyRefinementProposal,
 } from '../../../plugins/sugarlang/content/refinement-packet';
+import { callRefinement } from '../../services/refinement-service';
+import type { RefinementProviderName } from '../../services/refinement-service';
 import { getSharedLexicon, getAvailableSharedLanguages, mergeExplicitSeedEntries } from '../../../plugins/sugarlang/content/lexicons';
 import type {
   ArtifactValidationResult,
@@ -312,8 +314,8 @@ export function SugarlangPanel({
   const [selectedQuestIdForCreation, setSelectedQuestIdForCreation] = useState<string | null>(null);
   const [pluginSettingsOpen, setPluginSettingsOpen] = useState(false);
   const [pluginSettingsTab, setPluginSettingsTab] = useState<PluginSettingsTab>('band-policies');
-  const [proposalModalOpen, setProposalModalOpen] = useState(false);
-  const [proposalJson, setProposalJson] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refinementProvider, _setRefinementProvider] = useState<RefinementProviderName>('openai');
   const [reconciliationPairs, setReconciliationPairs] = useState<StaleTurnPair[]>([]);
   const [reconciliationPackKey, setReconciliationPackKey] = useState<string | null>(null);
 
@@ -1042,47 +1044,138 @@ export function SugarlangPanel({
     );
   }, [state.editBundle, selectedScenarioId, selectedTurnPackKey, selectedTurnBandId]);
 
-  const handleApplyProposal = useCallback(() => {
-    if (!state.editBundle || !selectedTurnPackKey || !selectedTurnBandId) return;
+  const handleLlmRefineBand = useCallback(async () => {
+    if (!state.editBundle || !selectedScenarioId || !selectedTurnPackKey || !selectedTurnBandId) return;
 
-    const { proposal, error } = parseRefinementProposal(proposalJson);
-    if (error || !proposal) {
-      setActionFeedback(`Proposal parse error: ${error}`);
-      return;
-    }
-
+    const scenario = state.editBundle.scenarios.get(selectedScenarioId);
     const pack = state.editBundle.sceneLanguagePacks.get(selectedTurnPackKey);
-    if (!pack) return;
+    if (!scenario || !pack) return;
 
-    const band = pack.bands.find((b) => b.bandId === selectedTurnBandId);
-    if (!band) return;
+    const lexicon = state.editBundle.lexicons.get(pack.targetLanguage);
+    const packet = assembleRefinementPacket({
+      scenario,
+      pack,
+      bandId: selectedTurnBandId as LearnerBandId,
+      bandPolicies: state.editBundle.bandPolicies,
+      lexicon,
+    });
 
-    const { band: updatedBand, appliedTurnIds } = applyRefinementProposal(band, proposal);
+    setRefining(true);
+    setActionFeedback(`Refining ${packet.targetTurnIds.length} turn(s) via ${refinementProvider}...`);
 
-    if (appliedTurnIds.length === 0) {
-      setActionFeedback('No turns matched the proposal. Check that turn IDs match.');
-      return;
+    try {
+      const result = await callRefinement(packet, refinementProvider);
+
+      if (!result.ok || !result.proposal) {
+        setActionFeedback(`Refinement failed: ${result.error ?? 'Unknown error'}`);
+        setRefining(false);
+        return;
+      }
+
+      const { proposal, error } = parseRefinementProposal(JSON.stringify(result.proposal));
+      if (error || !proposal) {
+        setActionFeedback(`Proposal parse error: ${error}`);
+        setRefining(false);
+        return;
+      }
+
+      const band = pack.bands.find((b) => b.bandId === selectedTurnBandId);
+      if (!band) { setRefining(false); return; }
+
+      const { band: updatedBand, appliedTurnIds } = applyRefinementProposal(band, proposal);
+
+      if (appliedTurnIds.length === 0) {
+        setActionFeedback('LLM returned proposals but no turn IDs matched.');
+        setRefining(false);
+        return;
+      }
+
+      const updatedPack = {
+        ...pack,
+        bands: pack.bands.map((b) => (b.bandId === selectedTurnBandId ? updatedBand : b)),
+      };
+
+      setState((current) => {
+        if (!current.editBundle) return current;
+        const nextPacks = new Map(current.editBundle.sceneLanguagePacks);
+        nextPacks.set(selectedTurnPackKey, updatedPack);
+        return {
+          ...current,
+          editBundle: { ...current.editBundle, sceneLanguagePacks: nextPacks },
+        };
+      });
+
+      setActionFeedback(
+        `Refined ${appliedTurnIds.length} turn(s) via ${result.provider}/${result.model}. Review and save.`,
+      );
+    } catch (err) {
+      setActionFeedback(`Refinement error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRefining(false);
     }
+  }, [state.editBundle, selectedScenarioId, selectedTurnPackKey, selectedTurnBandId, refinementProvider]);
 
-    const updatedPack = {
-      ...pack,
-      bands: pack.bands.map((b) => (b.bandId === selectedTurnBandId ? updatedBand : b)),
-    };
+  const handleRefineAll = useCallback(async () => {
+    if (!state.editBundle || !selectedScenarioId || !selectedTurnPackKey) return;
+
+    const scenario = state.editBundle.scenarios.get(selectedScenarioId);
+    let pack = state.editBundle.sceneLanguagePacks.get(selectedTurnPackKey);
+    if (!scenario || !pack) return;
+
+    const lexicon = state.editBundle.lexicons.get(pack.targetLanguage);
+    const bandIds = pack.bands.map((b) => b.bandId);
+
+    setRefining(true);
+    let totalApplied = 0;
+
+    for (const bandId of bandIds) {
+      setActionFeedback(`Refining band ${bandId} (${bandIds.indexOf(bandId) + 1}/${bandIds.length})...`);
+
+      const packet = assembleRefinementPacket({
+        scenario,
+        pack,
+        bandId: bandId as LearnerBandId,
+        bandPolicies: state.editBundle.bandPolicies,
+        lexicon,
+      });
+
+      if (packet.targetTurnIds.length === 0) continue;
+
+      try {
+        const result = await callRefinement(packet, refinementProvider);
+        if (!result.ok || !result.proposal) continue;
+
+        const { proposal, error } = parseRefinementProposal(JSON.stringify(result.proposal));
+        if (error || !proposal) continue;
+
+        const band = pack.bands.find((b) => b.bandId === bandId);
+        if (!band) continue;
+
+        const { band: updatedBand, appliedTurnIds } = applyRefinementProposal(band, proposal);
+        totalApplied += appliedTurnIds.length;
+
+        pack = {
+          ...pack,
+          bands: pack.bands.map((b) => (b.bandId === bandId ? updatedBand : b)),
+        };
+      } catch {
+        // Continue with next band on error
+      }
+    }
 
     setState((current) => {
       if (!current.editBundle) return current;
       const nextPacks = new Map(current.editBundle.sceneLanguagePacks);
-      nextPacks.set(selectedTurnPackKey, updatedPack);
+      nextPacks.set(selectedTurnPackKey, pack!);
       return {
         ...current,
         editBundle: { ...current.editBundle, sceneLanguagePacks: nextPacks },
       };
     });
 
-    setProposalModalOpen(false);
-    setProposalJson('');
-    setActionFeedback(`Applied proposal: ${appliedTurnIds.length} turn(s) updated to 'reviewed'.`);
-  }, [state.editBundle, selectedTurnPackKey, selectedTurnBandId, proposalJson]);
+    setActionFeedback(`Refined ${totalApplied} turn(s) across ${bandIds.length} bands. Review and save.`);
+    setRefining(false);
+  }, [state.editBundle, selectedScenarioId, selectedTurnPackKey, refinementProvider]);
 
   const handleReconciliationResolve = useCallback((resolved: ResolvedTurn[]) => {
     if (!reconciliationPackKey) return;
@@ -1314,7 +1407,9 @@ export function SugarlangPanel({
         onSelectBandId: setSelectedTurnBandId,
         onCopyRefinementPacket: handleCopyRefinementPacket,
         onCopyBandRefinementPacket: handleCopyBandRefinementPacket,
-        onOpenImportProposal: () => setProposalModalOpen(true),
+        onLlmRefineBand: handleLlmRefineBand,
+        onRefineAll: handleRefineAll,
+        refining,
       })
       : null
   );
@@ -1370,14 +1465,9 @@ export function SugarlangPanel({
                 onClick={() => setSelectedScenarioId(scenario.scenarioId)}
               >
                 <Stack gap={6}>
-                  <Group justify="space-between" gap="xs" wrap="nowrap">
-                    <Text size="sm" fw={600} truncate>
-                      {scenario.scenarioId}
-                    </Text>
-                    <Badge size="xs" color="blue" variant="light">
-                      {packEntries.length} pack{packEntries.length === 1 ? '' : 's'}
-                    </Badge>
-                  </Group>
+                  <Text size="sm" fw={600} truncate>
+                    {scenario.scenarioId}
+                  </Text>
 
                   <Group gap={4}>
                     {scenario.supportedBands.map((bandId) => (
@@ -1669,43 +1759,6 @@ export function SugarlangPanel({
         </Stack>
       </Modal>
 
-      <Modal
-        opened={proposalModalOpen}
-        onClose={() => { setProposalModalOpen(false); setProposalJson(''); }}
-        title="Import Refinement Proposal"
-        centered
-        size="lg"
-      >
-        <Stack gap="sm">
-          <Text size="sm" c="dimmed">
-            Paste the JSON proposal from your external AI assistant. The proposal should contain a
-            "turns" array with turnId and proposedTargetText for each refined turn.
-          </Text>
-          <Textarea
-            label="Proposal JSON"
-            placeholder='{"turns": [{"turnId": "...", "proposedTargetText": "..."}]}'
-            autosize
-            minRows={8}
-            maxRows={20}
-            value={proposalJson}
-            onChange={(e) => setProposalJson(e.currentTarget.value)}
-            styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
-          />
-          <Group justify="flex-end">
-            <Button size="xs" variant="subtle" color="gray" onClick={() => { setProposalModalOpen(false); setProposalJson(''); }}>
-              Cancel
-            </Button>
-            <Button
-              size="xs"
-              color="teal"
-              onClick={handleApplyProposal}
-              disabled={!proposalJson.trim()}
-            >
-              Apply Proposal
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
 
       <ReconciliationModal
         opened={reconciliationPairs.length > 0}
@@ -1728,7 +1781,7 @@ export function SugarlangPanel({
           data={[
             { value: 'overview', label: 'Overview' },
             { value: 'scenario', label: 'Scenario' },
-            { value: 'languages', label: 'Languages' },
+            { value: 'languages', label: 'Turns' },
           ]}
           value={subTab}
           onChange={(value) => setSubTab(value as SubTab)}
@@ -2004,7 +2057,8 @@ function ScenarioOverviewContent({
           {packEntries.length === 0 ? (
             <Alert color="yellow">No language packs are attached to this scenario.</Alert>
           ) : (
-            <Stack gap="sm">
+            <>
+            <SimpleGrid cols={2} spacing="sm">
               {packEntries.map(([key, pack]) => (
                 <Paper key={key} p="sm" withBorder>
                   <Stack gap={6}>
@@ -2060,21 +2114,22 @@ function ScenarioOverviewContent({
                   </Stack>
                 </Paper>
               ))}
-              <Group gap="md" mt={4}>
-                {[
-                  { color: '#585b70', label: 'Generated' },
-                  { color: '#89b4fa', label: 'Reviewed' },
-                  { color: '#cba6f7', label: 'Manual' },
-                  { color: '#f9e2af', label: 'Stale' },
-                  { color: '#f38ba8', label: 'Orphaned' },
-                ].map((item) => (
-                  <Group key={item.label} gap={4}>
-                    <div style={{ width: 10, height: 10, borderRadius: 2, background: item.color }} />
-                    <Text size="xs" c="dimmed">{item.label}</Text>
-                  </Group>
-                ))}
-              </Group>
-            </Stack>
+            </SimpleGrid>
+            <Group gap="md" mt={4}>
+              {[
+                { color: '#585b70', label: 'Generated' },
+                { color: '#89b4fa', label: 'Reviewed' },
+                { color: '#cba6f7', label: 'Manual' },
+                { color: '#f9e2af', label: 'Stale' },
+                { color: '#f38ba8', label: 'Orphaned' },
+              ].map((item) => (
+                <Group key={item.label} gap={4}>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: item.color }} />
+                  <Text size="xs" c="dimmed">{item.label}</Text>
+                </Group>
+              ))}
+            </Group>
+            </>
           )}
         </Paper>
 

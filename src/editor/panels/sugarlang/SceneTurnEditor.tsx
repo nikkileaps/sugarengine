@@ -139,8 +139,12 @@ interface SceneTurnEditorProps {
   onCopyRefinementPacket?: (turnId: string) => void;
   /** Copy a refinement packet for the entire selected band. */
   onCopyBandRefinementPacket?: () => void;
-  /** Open the proposal import modal. */
-  onOpenImportProposal?: () => void;
+  /** Call LLM to refine the selected band. */
+  onLlmRefineBand?: () => void;
+  /** Call LLM to refine all bands in the selected pack. */
+  onRefineAll?: () => void;
+  /** Whether LLM refinement is in progress. */
+  refining?: boolean;
 }
 
 export function SceneTurnEditor({
@@ -151,8 +155,9 @@ export function SceneTurnEditor({
   selectedBandId,
   onSelectBandId,
   onCopyRefinementPacket,
-  onCopyBandRefinementPacket,
-  onOpenImportProposal,
+  onLlmRefineBand,
+  onRefineAll,
+  refining,
 }: SceneTurnEditorProps) {
   const packEntries = Array.from(sceneLanguagePacks.entries());
   const selectedPack = selectedPackKey ? sceneLanguagePacks.get(selectedPackKey) : null;
@@ -245,66 +250,48 @@ export function SceneTurnEditor({
       {selectedPack && (
         <>
           <Divider />
-          <Text size="xs" fw={500}>Band</Text>
-          <Group gap={4}>
+          <Group justify="space-between" gap="xs">
+            <Text size="xs" fw={500}>Band</Text>
+            {onRefineAll && (
+              <Button size="compact-xs" variant="light" color="violet" onClick={onRefineAll} loading={refining}>
+                Refine All
+              </Button>
+            )}
+          </Group>
+          <Stack gap={2}>
             {selectedPack.bands.map((band) => {
               const issues = countIssues(band.turns);
+              const isSelected = selectedBandId === band.bandId;
               return (
-                <Badge
-                  key={band.bandId}
-                  size="sm"
-                  color={selectedBandId === band.bandId ? 'blue' : 'gray'}
-                  variant={selectedBandId === band.bandId ? 'filled' : 'light'}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => onSelectBandId(band.bandId)}
-                  rightSection={
-                    (issues.stale > 0 || issues.orphaned > 0) ? (
-                      <Badge
-                        size="xs"
-                        color={issues.stale > 0 ? 'yellow' : 'gray'}
-                        variant="filled"
-                        circle
-                        style={{ marginLeft: 4 }}
-                      >
-                        {issues.stale + issues.orphaned}
-                      </Badge>
-                    ) : null
-                  }
-                >
-                  {band.bandId} ({band.turns.length})
-                </Badge>
-              );
-            })}
-          </Group>
-        </>
-      )}
-
-      {selectedBand && (
-        <>
-          <Divider />
-          <Text size="xs" fw={500}>Turns</Text>
-          <ScrollArea h={200}>
-            <Stack gap={2}>
-              {selectedBand.turns.map((turn, i) => (
                 <Group
-                  key={turn.turnId}
+                  key={band.bandId}
                   gap={6}
                   p={4}
                   style={{
                     borderRadius: 4,
-                    background: 'rgba(255,255,255,0.03)',
+                    cursor: 'pointer',
+                    background: isSelected ? 'rgba(137,180,250,0.15)' : 'rgba(255,255,255,0.03)',
                   }}
+                  onClick={() => onSelectBandId(band.bandId)}
                 >
-                  <ProvenanceDot turn={turn} />
-                  <Text size="xs" style={{ flex: 1 }} truncate>
-                    {i + 1}. {turn.turnId}
+                  <Badge size="xs" color={isSelected ? 'blue' : 'gray'} variant={isSelected ? 'filled' : 'light'}>
+                    {band.bandId}
+                  </Badge>
+                  <Text size="xs" style={{ flex: 1 }}>
+                    {band.turns.length} turn{band.turns.length === 1 ? '' : 's'}
                   </Text>
+                  {(issues.stale > 0 || issues.orphaned > 0) && (
+                    <Badge size="xs" color={issues.stale > 0 ? 'yellow' : 'red'} variant="filled" circle>
+                      {issues.stale + issues.orphaned}
+                    </Badge>
+                  )}
                 </Group>
-              ))}
-            </Stack>
-          </ScrollArea>
+              );
+            })}
+          </Stack>
         </>
       )}
+
     </Stack>
   );
 
@@ -335,17 +322,10 @@ export function SceneTurnEditor({
             );
           })()}
           <div style={{ flex: 1 }} />
-          {onCopyBandRefinementPacket && (
-            <Tooltip label="Copy a refinement packet for all generated turns in this band to clipboard">
-              <Button size="xs" variant="light" color="violet" onClick={onCopyBandRefinementPacket}>
+          {onLlmRefineBand && (
+            <Tooltip label="Refine all generated turns in this band using an LLM">
+              <Button size="xs" variant="light" color="violet" onClick={onLlmRefineBand} loading={refining}>
                 Refine Band
-              </Button>
-            </Tooltip>
-          )}
-          {onOpenImportProposal && (
-            <Tooltip label="Import an LLM refinement proposal (JSON)">
-              <Button size="xs" variant="light" color="teal" onClick={onOpenImportProposal}>
-                Import Proposal
               </Button>
             </Tooltip>
           )}
@@ -359,7 +339,11 @@ export function SceneTurnEditor({
                 <Accordion.Control>
                   <Group gap="xs">
                     <ProvenanceDot turn={turn} />
-                    <Text size="sm" fw={500}>{turn.turnId}</Text>
+                    <Text size="sm" fw={500} truncate style={{ maxWidth: 360 }}>
+                      {turn.sourceEnglishText
+                        ? `${i + 1}. ${turn.sourceEnglishText}`
+                        : turn.turnId}
+                    </Text>
                     <Badge size="xs" color="blue">{turn.responseMode.replace(/_/g, ' ')}</Badge>
                     {turn.speakerName && <Badge size="xs" color="gray">{turn.speakerName}</Badge>}
                     <Badge size="xs" variant="light" style={{ color: prov.color, borderColor: prov.color }}>

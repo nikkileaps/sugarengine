@@ -98,6 +98,7 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
           responseMode: 'free_form',
           turnRole: 'player_delivery',
           editStatus: 'generated',
+          sourceEnglishText: line.text,
           sourceHash: computeSourceHash({
             sourceText: expandContractions(line.text),
             speakerId: line.speakerId,
@@ -135,6 +136,7 @@ export function generateBandedTurns(input: BandedTurnGenerationInput): BandedTur
         responseMode: 'free_form',
         turnRole: 'npc_delivery',
         editStatus: 'generated',
+        sourceEnglishText: line.text,
         sourceHash: lineHash,
         speakerId: line.speakerId ?? interaction.npcId,
         speakerName: npcName ?? line.speaker,
@@ -412,45 +414,42 @@ export interface RolePlan {
   ambient: LexiconEntry[];
 }
 
-const BAND_FOCUS_BUDGET: Record<LearnerBandId, { min: number; max: number }> = {
-  B0: { min: 1, max: 2 },
-  B1: { min: 2, max: 4 },
-  B2: { min: 6, max: 8 },
-  B3: { min: 8, max: 10 },
-  B4: { min: 8, max: 12 },
-};
-
 const VALID_BANDS: LearnerBandId[] = ['B0', 'B1', 'B2', 'B3', 'B4'];
 
 function bandRank(band: LearnerBandId): number {
   return VALID_BANDS.indexOf(band);
 }
 
+/** How many ambient (above-band) entries to mix in at each band level. */
+const AMBIENT_BUDGET: Record<LearnerBandId, number> = {
+  B0: 1,
+  B1: 2,
+  B2: 3,
+  B3: 4,
+  B4: 0, // Top band — everything is focus or reinforcement, nothing above.
+};
+
 export function assignVocabularyRoles(matches: VocabMatch[], band: LearnerBandId): RolePlan {
   const currentRank = bandRank(band);
-  const budget = BAND_FOCUS_BUDGET[band];
-
-  // Sort by introductionBand ascending (earlier = more central)
-  const eligible = matches
-    .filter((m) => bandRank(m.entry.introductionBand) <= currentRank)
-    .sort((a, b) => bandRank(a.entry.introductionBand) - bandRank(b.entry.introductionBand));
+  const ambientBudget = AMBIENT_BUDGET[band];
 
   const focus: LexiconEntry[] = [];
   const reinforcement: LexiconEntry[] = [];
   const ambient: LexiconEntry[] = [];
 
-  for (const match of eligible) {
-    if (focus.length < budget.max) {
+  for (const match of matches) {
+    const entryRank = bandRank(match.entry.introductionBand);
+    if (entryRank === currentRank) {
+      // Introduced at this band — actively being learned.
       focus.push(match.entry);
-    } else if (bandRank(match.entry.introductionBand) < currentRank) {
+    } else if (entryRank < currentRank) {
+      // Introduced at an earlier band — previously learned.
       reinforcement.push(match.entry);
-    } else {
+    } else if (ambient.length < ambientBudget) {
+      // Above current band — sprinkled in for early exposure.
       ambient.push(match.entry);
     }
   }
-
-  // Entries above the current band don't participate in substitution —
-  // they haven't been "introduced" to the learner yet.
 
   return { focus, reinforcement, ambient };
 }

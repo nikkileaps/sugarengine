@@ -156,8 +156,8 @@ export function ReconciliationModal({ opened, stalePairs, onResolve, onClose }: 
                         <Badge size="xs" variant="light">
                           {pair.bandId}
                         </Badge>
-                        <Text size="xs" c="dimmed" ff="monospace">
-                          {pair.existing.turnId}
+                        <Text size="xs" c="dimmed" truncate style={{ maxWidth: 400 }}>
+                          {pair.fresh.sourceEnglishText ?? pair.existing.sourceEnglishText ?? pair.existing.turnId}
                         </Text>
                       </Group>
                       <Badge

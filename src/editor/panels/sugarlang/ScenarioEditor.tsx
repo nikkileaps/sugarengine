@@ -5,19 +5,15 @@
  * activeReferents, successCriteria.
  */
 
-import { useCallback } from 'react';
 import {
   Stack,
   Text,
-  TextInput,
   Group,
   Badge,
   Checkbox,
   Paper,
   Select,
   Title,
-  ActionIcon,
-  Tooltip,
   ScrollArea,
 } from '@mantine/core';
 import { CompactIdDisplay } from '../../components';
@@ -126,39 +122,39 @@ export function ScenarioEditor({
             </div>
 
             <div>
-              <Text size="sm" fw={500} mb={4}>NPC IDs</Text>
-              <TagEditor
-                values={scenario.npcIds}
-                onChange={(npcIds) => update({ npcIds })}
-                placeholder="Add NPC ID..."
-              />
-            </div>
-
-            <div>
-              <Text size="sm" fw={500} mb={4}>NPC Names</Text>
-              <TagEditor
-                values={scenario.npcNames ?? []}
-                onChange={(npcNames) => update({ npcNames })}
-                placeholder="Add NPC name..."
-              />
+              <Text size="sm" fw={500} mb={4}>NPCs</Text>
+              <Group gap={6}>
+                {(scenario.npcNames ?? scenario.npcIds).map((name) => (
+                  <Badge key={name} size="sm" variant="light">{name}</Badge>
+                ))}
+                {(scenario.npcNames ?? scenario.npcIds).length === 0 && (
+                  <Text size="xs" c="dimmed">None (derived from quest)</Text>
+                )}
+              </Group>
             </div>
 
             <div>
               <Text size="sm" fw={500} mb={4}>Active Referents</Text>
-              <TagEditor
-                values={scenario.activeReferents}
-                onChange={(activeReferents) => update({ activeReferents })}
-                placeholder="e.g. object.suitcase"
-              />
+              <Group gap={6}>
+                {scenario.activeReferents.map((ref) => (
+                  <Badge key={ref} size="sm" variant="light">{ref}</Badge>
+                ))}
+                {scenario.activeReferents.length === 0 && (
+                  <Text size="xs" c="dimmed">None (derived from quest)</Text>
+                )}
+              </Group>
             </div>
 
             <div>
               <Text size="sm" fw={500} mb={4}>Success Criteria</Text>
-              <ListEditor
-                values={scenario.successCriteria}
-                onChange={(successCriteria) => update({ successCriteria })}
-                placeholder="Add criterion..."
-              />
+              <Group gap={6}>
+                {scenario.successCriteria.map((c) => (
+                  <Badge key={c} size="sm" variant="light">{c}</Badge>
+                ))}
+                {scenario.successCriteria.length === 0 && (
+                  <Text size="xs" c="dimmed">None (derived from quest)</Text>
+                )}
+              </Group>
             </div>
           </Stack>
         </Paper>
@@ -173,98 +169,3 @@ export function ScenarioEditor({
   return { list, content };
 }
 
-// ---------------------------------------------------------------------------
-// Inline helper components
-// ---------------------------------------------------------------------------
-
-function TagEditor({
-  values,
-  onChange,
-  placeholder,
-}: {
-  values: string[];
-  onChange: (values: string[]) => void;
-  placeholder: string;
-}) {
-  const handleAdd = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        const val = e.currentTarget.value.trim();
-        if (val && !values.includes(val)) {
-          onChange([...values, val]);
-          e.currentTarget.value = '';
-        }
-      }
-    },
-    [values, onChange],
-  );
-
-  return (
-    <Stack gap={4}>
-      <Group gap={4} style={{ flexWrap: 'wrap' }}>
-        {values.map((v, i) => (
-          <Badge
-            key={i}
-            size="sm"
-            variant="light"
-            rightSection={
-              <ActionIcon size={12} variant="transparent" onClick={() => onChange(values.filter((_, j) => j !== i))}>
-                <Text size="xs">x</Text>
-              </ActionIcon>
-            }
-          >
-            {v}
-          </Badge>
-        ))}
-      </Group>
-      <TextInput size="xs" placeholder={placeholder} onKeyDown={handleAdd} />
-    </Stack>
-  );
-}
-
-function ListEditor({
-  values,
-  onChange,
-  placeholder,
-}: {
-  values: string[];
-  onChange: (values: string[]) => void;
-  placeholder: string;
-}) {
-  return (
-    <Stack gap={4}>
-      {values.map((v, i) => (
-        <Group key={i} gap={4}>
-          <TextInput
-            size="xs"
-            value={v}
-            onChange={(e) => {
-              const next = [...values];
-              next[i] = e.currentTarget.value;
-              onChange(next);
-            }}
-            style={{ flex: 1 }}
-          />
-          <Tooltip label="Remove">
-            <ActionIcon size="sm" variant="subtle" color="red" onClick={() => onChange(values.filter((_, j) => j !== i))}>
-              <Text size="xs">x</Text>
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-      ))}
-      <TextInput
-        size="xs"
-        placeholder={placeholder}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            const val = e.currentTarget.value.trim();
-            if (val) {
-              onChange([...values, val]);
-              e.currentTarget.value = '';
-            }
-          }
-        }}
-      />
-    </Stack>
-  );
-}

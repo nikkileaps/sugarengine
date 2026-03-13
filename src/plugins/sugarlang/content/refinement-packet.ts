@@ -113,14 +113,71 @@ export interface AssemblePacketInput {
   sourceDialogueByInteraction?: Map<string, string[]>;
 }
 
-const DEFAULT_INSTRUCTION =
-  'Improve the target-language rendering of the target turn(s). ' +
-  'Preserve the meaning of the source English text. ' +
-  'Use only vocabulary from the vocabulary plan for focus and reinforcement words. ' +
-  'Maintain the mixing level appropriate for this band. ' +
-  'Do not add vocabulary not in the plan. ' +
-  'Do not change the turn structure or role. ' +
+const BAND_INSTRUCTIONS: Record<LearnerBandId, string> = {
+  B0:
+    'This is band B0 (full support). The learner knows almost no target language. ' +
+    'Rewrite the target turn(s) so that the delivery is almost entirely in the support language (English), ' +
+    'with only 1–2 focus vocabulary words in the target language. ' +
+    'Keep sentences very short and simple. The learner is pointing and using bare nouns — ' +
+    'think "Maleta? Donde?" not full sentences. ' +
+    'The targetText should be the full canonical target-language version of the line. ' +
+    'The proposedDeliveryText should be the mixed-language version the learner actually sees.',
+
+  B1:
+    'This is band B1 (heavy support). The learner knows basic greetings and a few core words. ' +
+    'Rewrite the target turn(s) so that the delivery is mostly English with several target-language words mixed in — ' +
+    'focus words (being actively learned) plus reinforcement words (previously learned). ' +
+    'Use simple sentence structures. Short declarative or question forms. ' +
+    'The targetText should be the full canonical target-language version. ' +
+    'The proposedDeliveryText should be the mixed-language version.',
+
+  B2:
+    'This is band B2 (light support). The learner can handle simple target-language sentences. ' +
+    'Rewrite the target turn(s) so that the delivery is a roughly even mix of target and support language. ' +
+    'Focus words should appear in the target language. Reinforcement words should also be in the target language. ' +
+    'Some structural English (connectives, complex verbs) can remain as scaffolding. ' +
+    'Use moderately complex sentences. ' +
+    'The targetText should be the full canonical target-language version. ' +
+    'The proposedDeliveryText should be the mixed-language version.',
+
+  B3:
+    'This is band B3 (target dominant). The learner is comfortable with most common vocabulary. ' +
+    'Translate EVERY sentence into the target language — do NOT drop or omit any sentences. ' +
+    'The delivery should be predominantly in the target language, ' +
+    'with only occasional English for rare or newly encountered words. ' +
+    'Use natural, conversational target-language phrasing — contractions, idioms, ' +
+    'and colloquial structures are appropriate, but the sentence count must match the source. ' +
+    'The targetText and proposedDeliveryText will be very similar at this band.',
+
+  B4:
+    'This is band B4 (target only). The learner should receive fluent, natural target language. ' +
+    'Translate EVERY sentence into the target language — do NOT drop or omit any sentences. ' +
+    'No English mixing. ' +
+    'Use expressive, natural phrasing that a native speaker would use in this context. ' +
+    'You may vary how each sentence is phrased, but every sentence from the source must be present. ' +
+    'Add natural conversational filler, politeness markers, or emphasis where appropriate. ' +
+    'The targetText and proposedDeliveryText should be identical.',
+};
+
+const BASE_INSTRUCTION =
+  'CRITICAL RULES — violating ANY of these is a failure:\n' +
+  '0. ALWAYS translate from the sourceEnglishText field. The currentRenderedText is only structural context — ' +
+  'it may contain broken hybrid fragments like "Yo\'m" that you MUST NOT copy or preserve. ' +
+  'Translate fresh from the English source every time.\n' +
+  '1. Preserve EVERY sentence from the source English text. Do NOT drop, merge, or condense sentences. ' +
+  'If the source has 4 sentences, the output MUST have 4 sentences.\n' +
+  '2. Preserve the EXACT semantic meaning of each sentence. ' +
+  'Do NOT swap subjects and objects (e.g. "Do I know you?" must NOT become "Do you know me?").\n' +
+  '3. Do NOT change who is speaking to whom, who is performing an action, or the direction of any relationship.\n' +
+  '4. The narrative meaning, perspective, and intent must be identical — only the language changes.\n' +
+  '5. Use vocabulary from the vocabulary plan — focus words MUST appear, reinforcement words SHOULD appear. ' +
+  'Do not invent vocabulary not in the plan unless it is basic grammar (articles, prepositions, conjugations).\n' +
+  '6. Do not change the turn structure, role, or speaker.\n' +
   'Return a JSON object matching the RefinementProposal schema.';
+
+function buildInstruction(bandId: LearnerBandId): string {
+  return `${BAND_INSTRUCTIONS[bandId]} ${BASE_INSTRUCTION}`;
+}
 
 /**
  * Assemble a refinement packet for a single turn.
@@ -131,11 +188,12 @@ export function assembleRefinementPacket(input: AssemblePacketInput): Refinement
   const band = pack.bands.find((b) => b.bandId === bandId);
   const turns = band?.turns ?? [];
 
-  // Determine target turn IDs
+  // Determine target turn IDs — include 'generated' and 'reviewed' turns
+  // (only 'manual' turns are excluded from LLM refinement)
   const targetTurnIds = targetTurnId
     ? [targetTurnId]
     : turns
-        .filter((t) => (t.editStatus ?? 'generated') === 'generated')
+        .filter((t) => (t.editStatus ?? 'generated') !== 'manual')
         .map((t) => t.turnId);
 
   // Build vocabulary plan from all turns in this band
@@ -168,7 +226,7 @@ export function assembleRefinementPacket(input: AssemblePacketInput): Refinement
     vocabularyPlan: vocabPlan,
     conversationFlow: flow,
     targetTurnIds,
-    instruction: DEFAULT_INSTRUCTION,
+    instruction: buildInstruction(bandId),
   };
 }
 
@@ -186,7 +244,7 @@ export function assembleScenarioRefinementPackets(
     if (!band) continue;
 
     const eligibleTurns = band.turns.filter(
-      (t) => (t.editStatus ?? 'generated') === 'generated',
+      (t) => (t.editStatus ?? 'generated') !== 'manual',
     );
     if (eligibleTurns.length === 0) continue;
 
@@ -252,14 +310,13 @@ function buildConversationFlow(
   const targetSet = new Set(targetTurnIds);
 
   return turns.map((turn) => {
-    // Try to find source English text from the interaction's dialogue
-    let sourceEnglishText: string | undefined;
-    if (sourceDialogueByInteraction) {
+    // Source English text: prefer the field stored on the turn, fall back to dialogue lookup
+    let sourceEnglishText: string | undefined = turn.sourceEnglishText;
+    if (!sourceEnglishText && sourceDialogueByInteraction) {
       const interactionId = extractInteractionId(turn.turnId);
       if (interactionId) {
         const lines = sourceDialogueByInteraction.get(interactionId);
         if (lines) {
-          // Turn index within this interaction's turns
           const turnIndex = extractTurnIndex(turn.turnId);
           if (turnIndex !== null && turnIndex < lines.length) {
             sourceEnglishText = lines[turnIndex];

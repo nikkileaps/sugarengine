@@ -954,6 +954,41 @@ export default defineConfig({
           }
         });
 
+        // ---------------------------------------------------------------
+        // LLM Refinement endpoint
+        // Proxies refinement requests to OpenAI or Anthropic APIs.
+        // ---------------------------------------------------------------
+        server.middlewares.use('/__sugarengine/refine', async (req, res) => {
+          if (req.method === 'GET') {
+            // GET = list available providers
+            try {
+              const { listProviders } = await import('./scripts/lib/refinement-provider.mjs' as string) as {
+                listProviders: () => Array<{ id: string; name: string; configured: boolean; defaultModel: string }>;
+              };
+              writeJson(res, 200, { ok: true, providers: listProviders() });
+            } catch (error) {
+              writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+            }
+            return;
+          }
+
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          try {
+            const body = await readRequestBody(req);
+            const { callRefinementProvider } = await import('./scripts/lib/refinement-provider.mjs' as string) as {
+              callRefinementProvider: (req: Record<string, unknown>) => Promise<Record<string, unknown>>;
+            };
+            const result = await callRefinementProvider(body);
+            writeJson(res, result.ok ? 200 : 502, result);
+          } catch (error) {
+            writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
+        });
+
         const readActiveGameSlug = async (): Promise<string> => {
           const selection = await readActiveGameSelection();
           return selection?.slug ?? '';

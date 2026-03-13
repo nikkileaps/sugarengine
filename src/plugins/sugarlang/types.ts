@@ -279,6 +279,8 @@ export interface SceneTurn {
   turnRole?: TurnRole;
   /** How the response options were sourced. */
   responseSource?: ResponseSource;
+  /** Original English source text this turn was derived from. */
+  sourceEnglishText?: string;
   /** Source content fingerprint for change detection (ADR-015). */
   sourceHash?: string;
   /** Provenance status: generated (safe to overwrite), reviewed (human-approved), manual (hand-edited). */
