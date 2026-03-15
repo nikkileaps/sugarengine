@@ -80,7 +80,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     const turn = await plugin.runAgentTurn?.({
       npcId: 'npc-baker',
       npcName: 'Baker',
-      playerMessage: 'what are you doing here?',
+      playerMessage: 'hello there',
     });
 
     expect(turn?.utterance).toContain('I heard you say');

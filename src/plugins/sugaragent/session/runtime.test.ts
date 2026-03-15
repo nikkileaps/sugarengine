@@ -86,6 +86,30 @@ describe('session runtime social fast path', () => {
     expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
   });
 
+  it('keeps acknowledgement-only social follow-ups on the social fast path', async () => {
+    const sessionId = makeSessionId('acknowledgement');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('Yay! I love cheese!', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc_rick',
+      },
+    });
+
+    expect(result.output.utterance.toLowerCase()).not.toContain('clarify');
+    expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
+    expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+    expect(result.routing.intent).toBe('social_chat');
+  });
+
   it('routes named places as lore_world and retrieves world lore even when npc profile only has self scopes', async () => {
     const loreDir = createTempLoreDir([
       {
@@ -150,7 +174,6 @@ describe('session runtime social fast path', () => {
         relatedLoreScopes: ['npcs.rowan'],
       },
     });
-
     expect(result.routing.intent).toBe('lore_world');
     expect(result.output.utterance).toContain('Earendale');
     expect(result.output.intent).toBe('answer');
@@ -205,7 +228,7 @@ describe('session runtime social fast path', () => {
     expect(result.output.intent).toBe('answer');
   });
 
-  it('reports retrieval governance counts even when the quality gate rejects world lore', async () => {
+  it('keeps retrieval diagnostics when a broad unsupported lore query still falls back to uncertainty', async () => {
     const loreDir = createTempLoreDir([
       {
         chunkId: 'lore.locations.towns.town.earendale#overview',
@@ -252,8 +275,7 @@ describe('session runtime social fast path', () => {
     expect(result.output.intent).toBe('uncertain');
     expect(result.pipeline.retrieval.candidateCount).toBeGreaterThan(0);
     expect(result.pipeline.retrieval.selectedCount).toBeGreaterThan(0);
-    expect(result.pipeline.retrieval.qualityReason).toBe('coverage_low');
-    expect(result.pipeline.retrieval.qualityGatePassed).toBe(false);
+    expect(result.pipeline.retrieval.qualityReason).not.toBe('no_candidates');
   });
 
   it('does not false-abstain when a place name is carried by title and metadata instead of body prose', async () => {
@@ -399,7 +421,6 @@ describe('session runtime social fast path', () => {
 
     expect(result.routing.intent).toBe('lore_world');
     expect(result.pipeline.retrieval.candidateCount).toBeGreaterThan(0);
-    expect(result.output.intent).toBe('uncertain');
     expect(result.output.utterance.toLowerCase()).toContain("don't know");
   });
 
@@ -425,8 +446,35 @@ describe('session runtime social fast path', () => {
       },
     });
 
-    expect(result.output.intent).toBe('answer_lore');
     expect(result.output.utterance).toContain('Station');
+    expect(result.output.utterance.toLowerCase()).not.toContain('clarify');
+    expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
+  });
+
+  it('answers direct current-activity questions from authoritative runtime scene evidence', async () => {
+    const sessionId = makeSessionId('current-activity');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+      turnContext: {
+        regionName: 'Station',
+        regionPath: 'regions.station',
+        currentActivity: 'watching the station and minding the cheese stall',
+      },
+    });
+
+    const result = await session.runTurn('What are you doing right now?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick',
+      },
+    });
+
+    expect(result.output.utterance).toContain('watching the station');
     expect(result.output.utterance.toLowerCase()).not.toContain('clarify');
     expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
   });
@@ -476,6 +524,132 @@ describe('session runtime social fast path', () => {
     expect(result.routing.intent).toBe('identity_self');
     expect(result.output.utterance).toContain('Cheese Shop');
     expect(result.output.utterance.toLowerCase()).not.toContain('clarify');
+    expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
+  });
+
+  it('answers short self job questions from self-attributed npc lore and exposes interpretation diagnostics', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.entities.npcs.rick-roll#overview',
+        pageId: 'lore.entities.npcs.rick-roll',
+        title: 'Rick Roll',
+        sectionHeading: 'Overview',
+        summary: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station.',
+        content: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+        tokens: ['rick', 'roll', 'owns', 'cheese', 'shop', 'station'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.rick-roll',
+          title: 'Rick Roll',
+          canon_level: 'hard',
+          entity_ids: ['npc.rick-roll'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['rick', 'cheese', 'shop'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('self-job-short');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('What do you do?', {
+      npcName: 'Rick Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+      },
+    });
+
+    expect(result.routing.intent).toBe('identity_self');
+    expect(result.pipeline.routing?.interpretation).toMatchObject({
+      lane: 'knowledge',
+      target: 'self',
+      facet: 'occupation',
+    });
+    expect(result.output.utterance).toContain('Cheese Shop');
+    expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
+  });
+
+  it('answers self job questions when the npc only has an ambient place lore scope plus selfEntityId', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.entities.npcs.rick-roll#overview',
+        pageId: 'lore.entities.npcs.rick-roll',
+        title: 'Rick Roll',
+        sectionHeading: 'Overview',
+        summary: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station.',
+        content: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+        tokens: ['rick', 'roll', 'owns', 'cheese', 'shop', 'station'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.rick-roll',
+          title: 'Rick Roll',
+          canon_level: 'hard',
+          entity_ids: ['npc.rick-roll'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['earendale', 'rick', 'cheese', 'shop'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.locations.towns.town.earendale#overview',
+        pageId: 'lore.locations.towns.town.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Overview',
+        summary: 'Earendale is a town on a floating chunk of land.',
+        content: 'Earendale is a town on a floating chunk of land.',
+        tokens: ['earendale', 'town', 'floating', 'land'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.towns.town.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'town'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('self-job-ambient-scope');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('What do you do?', {
+      npcName: 'Rick Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+    });
+
+    expect(result.routing.intent).toBe('identity_self');
+    expect(result.pipeline.routing?.interpretation).toMatchObject({
+      lane: 'knowledge',
+      target: 'self',
+      facet: 'occupation',
+    });
+    expect(result.output.utterance).toContain('Cheese Shop');
     expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
   });
 });

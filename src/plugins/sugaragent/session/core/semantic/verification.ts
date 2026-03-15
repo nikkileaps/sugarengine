@@ -88,8 +88,9 @@ function extractNamedEntitiesSimple(clause: string): string[] {
   const entities: string[] = [];
   const words = clause.split(/\s+/);
   for (let i = 1; i < words.length; i++) {
-    const word = words[i].replace(/[^a-zA-Z\u00c0-\u024f]/g, '');
-    if (word.length >= 2 && word[0] === word[0].toUpperCase() && word[0] !== word[0].toLowerCase()) {
+    const word = (words[i] ?? '').replace(/[^a-zA-Z\u00c0-\u024f]/g, '');
+    const firstChar = word.charAt(0);
+    if (word.length >= 2 && firstChar === firstChar.toUpperCase() && firstChar !== firstChar.toLowerCase()) {
       entities.push(word.toLowerCase());
     }
   }

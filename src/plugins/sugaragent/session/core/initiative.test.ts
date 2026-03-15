@@ -145,4 +145,58 @@ describe('initiative', () => {
 
     expect(policy.decision.action).toBe('player_respond');
   });
+
+  it('does not clarify an unclear non-question acknowledgement turn', () => {
+    const policy = resolveInitiativePolicy({
+      mode: 'character',
+      routingIntent: 'unclear',
+      queryType: 'conversation',
+      interpretation: {
+        schemaVersion: 1,
+        lane: 'social',
+        target: 'unknown',
+        facet: 'unknown',
+        timeframe: 'habitual',
+        focusText: 'Yay! I love cheese!',
+        normalizedText: 'Yay! I love cheese!',
+        referents: [],
+        discourse: {
+          repair: false,
+          filler: false,
+          contrast: false,
+          emphasis: false,
+        },
+        candidateScores: [],
+        confidence: 0.72,
+        margin: 0.24,
+        ambiguous: false,
+      },
+      playerMessage: 'Yay! I love cheese!',
+      playerHasQuestion: false,
+      turnIndexWithNpc: 1,
+      noveltyState: {
+        turnPressure: false,
+        repeatedNpcReplyRisk: false,
+        activeTopic: 'cheese',
+        activeTopicNovelty: 0.8,
+        exhaustedTopics: [],
+        trackedTopicCount: 1,
+        playerTopics: ['cheese'],
+        topicExhausted: false,
+        exhausted: false,
+        initiativeHistory: {
+          recentNpcQuestionCount: 0,
+          recentNpcReplyCount: 1,
+          repeatedNpcReplyRisk: false,
+        },
+      },
+      beatContract: null,
+      hasEvidence: false,
+      hasDirectAnswerEvidence: false,
+      retrievalConfidence: 0.1,
+      isFirstMeeting: false,
+    });
+
+    expect(policy.decision.action).toBe('player_respond');
+  });
 });

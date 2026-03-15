@@ -4,6 +4,7 @@ import {
   runEvidenceFirstPipeline,
   validateAndRepairTurnPlanV2,
 } from './evidence-first-pipeline';
+import { buildEvidencePreview, interpretQuery } from './query-interpretation';
 
 describe('evidence-first pipeline planning', () => {
   it('builds inferred claims from compatible corroborating evidence instead of single hedged items', () => {
@@ -324,5 +325,57 @@ describe('evidence-first pipeline planning', () => {
     expect(plan.claims).toEqual([]);
     expect(plan.speechAct).toBe('uncertain');
     expect(plan.abstention?.reason).toBe('no_claimable_evidence');
+  });
+
+  it('treats current npc activity from routine state as directly answerable self evidence', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'What are you doing right now?',
+      npcName: 'Rick Roll',
+      evidencePreview: buildEvidencePreview({
+        currentActivity: 'watching the station and minding the cheese stall',
+      }),
+    });
+
+    const { plan } = createEvidenceFirstTurnPlanV2({
+      npcId: 'npc_rick',
+      npcName: 'Rick Roll',
+      playerMessage: 'What are you doing right now?',
+      queryType: 'self_query',
+      routing: {
+        intent: 'identity_self',
+        interpretation,
+      },
+      evidencePack: {
+        items: [
+          {
+            evidenceId: 'ev_1',
+            sourceId: 'runtime:current_activity',
+            sourceType: 'routine_state',
+            ownerType: 'npc',
+            knowledgeClass: 'routine_state',
+            accessPolicy: 'assert',
+            disclosurePolicy: 'volunteer_ok',
+            text: 'Right now I am watching the station and minding the cheese stall.',
+            verificationStatus: 'verified',
+            entityIds: ['npc.rick-roll'],
+            anchorTerms: ['current activity', 'what are you doing', 'doing right now'],
+            selfAttributed: true,
+            confidence: 0.9,
+          },
+        ],
+        evidenceIdToItem: new Map(),
+      },
+      selfEntityId: 'npc.rick-roll',
+      mode: 'character',
+      beatContract: null,
+      initiativePolicy: {
+        decision: {
+          action: 'player_respond',
+        },
+      },
+    });
+
+    expect(plan.speechAct).toBe('answer');
+    expect(plan.claims[0]?.text).toContain('watching the station');
   });
 });

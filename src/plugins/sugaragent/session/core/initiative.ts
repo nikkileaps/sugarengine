@@ -3,6 +3,7 @@ import {
   type QueryType,
   type RoutingIntent,
 } from './routing';
+import type { QueryInterpretation } from './turn-contracts';
 
 export type InitiativeAction = 'npc_initiate' | 'player_respond' | 'clarify' | 'abstain' | 'close';
 export type GoalType = 'beat_goal' | 'character_goal' | 'social_goal' | 'repair_goal' | 'closure_goal';
@@ -43,6 +44,7 @@ interface ResolveInitiativePolicyInput {
   mode: unknown;
   routingIntent: unknown;
   queryType: unknown;
+  interpretation?: QueryInterpretation | null;
   playerMessage: unknown;
   playerHasQuestion: boolean;
   turnIndexWithNpc: unknown;
@@ -231,6 +233,7 @@ function buildGoalCandidates(input: {
   mode: ConversationMode;
   routingIntent: InitiativeRoutingIntent;
   queryType: QueryType;
+  interpretation?: QueryInterpretation | null;
   hasBeatContract: boolean;
   beatTurnPressure: boolean;
   retrievalConfidence: number;
@@ -239,6 +242,7 @@ function buildGoalCandidates(input: {
   noveltyState: NoveltyState;
 }): GoalCandidate[] {
   const goals: GoalCandidate[] = [];
+  const interpretation = input.interpretation ?? null;
   if (input.hasBeatContract && (input.mode === 'narrative' || input.mode === 'hybrid')) {
     goals.push({
       goalType: 'beat_goal',
@@ -247,7 +251,7 @@ function buildGoalCandidates(input: {
     });
   }
 
-  if (input.routingIntent === 'social_chat') {
+  if (input.routingIntent === 'social_chat' || interpretation?.lane === 'social') {
     goals.push({
       goalType: 'social_goal',
       priority: input.noveltyState.exhausted ? 0.42 : 0.78,
@@ -255,7 +259,12 @@ function buildGoalCandidates(input: {
     });
   }
 
-  if (input.routingIntent === 'session_recall' || isKnowledgeSeekingQueryType(input.queryType)) {
+  if (
+    input.routingIntent === 'session_recall'
+    || interpretation?.lane === 'memory'
+    || isKnowledgeSeekingQueryType(input.queryType)
+    || interpretation?.lane === 'knowledge'
+  ) {
     goals.push({
       goalType: 'character_goal',
       priority: input.routingIntent === 'session_recall' ? 0.82 : 0.74,
@@ -264,8 +273,8 @@ function buildGoalCandidates(input: {
   }
 
   if (
-    input.routingIntent === 'unclear'
-    || (isKnowledgeSeekingQueryType(input.queryType) && !input.hasEvidence)
+    (input.routingIntent === 'unclear' && interpretation?.lane !== 'social')
+    || ((isKnowledgeSeekingQueryType(input.queryType) || interpretation?.lane === 'knowledge') && !input.hasEvidence)
     || (input.playerHasQuestion && input.retrievalConfidence < 0.2)
   ) {
     goals.push({
@@ -328,6 +337,15 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
     recentNpcQuestionCount: number;
     repeatedNpcReplyRisk: boolean;
     noveltyExhausted: boolean;
+    interpretation: {
+      lane: QueryInterpretation['lane'];
+      target: QueryInterpretation['target'];
+      facet: QueryInterpretation['facet'];
+      timeframe: QueryInterpretation['timeframe'];
+      confidence: number;
+      margin: number;
+      ambiguous: boolean;
+    } | null;
     topicCoverage: {
       activeTopic: string | null;
       activeTopicNovelty: number | null;
@@ -344,6 +362,7 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
   const mode = normalizeMode(input.mode);
   const routingIntent = normalizeRoutingIntent(input.routingIntent);
   const queryType = normalizeQueryType(input.queryType);
+  const interpretation = input.interpretation ?? null;
   const playerHasQuestion = normalizeBoolean(input.playerHasQuestion);
   const turnIndexWithNpc = normalizeTurnIndexWithNpc(input.turnIndexWithNpc);
   const noveltyState = normalizeNoveltyState(input.noveltyState);
@@ -363,6 +382,7 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
     mode,
     routingIntent,
     queryType,
+    interpretation,
     hasBeatContract: Boolean(input.beatContract),
     beatTurnPressure,
     retrievalConfidence,
@@ -388,16 +408,19 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
     action = 'close';
     initiator = 'npc';
     reason = noveltyState.topicExhausted ? 'topic-novelty-exhaustion-close' : 'novelty-exhaustion-close';
-  } else if (routingIntent === 'session_recall' && !input.hasEvidence) {
+  } else if ((routingIntent === 'session_recall' || interpretation?.lane === 'memory') && !input.hasEvidence) {
     action = 'abstain';
     initiator = 'npc';
     reason = 'session-recall-missing-evidence';
-  } else if (isKnowledgeSeekingQueryType(queryType) && !input.hasEvidence) {
+  } else if ((isKnowledgeSeekingQueryType(queryType) || interpretation?.lane === 'knowledge') && !input.hasEvidence) {
     action = 'abstain';
     initiator = 'npc';
     reason = 'knowledge-turn-missing-evidence';
   } else if (
-    (routingIntent === 'unclear' || (playerHasQuestion && retrievalConfidence < 0.2 && routingIntent !== 'session_recall'))
+    (
+      ((routingIntent === 'unclear' || interpretation?.ambiguous === true) && playerHasQuestion && interpretation?.lane !== 'social')
+      || (playerHasQuestion && retrievalConfidence < 0.2 && routingIntent !== 'session_recall')
+    )
     && !normalizeBoolean(input.hasDirectAnswerEvidence)
   ) {
     action = 'clarify';
@@ -463,6 +486,17 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
       recentNpcQuestionCount: noveltyState.initiativeHistory.recentNpcQuestionCount,
       repeatedNpcReplyRisk: noveltyState.repeatedNpcReplyRisk,
       noveltyExhausted: noveltyState.exhausted,
+      interpretation: interpretation
+        ? {
+            lane: interpretation.lane,
+            target: interpretation.target,
+            facet: interpretation.facet,
+            timeframe: interpretation.timeframe,
+            confidence: Number(interpretation.confidence.toFixed(4)),
+            margin: Number(interpretation.margin.toFixed(4)),
+            ambiguous: interpretation.ambiguous,
+          }
+        : null,
       topicCoverage: {
         activeTopic: noveltyState.activeTopic ?? null,
         activeTopicNovelty: typeof noveltyState.activeTopicNovelty === 'number'

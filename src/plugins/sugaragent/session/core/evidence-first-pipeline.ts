@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * @fileoverview Evidence-first turn pipeline orchestration.
  *
@@ -10,7 +9,8 @@
  * This is the only correctness path for knowledge-bearing turns.
  */
 
-import type { RoutingResult } from './routing';
+import type { SugarAgentBeatEvidence, SugarAgentTurnOutput } from '../../contracts/turn';
+import type { QueryType, RoutingIntent, RoutingResult } from './routing';
 import { routeIntentToQueryType, isKnowledgeSeekingQueryType, routeIntentUsesLore } from './routing';
 import { resolveTurnPath, checkSocialResponseForFactualLeakage } from './turn-path-routing';
 import { enrichEvidenceWithEpistemics, isEvidenceAvailableForPlanning } from './epistemology';
@@ -31,6 +31,7 @@ import {
   extractDeclaredIdentityName,
   isLikelyGreetingOnlyMessage,
 } from './turn-quality';
+import { detectSocialAcknowledgement } from './social-cues';
 import { verifyRealizationAgainstPlan } from './semantic/verification';
 import { extractExplicitPlayerFacts, filterMemoryWrites, extractNpcCommitments } from './memory-provenance';
 import { applyLanguageAdaptation, resolveLanguageAdaptationContext } from './language-adaptation';
@@ -46,13 +47,121 @@ import type {
   MemoryWrite,
   TurnRoutingDecision,
   TurnRiskSignals,
+  QueryInterpretation,
+  SemanticVerificationResult,
 } from './turn-contracts';
+
+interface BuildNpcStateSnapshotInput {
+  npcId?: unknown;
+  npcName?: unknown;
+  selfEntityId?: unknown;
+  mode?: unknown;
+  locationId?: unknown;
+  currentActivity?: unknown;
+  currentGoal?: unknown;
+  activeBeatId?: unknown;
+}
+
+type EvidencePackItem = Omit<EpistemicEvidenceItem, 'knowledgeClass' | 'accessPolicy' | 'disclosurePolicy'> & Partial<
+  Pick<EpistemicEvidenceItem, 'knowledgeClass' | 'accessPolicy' | 'disclosurePolicy'>
+>;
+
+interface EvidencePackLike {
+  items: EvidencePackItem[];
+  evidenceIdToItem?: Map<string, EvidencePackItem>;
+}
+
+interface EnrichedEvidencePack extends EvidencePackLike {
+  items: EpistemicEvidenceItem[];
+  evidenceIdToItem?: Map<string, EpistemicEvidenceItem>;
+}
+
+function isEpistemicEvidenceItem(item: EvidencePackItem): item is EpistemicEvidenceItem {
+  return Boolean(item?.knowledgeClass && item?.accessPolicy && item?.disclosurePolicy);
+}
+
+interface EvidenceItemRelevanceInput {
+  routeIntent?: RoutingIntent | string;
+  queryType?: QueryType | string;
+  selfEntityId?: string;
+  npcId?: string;
+}
+
+interface PipelineRoutingInput extends Partial<RoutingResult> {
+  intent: RoutingIntent;
+  interpretation?: QueryInterpretation;
+}
+
+type InitiativeActionLike = 'npc_initiate' | 'player_respond' | 'clarify' | 'abstain' | 'close';
+
+interface InitiativePolicyLike {
+  decision?: {
+    action?: InitiativeActionLike | string;
+    [key: string]: unknown;
+  };
+}
+
+interface EvidenceFirstPlannerInput {
+  npcId: string;
+  npcName: string;
+  playerMessage: string;
+  queryType: QueryType | string;
+  routing?: PipelineRoutingInput | null;
+  evidencePack: EvidencePackLike;
+  selfEntityId?: string;
+  mode?: NpcStateSnapshot['mode'];
+  beatContract?: unknown;
+  initiativePolicy?: InitiativePolicyLike | null;
+}
+
+interface PlannerMeta {
+  selectedEvidence: EpistemicEvidenceItem[];
+  enrichedPack: EnrichedEvidencePack;
+}
+
+interface ValidatePlanInput {
+  plan: TurnPlan;
+  evidencePack?: EnrichedEvidencePack | null;
+  snapshot?: NpcStateSnapshot | null;
+}
+
+interface ValidatedTurnPlanResult extends ValidatedTurnPlan {
+  droppedClaims: PlannedClaim[];
+}
+
+interface RunEvidenceFirstPipelineInput {
+  playerMessage: string;
+  routing: PipelineRoutingInput;
+  snapshot: NpcStateSnapshot;
+  evidencePack: EvidencePackLike;
+  initiativePolicy?: InitiativePolicyLike | null;
+  beatContract?: unknown;
+  adaptationContext?: LanguageAdaptationContext | null;
+  loreEntityIds?: string[];
+}
+
+interface EvidenceFirstPipelineResult {
+  output: SugarAgentTurnOutput;
+  plan: TurnPlan;
+  validatedPlan: ValidatedTurnPlanResult;
+  verification: SemanticVerificationResult;
+  memoryWrites: MemoryWrite[];
+  diagnostics: EvidenceFirstPipelineDiagnostics;
+  turnRouting: TurnRoutingDecision;
+}
+
+const EMPTY_BEAT_EVIDENCE: SugarAgentBeatEvidence = {
+  coveredFacts: [],
+  uncoveredFacts: [],
+  completionSignal: 'none',
+  confidence: 0,
+};
 
 // ---------------------------------------------------------------------------
 // NPC State Snapshot builder
 // ---------------------------------------------------------------------------
 
-export function buildNpcStateSnapshot(input) {
+export function buildNpcStateSnapshot(input: BuildNpcStateSnapshotInput): NpcStateSnapshot {
   const npcId = typeof input.npcId === 'string' ? input.npcId : '';
   const npcName = typeof input.npcName === 'string' ? input.npcName : '';
   const selfEntityId = typeof input.selfEntityId === 'string' ? input.selfEntityId : undefined;
@@ -75,16 +184,24 @@ export function buildNpcStateSnapshot(input) {
 // Evidence enrichment
 // ---------------------------------------------------------------------------
 
-export function enrichEvidencePackWithEpistemics(evidencePack, beatContract) {
-  if (!evidencePack || !Array.isArray(evidencePack.items)) return evidencePack;
+export function enrichEvidencePackWithEpistemics(
+  evidencePack: EvidencePackLike,
+  beatContract?: unknown,
+): EnrichedEvidencePack {
+  if (!evidencePack || !Array.isArray(evidencePack.items)) {
+    return {
+      items: [],
+      evidenceIdToItem: new Map<string, EpistemicEvidenceItem>(),
+    };
+  }
 
-  const enrichedItems = evidencePack.items.map((item) =>
-    item?.knowledgeClass && item?.accessPolicy && item?.disclosurePolicy
+  const enrichedItems: EpistemicEvidenceItem[] = evidencePack.items.map((item) =>
+    isEpistemicEvidenceItem(item)
       ? item
-      : enrichEvidenceWithEpistemics(item, beatContract),
+      : enrichEvidenceWithEpistemics(item, beatContract as { urgency?: string } | null | undefined),
   );
 
-  const enrichedIdToItem = new Map();
+  const enrichedIdToItem = new Map<string, EpistemicEvidenceItem>();
   for (const item of enrichedItems) {
     enrichedIdToItem.set(item.evidenceId, item);
   }
@@ -96,11 +213,15 @@ export function enrichEvidencePackWithEpistemics(evidencePack, beatContract) {
   };
 }
 
-function normalizeClaimText(text) {
+function normalizeClaimText(text: unknown): string {
   return String(text ?? '').trim().replace(/[.!?]+$/, '');
 }
 
-function evidenceTargetsCurrentNpc(item, selfEntityId, npcId) {
+function evidenceTargetsCurrentNpc(
+  item: EpistemicEvidenceItem | null | undefined,
+  selfEntityId: string | undefined,
+  npcId: string | undefined,
+): boolean {
   const entityIds = Array.isArray(item?.entityIds)
     ? item.entityIds.filter((entry) => typeof entry === 'string').map((entry) => entry.toLowerCase())
     : [];
@@ -113,7 +234,10 @@ function evidenceTargetsCurrentNpc(item, selfEntityId, npcId) {
   );
 }
 
-export function isEvidenceItemRelevantForTurn(item, input) {
+export function isEvidenceItemRelevantForTurn(
+  item: EpistemicEvidenceItem | null | undefined,
+  input: EvidenceItemRelevanceInput,
+): boolean {
   if (!item) return false;
   const routeIntent = input?.routeIntent;
   const queryType = input?.queryType;
@@ -148,7 +272,7 @@ export function isEvidenceItemRelevantForTurn(item, input) {
   return true;
 }
 
-function capitalizeName(value) {
+function capitalizeName(value: unknown): string {
   const normalized = String(value ?? '').trim();
   if (!normalized) return '';
   return normalized
@@ -157,11 +281,11 @@ function capitalizeName(value) {
     .join(' ');
 }
 
-function escapeRegex(value) {
+function escapeRegex(value: unknown): string {
   return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function extractSelfProfileParts(text) {
+function extractSelfProfileParts(text: unknown): { name?: string; persona?: string } {
   const normalized = normalizeClaimText(text);
   if (!normalized) return {};
   const nameMatch = normalized.match(/\bNPC name:\s*([^.;]+)/i);
@@ -172,11 +296,15 @@ function extractSelfProfileParts(text) {
   };
 }
 
-function shouldAnswerWithNpcName(playerMessage) {
+function shouldAnswerWithNpcName(playerMessage: unknown): boolean {
   return /\b(what(?:'s| is) your name|your name|who are you)\b/i.test(String(playerMessage ?? ''));
 }
 
-function formatSelfProfileClaimText(item, snapshot, playerMessage) {
+function formatSelfProfileClaimText(
+  item: EpistemicEvidenceItem | null | undefined,
+  snapshot: Partial<NpcStateSnapshot> | null | undefined,
+  playerMessage: unknown,
+): string {
   const parts = extractSelfProfileParts(item?.text);
   const npcName = normalizeClaimText(parts.name || snapshot?.npcName || '');
   const persona = normalizeClaimText(parts.persona || '');
@@ -197,7 +325,10 @@ function formatSelfProfileClaimText(item, snapshot, playerMessage) {
   return normalizeClaimText(item?.text);
 }
 
-function formatNpcSelfKnowledgeClaimText(item, snapshot) {
+function formatNpcSelfKnowledgeClaimText(
+  item: EpistemicEvidenceItem | null | undefined,
+  snapshot: Partial<NpcStateSnapshot> | null | undefined,
+): string {
   const fullText = normalizeClaimText(item?.text);
   if (!fullText) return '';
   const firstSentence = normalizeClaimText(
@@ -234,13 +365,17 @@ function formatNpcSelfKnowledgeClaimText(item, snapshot) {
   return firstSentence || fullText;
 }
 
-function buildDeterministicSocialReply(playerMessage, snapshot) {
+function buildDeterministicSocialReply(
+  playerMessage: string,
+  snapshot: NpcStateSnapshot,
+): SugarAgentTurnOutput {
   const message = String(playerMessage ?? '').trim();
   const npcName = normalizeClaimText(snapshot?.npcName || '') || 'friend';
   const declaredName = extractDeclaredIdentityName(message);
   const safeDeclaredName = declaredName ? capitalizeName(declaredName) : '';
   const asksIdentity = shouldAnswerWithNpcName(message);
   const frustration = /\b(i was pretty clear|i was clear|that was clear|pretty clear|be serious|come on)\b/i.test(message);
+  const acknowledgement = detectSocialAcknowledgement(message);
 
   if (frustration) {
     return {
@@ -249,7 +384,7 @@ function buildDeterministicSocialReply(playerMessage, snapshot) {
       intent: 'conversation',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
   if (safeDeclaredName && asksIdentity) {
@@ -259,7 +394,7 @@ function buildDeterministicSocialReply(playerMessage, snapshot) {
       intent: 'conversation',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
   if (asksIdentity) {
@@ -269,7 +404,7 @@ function buildDeterministicSocialReply(playerMessage, snapshot) {
       intent: 'conversation',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
   if (safeDeclaredName) {
@@ -279,7 +414,7 @@ function buildDeterministicSocialReply(playerMessage, snapshot) {
       intent: 'conversation',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
   if (isLikelyGreetingOnlyMessage(message)) {
@@ -289,7 +424,37 @@ function buildDeterministicSocialReply(playerMessage, snapshot) {
       intent: 'conversation',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (acknowledgement === 'gratitude') {
+    return {
+      utterance: 'Any time.',
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (acknowledgement === 'shared_preference') {
+    return {
+      utterance: /\bcheese\b/i.test(message) ? 'You and me both. Cheese is hard to beat.' : 'You and me both.',
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (acknowledgement) {
+    return {
+      utterance: 'Yeah, I hear you.',
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
   return {
@@ -298,11 +463,11 @@ function buildDeterministicSocialReply(playerMessage, snapshot) {
     intent: 'conversation',
     proposedIntents: [],
     citations: [],
-    beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+    beatEvidence: EMPTY_BEAT_EVIDENCE,
   };
 }
 
-function tokenizeEvidenceText(text) {
+function tokenizeEvidenceText(text: unknown): Set<string> {
   return new Set(
     normalizeClaimText(text)
       .toLowerCase()
@@ -312,7 +477,7 @@ function tokenizeEvidenceText(text) {
   );
 }
 
-function countTokenOverlap(a, b) {
+function countTokenOverlap(a: Set<string>, b: Set<string>): number {
   if (!(a instanceof Set) || !(b instanceof Set) || a.size === 0 || b.size === 0) return 0;
   let overlap = 0;
   for (const token of a) {
@@ -321,7 +486,10 @@ function countTokenOverlap(a, b) {
   return overlap;
 }
 
-function haveSharedEntityIds(a, b) {
+function haveSharedEntityIds(
+  a: EpistemicEvidenceItem | null | undefined,
+  b: EpistemicEvidenceItem | null | undefined,
+): boolean {
   const aIds = Array.isArray(a?.entityIds) ? a.entityIds.filter((entry) => typeof entry === 'string') : [];
   const bIds = Array.isArray(b?.entityIds) ? b.entityIds.filter((entry) => typeof entry === 'string') : [];
   if (aIds.length === 0 || bIds.length === 0) return false;
@@ -329,7 +497,10 @@ function haveSharedEntityIds(a, b) {
   return aIds.some((entry) => bIdSet.has(entry.toLowerCase()));
 }
 
-function areEvidenceItemsCompatible(a, b) {
+function areEvidenceItemsCompatible(
+  a: EpistemicEvidenceItem | null | undefined,
+  b: EpistemicEvidenceItem | null | undefined,
+): boolean {
   if (!a || !b) return false;
   if (a.evidenceId === b.evidenceId) return false;
   if (a.ownerType !== b.ownerType && a.ownerType !== 'world' && b.ownerType !== 'world') {
@@ -340,20 +511,30 @@ function areEvidenceItemsCompatible(a, b) {
   return overlap >= 2;
 }
 
-function buildEvidenceRelevanceText(item) {
+function buildEvidenceRelevanceText(item: EpistemicEvidenceItem | null | undefined): string {
   const anchorTerms = Array.isArray(item?.anchorTerms)
-    ? item.anchorTerms.filter((entry) => typeof entry === 'string')
+    ? item.anchorTerms
+        .filter((entry) => typeof entry === 'string')
+        .filter((entry) => !/[.#/]/.test(entry))
     : [];
   return [
     normalizeClaimText(item?.text),
     ...anchorTerms,
-    typeof item?.chunkId === 'string' ? item.chunkId : '',
-    typeof item?.sourceId === 'string' ? item.sourceId : '',
   ].join(' ');
 }
 
-function assessKnowledgeEvidenceRelevance(item, playerMessage) {
-  const queryTokens = extractFacetQueryTokens(playerMessage);
+function assessKnowledgeEvidenceRelevance(
+  item: EpistemicEvidenceItem,
+  playerMessageOrInterpretation: string | QueryInterpretation,
+): { matchedTokens: number; coverage: number; claimable: boolean } {
+  const queryTokens = extractFacetQueryTokens(playerMessageOrInterpretation);
+  const interpretationFacet = (
+    playerMessageOrInterpretation
+    && typeof playerMessageOrInterpretation === 'object'
+    && typeof playerMessageOrInterpretation.facet === 'string'
+  )
+    ? playerMessageOrInterpretation.facet
+    : null;
   if (queryTokens.length === 0) {
     return {
       matchedTokens: 0,
@@ -370,9 +551,14 @@ function assessKnowledgeEvidenceRelevance(item, playerMessage) {
     }
   }
   const coverage = matchedTokens / queryTokens.length;
+  const broadLoreQuestion = (
+    (interpretationFacet === 'general_lore' || interpretationFacet === 'location')
+    && queryTokens.length <= 2
+    && matchedTokens >= 1
+  );
   const claimable = queryTokens.length <= 1
     ? matchedTokens > 0
-    : coverage > 0.5 || matchedTokens >= 2;
+    : coverage > 0.5 || matchedTokens >= 2 || broadLoreQuestion;
   return {
     matchedTokens,
     coverage: Number(coverage.toFixed(4)),
@@ -380,17 +566,23 @@ function assessKnowledgeEvidenceRelevance(item, playerMessage) {
   };
 }
 
-export function hasDirectAnswerableStateEvidence(items, playerMessage) {
+export function hasDirectAnswerableStateEvidence(
+  items: EpistemicEvidenceItem[],
+  playerMessageOrInterpretation: string | QueryInterpretation,
+): boolean {
   return (Array.isArray(items) ? items : []).some((item) => (
     item?.sourceType === 'routine_state'
-    && assessKnowledgeEvidenceRelevance(item, playerMessage).claimable
+    && assessKnowledgeEvidenceRelevance(item, playerMessageOrInterpretation).claimable
   ));
 }
 
-function selectClaimableKnowledgeEvidence(items, playerMessage) {
+function selectClaimableKnowledgeEvidence(
+  items: EpistemicEvidenceItem[],
+  playerMessageOrInterpretation: string | QueryInterpretation,
+): EpistemicEvidenceItem[] {
   return (Array.isArray(items) ? items : [])
     .map((item) => {
-      const relevance = assessKnowledgeEvidenceRelevance(item, playerMessage);
+      const relevance = assessKnowledgeEvidenceRelevance(item, playerMessageOrInterpretation);
       return {
         item,
         relevance,
@@ -405,26 +597,37 @@ function selectClaimableKnowledgeEvidence(items, playerMessage) {
     .map((entry) => entry.item);
 }
 
-function pickPrimaryEvidenceForMode(evidenceItems, mode) {
+function pickPrimaryEvidenceForMode(
+  evidenceItems: EpistemicEvidenceItem[],
+  mode: PlannedClaim['mode'],
+): EpistemicEvidenceItem | null {
   if (!Array.isArray(evidenceItems) || evidenceItems.length === 0) return null;
   if (mode === 'rumor') {
-    return evidenceItems.find((item) => item?.knowledgeClass === 'rumor') ?? evidenceItems[0];
+    return evidenceItems.find((item) => item?.knowledgeClass === 'rumor') ?? evidenceItems[0] ?? null;
   }
   if (mode === 'inferred') {
-    return evidenceItems.find((item) => item?.accessPolicy === 'assert') ?? evidenceItems[0];
+    return evidenceItems.find((item) => item?.accessPolicy === 'assert') ?? evidenceItems[0] ?? null;
   }
-  return evidenceItems[0];
+  return evidenceItems[0] ?? null;
 }
 
-function buildCorroboratedClaims(selected, subjectResolver, startingIndex = 0, snapshot = {}, playerMessage = '') {
-  const claims = [];
+function buildCorroboratedClaims(
+  selected: EpistemicEvidenceItem[],
+  subjectResolver: (item: EpistemicEvidenceItem) => string,
+  startingIndex = 0,
+  snapshot: Partial<NpcStateSnapshot> = {},
+  playerMessage = '',
+): PlannedClaim[] {
+  const claims: PlannedClaim[] = [];
   const seenEvidenceKeys = new Set();
   let claimIndex = startingIndex;
 
   for (let leftIndex = 0; leftIndex < selected.length; leftIndex++) {
     const left = selected[leftIndex];
+    if (!left) continue;
     for (let rightIndex = leftIndex + 1; rightIndex < selected.length; rightIndex++) {
       const right = selected[rightIndex];
+      if (!right) continue;
       if (!areEvidenceItemsCompatible(left, right)) continue;
       const evidenceItems = [left, right];
       const claimMode = chooseClaimMode(evidenceItems);
@@ -437,6 +640,7 @@ function buildCorroboratedClaims(selected, subjectResolver, startingIndex = 0, s
       if (seenEvidenceKeys.has(evidenceKey)) continue;
 
       const primary = pickPrimaryEvidenceForMode(evidenceItems, claimMode);
+      if (!primary) continue;
       const claimText = primary?.sourceType === 'self_profile'
         ? formatSelfProfileClaimText(primary, snapshot, playerMessage)
         : normalizeClaimText(primary?.text);
@@ -465,7 +669,9 @@ function buildCorroboratedClaims(selected, subjectResolver, startingIndex = 0, s
 // Evidence-first turn plan creation (Phase 1 + Phase 4 multi-strength)
 // ---------------------------------------------------------------------------
 
-export function createEvidenceFirstTurnPlanV2(input) {
+export function createEvidenceFirstTurnPlanV2(
+  input: EvidenceFirstPlannerInput,
+): { plan: TurnPlan; plannerMeta: PlannerMeta } {
   const {
     npcId,
     npcName,
@@ -481,11 +687,12 @@ export function createEvidenceFirstTurnPlanV2(input) {
 
   // Import the existing plan creator and extend it with multi-strength claims
   const enrichedPack = enrichEvidencePackWithEpistemics(evidencePack, beatContract);
+  const interpretationOrMessage = routing?.interpretation ?? playerMessage;
 
   // Build memory writes with provenance
   const playerFacts = extractExplicitPlayerFacts(playerMessage);
 
-  const plan = {
+  const plan: TurnPlan = {
     schemaVersion: 1,
     pipelineVersion: 'evidence_first_v1',
     mode: mode ?? 'character',
@@ -548,12 +755,12 @@ export function createEvidenceFirstTurnPlanV2(input) {
   }
 
   // Pick top evidence items (already ranked by the evidence pack builder)
-  const selected = selectClaimableKnowledgeEvidence(availableItems, playerMessage).slice(0, 5);
+  const selected = selectClaimableKnowledgeEvidence(availableItems, interpretationOrMessage).slice(0, 5);
   let claimIndex = 0;
-  const claims = [];
+  const claims: PlannedClaim[] = [];
   const seenClaimTexts = new Set();
 
-  const resolveSubject = (item) => {
+  const resolveSubject = (item: EpistemicEvidenceItem): string => {
     if (!item) return 'world';
     return item.ownerType === 'player'
       ? 'player'
@@ -617,14 +824,17 @@ export function createEvidenceFirstTurnPlanV2(input) {
 // Plan validation with multi-strength support
 // ---------------------------------------------------------------------------
 
-export function validateAndRepairTurnPlanV2(input) {
+export function validateAndRepairTurnPlanV2(
+  input: ValidatePlanInput,
+): ValidatedTurnPlanResult {
   const { plan, evidencePack, snapshot } = input;
-  const errors = [];
-  const droppedClaims = [];
-  const validClaims = [];
+  void snapshot;
+  const errors: string[] = [];
+  const droppedClaims: PlannedClaim[] = [];
+  const validClaims: PlannedClaim[] = [];
   const evidenceIdToItem = evidencePack?.evidenceIdToItem instanceof Map
     ? evidencePack.evidenceIdToItem
-    : new Map();
+    : new Map<string, EpistemicEvidenceItem>();
 
   for (const claim of plan.claims ?? []) {
     if (!claim || !claim.text) {
@@ -639,7 +849,7 @@ export function validateAndRepairTurnPlanV2(input) {
     }
 
     // Verify evidence items exist and are accessible
-    const items = [];
+    const items: EpistemicEvidenceItem[] = [];
     for (const eid of claim.evidenceIds) {
       const item = evidenceIdToItem.get(eid);
       if (!item) {
@@ -686,7 +896,7 @@ export function validateAndRepairTurnPlanV2(input) {
   }
 
   const acceptable = errors.length === 0;
-  const repairedPlan = {
+  const repairedPlan: TurnPlan = {
     ...plan,
     speechAct,
     claims: validClaims,
@@ -707,17 +917,20 @@ export function validateAndRepairTurnPlanV2(input) {
 // Deterministic realization from validated plan
 // ---------------------------------------------------------------------------
 
-export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
+export function realizeDeterministicPlan(
+  plan: TurnPlan,
+  snapshot: NpcStateSnapshot,
+  evidencePack?: EvidencePackLike | null,
+): SugarAgentTurnOutput {
   const claims = plan.claims ?? [];
   const speechAct = plan.speechAct ?? 'chat';
-  const npcName = snapshot.npcName ?? 'friend';
 
   // Build evidence ID → source mapping for citations
   const evidenceIdToItem = evidencePack?.evidenceIdToItem instanceof Map
     ? evidencePack.evidenceIdToItem
-    : new Map();
+    : new Map<string, EpistemicEvidenceItem>();
 
-  function buildCitations(claimList) {
+  function buildCitations(claimList: PlannedClaim[]) {
     return claimList.flatMap((c) => (c.evidenceIds ?? []).map((id) => {
       const item = evidenceIdToItem.get(id);
       return {
@@ -737,7 +950,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
       intent: 'uncertain',
       proposedIntents: [],
       citations: buildCitations(claims),
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
 
@@ -748,7 +961,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
       intent: 'question',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
 
@@ -759,7 +972,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
       intent: 'close',
       proposedIntents: [],
       citations: [],
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
 
@@ -771,7 +984,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
         intent: 'recall',
         proposedIntents: [],
         citations: [],
-        beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+        beatEvidence: EMPTY_BEAT_EVIDENCE,
       };
     }
     const recallTexts = claims.map((c) => c.text).filter(Boolean);
@@ -784,7 +997,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
       intent: 'recall',
       proposedIntents: [],
       citations: buildCitations(claims),
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
 
@@ -796,7 +1009,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
         intent: 'conversation',
         proposedIntents: [],
         citations: [],
-        beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+        beatEvidence: EMPTY_BEAT_EVIDENCE,
       };
     }
 
@@ -817,7 +1030,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
       intent: speechAct === 'answer' ? 'answer_lore' : 'conversation',
       proposedIntents: [],
       citations: buildCitations(claims),
-      beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
 
@@ -828,7 +1041,7 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
     intent: 'conversation',
     proposedIntents: [],
     citations: [],
-    beatEvidence: { coveredFacts: [], uncoveredFacts: [], completionSignal: 'none', confidence: 0 },
+    beatEvidence: EMPTY_BEAT_EVIDENCE,
   };
 }
 
@@ -836,7 +1049,9 @@ export function realizeDeterministicPlan(plan, snapshot, evidencePack?) {
 // Main evidence-first pipeline
 // ---------------------------------------------------------------------------
 
-export function runEvidenceFirstPipeline(input) {
+export function runEvidenceFirstPipeline(
+  input: RunEvidenceFirstPipelineInput,
+): EvidenceFirstPipelineResult {
   const {
     playerMessage,
     routing,
@@ -848,11 +1063,20 @@ export function runEvidenceFirstPipeline(input) {
     loreEntityIds,
   } = input;
 
-  const queryType = routeIntentToQueryType(routing.intent);
+  const normalizedRouting: RoutingResult = {
+    intent: routing.intent,
+    confidence: typeof routing.confidence === 'number' ? routing.confidence : 0.5,
+    margin: typeof routing.margin === 'number' ? routing.margin : 0.2,
+    candidateScores: Array.isArray(routing.candidateScores) ? routing.candidateScores : [],
+    policyPath: routing.policyPath ?? 'safe_chat',
+    ...(routing.interpretation ? { interpretation: routing.interpretation } : {}),
+  };
+
+  const queryType = routeIntentToQueryType(normalizedRouting.intent);
 
   // Step 1: Route turn path
-  const turnRouting = resolveTurnPath(routing, playerMessage, snapshot, loreEntityIds);
-  const diagnostics = {
+  const turnRouting = resolveTurnPath(normalizedRouting, playerMessage, snapshot, loreEntityIds);
+  const diagnostics: EvidenceFirstPipelineDiagnostics = {
     pipelineVersion: 'evidence_first_v1',
     turnPath: turnRouting.path,
     riskSignals: {
@@ -868,11 +1092,11 @@ export function runEvidenceFirstPipeline(input) {
 
   // Step 2: Social fast path
   if (turnRouting.path === 'social_fast') {
-    const socialPlan = {
+    const socialPlan: TurnPlan = {
       schemaVersion: 1,
       pipelineVersion: 'evidence_first_v1',
       mode: snapshot.mode,
-      routeIntent: routing.intent,
+      routeIntent: normalizedRouting.intent,
       queryType,
       speechAct: 'chat',
       claims: [],
@@ -910,7 +1134,7 @@ export function runEvidenceFirstPipeline(input) {
     npcName: snapshot.npcName,
     playerMessage,
     queryType,
-    routing,
+    routing: normalizedRouting,
     evidencePack: enrichedPack,
     selfEntityId: snapshot.selfEntityId,
     mode: snapshot.mode,
@@ -941,8 +1165,8 @@ export function runEvidenceFirstPipeline(input) {
   const realized = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack);
 
   // Step 7: Apply language adaptation (currently passthrough)
-  const adapted = applyLanguageAdaptation(realized, adaptationContext);
-  diagnostics.adaptationApplied = adaptationContext != null;
+  const adapted = applyLanguageAdaptation(realized, adaptationContext ?? null);
+  diagnostics.adaptationApplied = (adaptationContext ?? null) != null;
 
   // Step 8: Semantic verification
   const verification = verifyRealizationAgainstPlan(
@@ -955,7 +1179,7 @@ export function runEvidenceFirstPipeline(input) {
   diagnostics.semanticVerification = verification;
 
   // Step 9: If verification fails, fall back to deterministic realization
-  let finalOutput = adapted;
+  let finalOutput: SugarAgentTurnOutput = adapted;
   if (!verification.ok) {
     diagnostics.deterministicFallbackUsed = true;
     finalOutput = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack);

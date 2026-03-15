@@ -145,6 +145,16 @@ export interface PluginAgentTurnDiagnostics {
     routeIntent?: string;
     queryType?: string;
     policyPath?: string;
+    interpretation?: {
+      lane?: string;
+      target?: string;
+      facet?: string;
+      timeframe?: string;
+      focusText?: string;
+      confidence?: number;
+      margin?: number;
+      ambiguous?: boolean;
+    };
   };
   mode?: PluginAgentConversationMode;
   modeReason?: string;

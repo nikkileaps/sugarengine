@@ -506,6 +506,14 @@ function matchesLoreScope(chunk, scopeFilters) {
   return false;
 }
 
+function shouldIncludeChunkForRetrieval(chunk, identityConfig) {
+  if (matchesLoreScope(chunk, identityConfig.scopeFilters)) return true;
+  const isSelfQuery = identityConfig.queryType === 'self_query';
+  if (!isSelfQuery || !identityConfig.selfEntityId) return false;
+  const chunkEntityIds = collectChunkEntityIds(chunk);
+  return chunkEntityIds.includes(identityConfig.selfEntityId);
+}
+
 export function ingestLoreDirectory({
   sourceDir,
   commit,
@@ -1080,7 +1088,7 @@ export function retrieveLoreChunks(artifacts, query, options = {}) {
   if (queryTokens.length === 0) return [];
 
   return artifacts.chunks
-    .filter((chunk) => matchesLoreScope(chunk, scopeFilters))
+    .filter((chunk) => shouldIncludeChunkForRetrieval(chunk, identityConfig))
     .map((chunk) => {
       const chunkIdentity = classifyChunkIdentity(chunk, identityConfig);
       return {

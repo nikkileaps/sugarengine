@@ -117,6 +117,7 @@ interface RerankLoreMatchesInput {
 
 interface EvaluateRetrievalQualityInput {
   query: unknown;
+  interpretation?: unknown;
   mode: unknown;
   queryType: unknown;
   routeIntent: unknown;
@@ -132,6 +133,7 @@ interface EvidenceEntryLike {
   verificationStatus?: unknown;
   provenance?: unknown;
   entityIds?: unknown;
+  anchorTerms?: unknown;
   selfAttributed?: unknown;
 }
 
@@ -146,6 +148,7 @@ interface EvidenceItem {
   verificationStatus: string;
   provenance?: RecordLike;
   entityIds: string[];
+  anchorTerms?: string[];
   selfAttributed: boolean;
   confidence: number;
 }
@@ -483,7 +486,7 @@ export function inferEvidenceOwnerType(entry: unknown, selfEntityId: unknown, np
   if (sourceType === 'player_fact' || sourceType === 'session_fact') ownerType = 'player';
   else if (sourceType === 'self_profile') ownerType = 'npc';
   else if (sourceType === 'beat_fact') ownerType = 'beat';
-  else if (sourceType === 'routine_state') ownerType = 'world';
+  else if (sourceType === 'routine_state') ownerType = isRecord(entry) && entry.selfAttributed === true ? 'npc' : 'world';
   else if (sourceType === 'lore_chunk') {
     if (isRecord(entry) && entry.selfAttributed === true) ownerType = 'npc';
     else {
@@ -924,7 +927,7 @@ export function evaluateRetrievalQuality(input: EvaluateRetrievalQualityInput): 
     };
   }
   const thresholds = resolveRetrievalQualityThreshold(input.mode);
-  const coverage = computeEvidenceCoverageScore(input.query, input.selectedMatches);
+  const coverage = computeEvidenceCoverageScore(input.interpretation ?? input.query, input.selectedMatches);
   const conflictRisk = computeEvidenceConflictRisk(input.selectedMatches);
   const supportConfidence = computeSupportConfidence(input.selectedMatches);
 

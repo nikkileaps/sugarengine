@@ -6,8 +6,6 @@
  * @see ../../docs/api/plugins/sugaragent/17-sugaragent-session-runtime.md
  */
 
-// @ts-nocheck
-
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
@@ -20,6 +18,7 @@ import {
   getModelProfile,
 } from '../runtime/model-profiles';
 import {
+  collectLoreEntityRouteMatches,
   isKnowledgeSeekingQueryType,
   refineRouteWithLoreEntityMentions,
   routeIntentToQueryType,
@@ -41,6 +40,7 @@ import {
 import {
   REPLY_PARTS_JSON_SCHEMA,
   buildReplyPartsPrompt,
+  buildReplyPartsRepairPrompt,
   buildSupportSlotsFromGroundingEvidence,
   filterSupportSlotsForQueryType,
   materializeTurnOutputFromReplyParts,
@@ -64,6 +64,9 @@ import {
 import {
   resolveLanguageAdaptationContext,
 } from './core/language-adaptation';
+import {
+  buildEvidencePreview,
+} from './core/query-interpretation';
 import {
   runGovernedLoreRetrieval,
 } from './core/retrieval-pipeline';
@@ -92,9 +95,60 @@ import {
   isLikelyGreetingOnlyMessage,
   validateTurnQuality,
 } from './core/turn-quality';
+import { detectSocialAcknowledgement } from './core/social-cues';
 import {
   checkSocialResponseForFactualLeakage,
 } from './core/turn-path-routing';
+import type { SugarAgentTurnOutput } from '../contracts/turn';
+import type { QueryType } from './core/routing';
+import type { EvidenceFirstPipelineDiagnostics } from './core/turn-contracts';
+
+type RecordLike = Record<string, any>;
+
+interface SessionRuntime {
+  name: 'mock' | 'llama';
+  health(): Promise<{ ok: boolean; detail?: string }>;
+  loadModel(modelName?: string): Promise<void>;
+  generateJson(request: any): Promise<{ jsonText: string; rawText?: string }>;
+  generateStructured(input: any): Promise<{ jsonText: string; rawText?: string }>;
+}
+
+interface GenerationDiagnostics {
+  draft: {
+    attempted: boolean;
+    success: boolean;
+    failureReason?: string;
+    skippedReason?: string;
+  };
+  replyParts: {
+    attempted: boolean;
+    success: boolean;
+    partCount: number;
+    groundedPartCount: number;
+    failureReason?: string;
+    skippedReason?: string;
+    rawResponsePreview?: string;
+    rawPartsPreview?: Array<Record<string, unknown>>;
+    allowedSupportSlots?: string[];
+  };
+}
+
+interface SessionOptions {
+  npc: string;
+  provider: 'local' | 'echo';
+  runtime: 'llama' | 'mock' | 'auto';
+  session: string | null;
+  loreDir: string;
+  useLore: boolean;
+  missingGameLoreBundle: boolean;
+  llamaBin: string | null;
+  modelPath: string | null;
+  llamaTimeoutMs: number;
+  llamaBinArgs: string[];
+  llamaArgs: string[];
+  turnContext: RecordLike | null;
+  requireLoreScopeForRetrieval: boolean;
+}
 
 const execFileAsync = promisify(execFile);
 const BUNDLE_ROOT = path.resolve('src/plugins/sugaragent/runtime/bundle');
@@ -102,20 +156,20 @@ const BUNDLE_LOCK_PATH = path.join(BUNDLE_ROOT, 'bundle.lock.json');
 const DEFAULT_BUNDLED_LLAMA_BIN = path.resolve('src/plugins/sugaragent/runtime/bundle/bin/llama-completion');
 const LEGACY_BUNDLED_MODEL_PATH = path.join(BUNDLE_ROOT, 'models', 'qwen2.5-0.5b-instruct-q2_k.gguf');
 
-function isRecord(value) {
+function isRecord(value: unknown): value is RecordLike {
   return typeof value === 'object' && value !== null;
 }
 
-function normalizeOptionalString(value) {
+function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeStringArray(value) {
+function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
-  const items = [];
+  const items: string[] = [];
   for (const entry of value) {
     const normalized = normalizeOptionalString(entry);
     if (!normalized || seen.has(normalized)) continue;
@@ -125,11 +179,11 @@ function normalizeStringArray(value) {
   return items;
 }
 
-function dedupeMergeStringArrays(...sources) {
+function dedupeMergeStringArrays(...sources: unknown[]): string[] {
   return normalizeStringArray(sources.flatMap((entry) => (Array.isArray(entry) ? entry : [])));
 }
 
-function sanitizePromptText(text) {
+function sanitizePromptText(text: unknown): string {
   return String(text ?? '').replace(/\s+/g, ' ').trim();
 }
 
@@ -184,7 +238,7 @@ function resolveBundledLlamaBin() {
   return null;
 }
 
-function commandExists(command) {
+function commandExists(command: string | null | undefined): boolean {
   if (!command) return false;
   if (command.includes('/') || command.startsWith('.')) {
     return fs.existsSync(command);
@@ -193,15 +247,15 @@ function commandExists(command) {
   return lookup.status === 0;
 }
 
-function sanitizeRuntimeOutput(text) {
-  const source = text ?? '';
+function sanitizeRuntimeOutput(text: unknown): string {
+  const source = String(text ?? '');
   const withoutAnsi = source
     .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\u001B\][^\u0007]*(\u0007|\u001B\\)/g, '');
   return withoutAnsi.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
-function computeEvidenceBackedRetrievalConfidence(input) {
+function computeEvidenceBackedRetrievalConfidence(input: RecordLike | null | undefined): number {
   const queryType = input?.queryType;
   const routeIntent = input?.routeIntent;
   const retrievalMatches = Array.isArray(input?.retrievalMatches) ? input.retrievalMatches : [];
@@ -217,12 +271,12 @@ function computeEvidenceBackedRetrievalConfidence(input) {
   return 0.1;
 }
 
-function parseReplyPartsTurnFromText(text) {
+function parseReplyPartsTurnFromText(text: unknown) {
   if (typeof text !== 'string' || text.trim().length === 0) return null;
   return parseReplyPartsResponseDetailed(text).turn;
 }
 
-function buildValidatedPlanSupportSlots(input) {
+function buildValidatedPlanSupportSlots(input: RecordLike | null | undefined) {
   const plan = isRecord(input?.plan) ? input.plan : {};
   const claims = Array.isArray(plan.claims) ? plan.claims : [];
   const evidenceIdToItem = input?.evidencePack?.evidenceIdToItem instanceof Map
@@ -252,20 +306,21 @@ function buildValidatedPlanSupportSlots(input) {
   });
 }
 
-function buildPlanBoundReplyPartsPrompt(input) {
+function buildPlanBoundReplyPartsPrompt(input: RecordLike | null | undefined): string {
+  const safeInput = isRecord(input) ? input : {};
   const basePrompt = buildReplyPartsPrompt({
-    npcName: input.npcName,
-    playerMessage: input.playerMessage,
-    queryType: input.queryType,
-    routeIntent: input.routeIntent,
-    supportSlots: input.supportSlots,
+    npcName: safeInput.npcName,
+    playerMessage: safeInput.playerMessage,
+    queryType: safeInput.queryType,
+    routeIntent: safeInput.routeIntent,
+    supportSlots: safeInput.supportSlots,
   });
-  const plan = isRecord(input.plan) ? input.plan : {};
+  const plan = isRecord(safeInput.plan) ? safeInput.plan : {};
   const claims = Array.isArray(plan.claims) ? plan.claims : [];
   const planLines = [
     'Validated plan:',
     `- Speech act: ${sanitizePromptText(plan.speechAct || 'chat')}`,
-    `- Route intent: ${sanitizePromptText(plan.routeIntent || input.routeIntent || 'unknown')}`,
+    `- Route intent: ${sanitizePromptText(plan.routeIntent || safeInput.routeIntent || 'unknown')}`,
   ];
 
   if (claims.length === 0) {
@@ -291,12 +346,13 @@ function buildPlanBoundReplyPartsPrompt(input) {
   return `${basePrompt}\n${planLines.join('\n')}`;
 }
 
-function buildSocialFastReplyPartsPrompt(input) {
-  const npcName = input?.npcName;
-  const playerMessage = input?.playerMessage;
-  const turnContext = isRecord(input?.turnContext)
+function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): string {
+  const safeInput = isRecord(input) ? input : {};
+  const npcName = safeInput.npcName;
+  const playerMessage = safeInput.playerMessage;
+  const turnContext = isRecord(safeInput.turnContext)
     ? {
-      ...input.turnContext,
+      ...safeInput.turnContext,
       queryType: 'conversation',
       routingIntent: 'social_chat',
     }
@@ -318,11 +374,11 @@ function buildSocialFastReplyPartsPrompt(input) {
     'If the player greets you, greet them naturally.',
     'If the player introduces themselves, acknowledge that naturally.',
     'Avoid generic filler like "Tell me more", "What can I help with?", or "Could you clarify?" unless it is truly necessary.',
-    buildGlobalSafetyBlock(input?.globalSafetyBounds),
-    buildNpcProfileBlock(input?.npcProfile),
+    buildGlobalSafetyBlock(safeInput.globalSafetyBounds),
+    buildNpcProfileBlock(safeInput.npcProfile),
     buildTurnContextBlock(turnContext),
-    buildMemoryFactBlock(input?.memoryFacts),
-    buildHistoryBlock(input?.history),
+    buildMemoryFactBlock(safeInput.memoryFacts),
+    buildHistoryBlock(safeInput.history),
     buildReplyPartsPrompt({
       npcName,
       playerMessage,
@@ -344,7 +400,8 @@ function buildSocialFastReplyPartsPrompt(input) {
   return blocks.join('\n');
 }
 
-async function realizeValidatedPlanWithReplyPartsTransport(input) {
+async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | null | undefined) {
+  const safeInput = isRecord(input) ? input : {};
   const {
     runtime,
     ensureModelLoaded,
@@ -358,7 +415,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input) {
     selfEntityId,
     npcId,
     generationDiagnostics,
-  } = input;
+  } = safeInput;
 
   const planClaims = Array.isArray(plan?.claims) ? plan.claims : [];
   const speechAct = normalizeOptionalString(plan?.speechAct) ?? 'chat';
@@ -481,16 +538,23 @@ async function realizeValidatedPlanWithReplyPartsTransport(input) {
   });
 }
 
-function buildMockSocialReplyParts(requestInput) {
+function buildMockSocialReplyParts(requestInput: unknown) {
   const input = isRecord(requestInput) ? requestInput : {};
   const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
   const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
   const declaredName = extractDeclaredIdentityName(playerMessage);
+  const acknowledgement = detectSocialAcknowledgement(playerMessage);
 
   let text = `Hi. I'm ${npcName}.`;
   if (declaredName) {
     const safeName = declaredName.charAt(0).toUpperCase() + declaredName.slice(1);
     text = `Nice to meet you, ${safeName}. I'm ${npcName}.`;
+  } else if (acknowledgement === 'gratitude') {
+    text = 'Any time.';
+  } else if (acknowledgement === 'shared_preference') {
+    text = /\bcheese\b/i.test(playerMessage) ? 'You and me both. Cheese is hard to beat.' : 'You and me both.';
+  } else if (acknowledgement) {
+    text = 'Yeah, I hear you.';
   } else if (!isLikelyGreetingOnlyMessage(playerMessage) && playerMessage) {
     text = 'That makes sense.';
   }
@@ -514,7 +578,8 @@ function buildMockSocialReplyParts(requestInput) {
   };
 }
 
-async function realizeSocialFastWithReplyPartsTransport(input) {
+async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null | undefined) {
+  const safeInput = isRecord(input) ? input : {};
   const {
     runtime,
     ensureModelLoaded,
@@ -527,7 +592,7 @@ async function realizeSocialFastWithReplyPartsTransport(input) {
     turnContext,
     isFirstMeeting,
     generationDiagnostics,
-  } = input;
+  } = safeInput;
 
   await ensureModelLoaded();
   generationDiagnostics.draft.attempted = true;
@@ -663,13 +728,13 @@ async function realizeSocialFastWithReplyPartsTransport(input) {
   return materialized;
 }
 
-function toMode(interactionMode) {
+function toMode(interactionMode: unknown): 'character' | 'narrative' | 'hybrid' {
   if (interactionMode === 'scripted') return 'narrative';
   if (interactionMode === 'hybrid') return 'hybrid';
   return 'character';
 }
 
-function buildHistoryBlock(history) {
+function buildHistoryBlock(history: unknown): string {
   const entries = Array.isArray(history) ? history.slice(-MAX_HISTORY_ENTRIES) : [];
   if (entries.length === 0) {
     return 'Recent conversation:\n- none';
@@ -682,15 +747,15 @@ function buildHistoryBlock(history) {
   return `Recent conversation:\n${lines.join('\n')}`;
 }
 
-function buildMemoryFactBlock(memoryFacts) {
+function buildMemoryFactBlock(memoryFacts: unknown): string {
   const facts = Array.isArray(memoryFacts) ? memoryFacts.slice(-24) : [];
   if (facts.length === 0) return 'Known player facts:\n- none';
   return `Known player facts:\n${facts.map((fact) => `- ${sanitizePromptText(fact).slice(0, 220)}`).join('\n')}`;
 }
 
-function buildNpcProfileBlock(npcProfile) {
+function buildNpcProfileBlock(npcProfile: unknown): string | null {
   if (!isRecord(npcProfile)) return null;
-  const lines = [];
+  const lines: string[] = [];
   const persona = normalizeOptionalString(npcProfile.persona);
   const tone = normalizeOptionalString(npcProfile.tone);
   const constraints = normalizeStringArray(npcProfile.constraints);
@@ -703,7 +768,7 @@ function buildNpcProfileBlock(npcProfile) {
   return ['NPC authored profile:', ...lines].join('\n');
 }
 
-function buildGlobalSafetyBlock(globalSafetyBounds) {
+function buildGlobalSafetyBlock(globalSafetyBounds: unknown): string | null {
   const bounds = normalizeStringArray(globalSafetyBounds);
   if (bounds.length === 0) return null;
   return [
@@ -712,7 +777,7 @@ function buildGlobalSafetyBlock(globalSafetyBounds) {
   ].join('\n');
 }
 
-function tokenizeSnippetText(text) {
+function tokenizeSnippetText(text: unknown): string[] {
   return sanitizePromptText(text)
     .toLowerCase()
     .replace(/[^a-z0-9\u00c0-\u024f\s_-]+/g, ' ')
@@ -721,7 +786,7 @@ function tokenizeSnippetText(text) {
     .filter((token) => token.length >= 3);
 }
 
-function scoreCitationSnippet(queryTokens, snippet) {
+function scoreCitationSnippet(queryTokens: string[], snippet: unknown): number {
   const snippetTokens = tokenizeSnippetText(snippet);
   if (snippetTokens.length === 0) return 0;
   if (queryTokens.length === 0) return 0.1;
@@ -733,20 +798,20 @@ function scoreCitationSnippet(queryTokens, snippet) {
   return overlap / Math.max(1, Math.min(queryTokens.length, 5));
 }
 
-function resolveCitationSnippetForMatch(matchEntry, query, loreArtifacts) {
+function resolveCitationSnippetForMatch(matchEntry: any, query: unknown, loreArtifacts: any): string {
   const chunk = matchEntry?.chunk;
   if (!chunk) return '';
 
   const fallbackSummary = sanitizePromptText(chunk.summary ?? '');
   const queryTokens = tokenizeSnippetText(query);
-  const candidates = [];
+  const candidates: string[] = [];
 
   if (fallbackSummary) {
     candidates.push(fallbackSummary);
   }
 
   const chunkFactIds = Array.isArray(chunk?.metadata?.fact_ids)
-    ? chunk.metadata.fact_ids.filter((entry) => typeof entry === 'string')
+    ? chunk.metadata.fact_ids.filter((entry: unknown): entry is string => typeof entry === 'string')
     : [];
   if (chunkFactIds.length > 0 && isRecord(loreArtifacts?.factById)) {
     for (const factId of chunkFactIds) {
@@ -783,9 +848,9 @@ function resolveCitationSnippetForMatch(matchEntry, query, loreArtifacts) {
   return sanitizePromptText(finalSnippet).slice(0, 360);
 }
 
-function buildLoreCitationDefaults(loreMatches, query, loreArtifacts) {
+function buildLoreCitationDefaults(loreMatches: unknown, query: unknown, loreArtifacts: any) {
   if (!Array.isArray(loreMatches) || loreMatches.length === 0) return [];
-  const defaults = [];
+  const defaults: Array<{ sourceId: string; snippet: string }> = [];
   const seenSourceIds = new Set();
   for (const entry of loreMatches.slice(0, 4)) {
     const sourceId = normalizeOptionalString(entry?.chunk?.chunkId);
@@ -799,10 +864,10 @@ function buildLoreCitationDefaults(loreMatches, query, loreArtifacts) {
   return defaults;
 }
 
-function hydrateModelCitationsWithLore(modelCitations, loreMatches, query, loreArtifacts) {
+function hydrateModelCitationsWithLore(modelCitations: unknown, loreMatches: unknown, query: unknown, loreArtifacts: any) {
   const defaults = buildLoreCitationDefaults(loreMatches, query, loreArtifacts);
   const defaultsBySourceId = new Map(defaults.map((entry) => [entry.sourceId, entry.snippet]));
-  const hydrated = [];
+  const hydrated: Array<{ sourceId: string; snippet?: string }> = [];
   const seenSourceIds = new Set();
   const source = Array.isArray(modelCitations) ? modelCitations : [];
 
@@ -824,7 +889,7 @@ function hydrateModelCitationsWithLore(modelCitations, loreMatches, query, loreA
   return hydrated;
 }
 
-function buildLoreEvidenceBlock(loreMatches, query, loreArtifacts) {
+function buildLoreEvidenceBlock(loreMatches: unknown, query: unknown, loreArtifacts: any): string | null {
   const defaults = buildLoreCitationDefaults(loreMatches, query, loreArtifacts);
   if (defaults.length === 0) return null;
   const lines = defaults.map((entry) => `- ${entry.sourceId}: ${entry.snippet}`);
@@ -835,9 +900,9 @@ function buildLoreEvidenceBlock(loreMatches, query, loreArtifacts) {
   ].join('\n');
 }
 
-function buildTurnContextBlock(turnContext) {
+function buildTurnContextBlock(turnContext: unknown): string | null {
   if (!isRecord(turnContext)) return null;
-  const lines = [];
+  const lines: string[] = [];
   const gameId = normalizeOptionalString(turnContext.gameId);
   const regionPath = normalizeOptionalString(turnContext.regionPath);
   const regionName = normalizeOptionalString(turnContext.regionName);
@@ -890,7 +955,8 @@ function buildTurnContextBlock(turnContext) {
   return ['Turn context:', ...lines].join('\n');
 }
 
-function buildLlamaPrompt(input) {
+function buildLlamaPrompt(input: RecordLike | null | undefined): string {
+  const safeInput = isRecord(input) ? input : {};
   const {
     npcName,
     playerMessage,
@@ -903,7 +969,7 @@ function buildLlamaPrompt(input) {
     attempt,
     repair,
     repairReason,
-  } = input;
+  } = safeInput;
 
   const blocks = [
     `You are ${npcName}, an NPC in a game.`,
@@ -943,7 +1009,7 @@ function buildLlamaPrompt(input) {
   return blocks.join('\n');
 }
 
-function createGenerationDiagnostics() {
+function createGenerationDiagnostics(): GenerationDiagnostics {
   return {
     draft: {
       attempted: false,
@@ -965,7 +1031,7 @@ function createGenerationDiagnostics() {
   };
 }
 
-function resetGenerationDiagnosticsForAttempt(generationDiagnostics) {
+function resetGenerationDiagnosticsForAttempt(generationDiagnostics: GenerationDiagnostics): void {
   generationDiagnostics.draft.attempted = false;
   generationDiagnostics.draft.success = false;
   generationDiagnostics.draft.failureReason = undefined;
@@ -982,12 +1048,12 @@ function resetGenerationDiagnosticsForAttempt(generationDiagnostics) {
   generationDiagnostics.replyParts.allowedSupportSlots = undefined;
 }
 
-function normalizeRuntimeMode(runtime) {
+function normalizeRuntimeMode(runtime: unknown): 'llama' | 'mock' | 'auto' {
   if (runtime === 'llama' || runtime === 'mock') return runtime;
   return 'auto';
 }
 
-function resolveRuntimeMode(args) {
+function resolveRuntimeMode(args: SessionOptions): 'llama' | 'mock' {
   const requested = normalizeRuntimeMode(args.runtime);
   if (requested === 'llama' || requested === 'mock') return requested;
   const modelPath = normalizeOptionalString(args.modelPath) ?? normalizeOptionalString(process.env.SUGARAGENT_MODEL_PATH) ?? resolveBundledModelPath();
@@ -998,7 +1064,7 @@ function resolveRuntimeMode(args) {
   return 'mock';
 }
 
-function resolveConfiguredModelPath(args) {
+function resolveConfiguredModelPath(args: SessionOptions): string | null {
   const explicit = normalizeOptionalString(args.modelPath);
   if (explicit) return explicit;
   const envPath = normalizeOptionalString(process.env.SUGARAGENT_MODEL_PATH);
@@ -1006,7 +1072,7 @@ function resolveConfiguredModelPath(args) {
   return resolveBundledModelPath();
 }
 
-function resolveConfiguredLlamaBin(args) {
+function resolveConfiguredLlamaBin(args: SessionOptions): string | null {
   const explicit = normalizeOptionalString(args.llamaBin);
   if (explicit) return explicit;
   const envPath = normalizeOptionalString(process.env.SUGARAGENT_LLAMA_BIN);
@@ -1014,16 +1080,16 @@ function resolveConfiguredLlamaBin(args) {
   return resolveBundledLlamaBin();
 }
 
-function createMockRuntime() {
+function createMockRuntime(): SessionRuntime {
   let loaded = false;
 
-  function buildMockReplyParts(requestInput) {
+  function buildMockReplyParts(requestInput: unknown) {
     const input = isRecord(requestInput) ? requestInput : {};
     const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
     const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
     const queryType = normalizeOptionalString(input.turnContext?.queryType) ?? 'conversation';
     const supportSlots = Array.isArray(input.supportSlots)
-      ? input.supportSlots.filter((entry) => isRecord(entry) && typeof entry.slotId === 'string' && typeof entry.snippet === 'string')
+      ? input.supportSlots.filter((entry: unknown) => isRecord(entry) && typeof entry.slotId === 'string' && typeof entry.snippet === 'string')
       : [];
 
     if (isKnowledgeSeekingQueryType(queryType)) {
@@ -1089,7 +1155,7 @@ function createMockRuntime() {
     };
   }
 
-  async function generateJson(request) {
+  async function generateJson(request: any) {
     if (!loaded) {
       throw new Error('Model must be loaded before generateStructured');
     }
@@ -1122,7 +1188,7 @@ function createMockRuntime() {
   };
 }
 
-function createLlamaRuntime(args) {
+function createLlamaRuntime(args: SessionOptions): SessionRuntime {
   const commandPath = resolveConfiguredLlamaBin(args);
   const modelPath = resolveConfiguredModelPath(args);
   const timeoutMs = Number.isFinite(args.llamaTimeoutMs) ? Math.max(1, Math.floor(args.llamaTimeoutMs)) : 120000;
@@ -1130,7 +1196,7 @@ function createLlamaRuntime(args) {
   const llamaArgs = Array.isArray(args.llamaArgs) ? args.llamaArgs.map((entry) => String(entry)) : [];
   let loaded = false;
 
-  async function generateJson(request) {
+  async function generateJson(request: any) {
     if (!loaded) {
       throw new Error('Model must be loaded before generateStructured');
     }
@@ -1227,14 +1293,16 @@ function createLlamaRuntime(args) {
   };
 }
 
-function defaultPipelineDiagnostics(input) {
-  const routeIntent = input.routing?.intent ?? 'unclear';
-  const policyPath = input.routing?.policyPath ?? 'safe_chat';
-  const queryType = input.queryType ?? routeIntentToQueryType(routeIntent);
-  const loreMatchCount = Array.isArray(input.loreMatches) ? input.loreMatches.length : 0;
-  const retrieval = isRecord(input.retrieval) ? input.retrieval : {};
-  const missingGameLoreBundle = input.missingGameLoreBundle === true;
-  const retrievalAttempted = input.retrievalAttempted === true
+function defaultPipelineDiagnostics(input: RecordLike | null | undefined): RecordLike {
+  const safeInput = isRecord(input) ? input : {};
+  const routeIntent = safeInput.routing?.intent ?? 'unclear';
+  const policyPath = safeInput.routing?.policyPath ?? 'safe_chat';
+  const queryType = safeInput.queryType ?? routeIntentToQueryType(routeIntent);
+  const interpretation = isRecord(safeInput.routing?.interpretation) ? safeInput.routing.interpretation : null;
+  const loreMatchCount = Array.isArray(safeInput.loreMatches) ? safeInput.loreMatches.length : 0;
+  const retrieval = isRecord(safeInput.retrieval) ? safeInput.retrieval : {};
+  const missingGameLoreBundle = safeInput.missingGameLoreBundle === true;
+  const retrievalAttempted = safeInput.retrievalAttempted === true
     || (missingGameLoreBundle && isKnowledgeSeekingQueryType(queryType));
   const retrievalCandidateCount = Number.isFinite(retrieval.candidateCount)
     ? Math.max(0, Math.floor(Number(retrieval.candidateCount)))
@@ -1242,23 +1310,40 @@ function defaultPipelineDiagnostics(input) {
   const retrievalSelectedCount = Number.isFinite(retrieval.selectedCount)
     ? Math.max(0, Math.floor(Number(retrieval.selectedCount)))
     : loreMatchCount;
-  const validationErrors = Array.isArray(input.validationErrors) ? input.validationErrors : [];
-  const validationDecision = normalizeOptionalString(input.validationDecision)
-    ?? (input.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'));
-  const unsupportedClaims = Number.isFinite(input.unsupportedClaims)
-    ? Math.max(0, Math.floor(input.unsupportedClaims))
+  const validationErrors = Array.isArray(safeInput.validationErrors) ? safeInput.validationErrors : [];
+  const validationDecision = normalizeOptionalString(safeInput.validationDecision)
+    ?? (safeInput.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'));
+  const unsupportedClaims = Number.isFinite(safeInput.unsupportedClaims)
+    ? Math.max(0, Math.floor(safeInput.unsupportedClaims))
     : 0;
-  const requiresRepair = input.requiresRepair === true
+  const requiresRepair = safeInput.requiresRepair === true
     || validationDecision === 'repair'
     || validationDecision === 'fallback';
 
   return {
     version: 'v2',
     enabled: true,
-    mode: toMode(input.turnContext?.interactionMode),
+    mode: toMode(safeInput.turnContext?.interactionMode),
     routeIntent,
     policyPath,
     queryType,
+    routing: {
+      routeIntent,
+      queryType,
+      policyPath,
+      interpretation: interpretation
+        ? {
+            lane: normalizeOptionalString(interpretation.lane),
+            target: normalizeOptionalString(interpretation.target),
+            facet: normalizeOptionalString(interpretation.facet),
+            timeframe: normalizeOptionalString(interpretation.timeframe),
+            focusText: normalizeOptionalString(interpretation.focusText),
+            confidence: Number.isFinite(interpretation.confidence) ? Number(interpretation.confidence) : undefined,
+            margin: Number.isFinite(interpretation.margin) ? Number(interpretation.margin) : undefined,
+            ambiguous: interpretation.ambiguous === true,
+          }
+        : undefined,
+    },
     retrieval: {
       attempted: retrievalAttempted,
       candidateCount: retrievalCandidateCount,
@@ -1285,13 +1370,13 @@ function defaultPipelineDiagnostics(input) {
         policyBounded: true,
       },
       inputs: {
-        topicCoverage: isRecord(input.turnContext?.topicCoverage) ? input.turnContext.topicCoverage : undefined,
+        topicCoverage: isRecord(safeInput.turnContext?.topicCoverage) ? safeInput.turnContext.topicCoverage : undefined,
       },
       bounds: {},
       goalStack: [],
     },
     groundingDecision: validationDecision,
-    fallbackReason: input.usedFallback ? 'generation-fallback' : undefined,
+    fallbackReason: safeInput.usedFallback ? 'generation-fallback' : undefined,
     validation: {
       decision: validationDecision,
       errors: validationErrors,
@@ -1301,11 +1386,11 @@ function defaultPipelineDiagnostics(input) {
       npcOutputValidated: true,
       progressionGateEvaluated: false,
     },
-    generation: isRecord(input.generation) ? input.generation : createGenerationDiagnostics(),
+    generation: isRecord(safeInput.generation) ? safeInput.generation : createGenerationDiagnostics(),
   };
 }
 
-function mergeTurnContext(base, override) {
+function mergeTurnContext(base: unknown, override: unknown): RecordLike {
   const left = isRecord(base) ? base : {};
   const right = isRecord(override) ? override : {};
   const merged = {
@@ -1321,7 +1406,7 @@ function mergeTurnContext(base, override) {
   return merged;
 }
 
-const DEFAULT_SESSION_OPTIONS = {
+const DEFAULT_SESSION_OPTIONS: SessionOptions = {
   npc: 'baker',
   provider: 'local',
   runtime: 'llama',
@@ -1338,11 +1423,11 @@ const DEFAULT_SESSION_OPTIONS = {
   requireLoreScopeForRetrieval: false,
 };
 
-function normalizeSessionOptions(options = {}) {
+function normalizeSessionOptions(options: RecordLike = {}): SessionOptions {
   const normalized = {
     ...DEFAULT_SESSION_OPTIONS,
     ...options,
-  };
+  } as SessionOptions;
   // The session runtime does not currently load packed SugarAgent authoring artifacts.
   // Preview callers must pass resolved npcProfile/globalSafetyBounds from the host/plugin layer.
   if (typeof normalized.npc !== 'string' || normalized.npc.trim().length === 0) {
@@ -1361,7 +1446,7 @@ function normalizeSessionOptions(options = {}) {
   return normalized;
 }
 
-function createEchoReply(message) {
+function createEchoReply(message: string): SugarAgentTurnOutput {
   return {
     utterance: `Echo: ${message}`,
     emotion: 'neutral',
@@ -1377,7 +1462,7 @@ function createEchoReply(message) {
   };
 }
 
-export async function createSugarAgentSession(options = {}) {
+export async function createSugarAgentSession(options: RecordLike = {}) {
   const args = normalizeSessionOptions(options);
   const runtimeMode = resolveRuntimeMode(args);
   const sessionId = normalizeOptionalString(args.session) ?? `preview-default-${args.npc}`;
@@ -1418,13 +1503,13 @@ export async function createSugarAgentSession(options = {}) {
         dir: path.resolve(args.loreDir),
       },
     },
-    async runTurn(playerMessage, turnOptions = {}) {
+    async runTurn(playerMessage: unknown, turnOptions: RecordLike = {}) {
       const message = normalizeOptionalString(playerMessage);
       if (!message) {
         throw new Error('playerMessage must be a non-empty string');
       }
 
-      const turnOptionsRecord = isRecord(turnOptions) ? turnOptions : {};
+      const turnOptionsRecord: RecordLike = isRecord(turnOptions) ? turnOptions : {};
       const npcName = normalizeOptionalString(turnOptionsRecord.npcName) ?? args.npc;
       const npcProfile = isRecord(turnOptionsRecord.npcProfileOverride ?? turnOptionsRecord.npcProfile)
         ? (turnOptionsRecord.npcProfileOverride ?? turnOptionsRecord.npcProfile)
@@ -1452,14 +1537,57 @@ export async function createSugarAgentSession(options = {}) {
         derivedContext,
       );
 
-      const routing = routeTurnIntent(message, npcName);
+      const loreEntityHints = collectLoreEntityRouteMatches(message, loreArtifacts);
+      const interpretationPreview = buildEvidencePreview({
+        selfEntityId: npcProfile?.selfEntityId,
+        regionName: normalizeOptionalString(turnContext?.regionName),
+        regionPath: normalizeOptionalString(turnContext?.regionPath),
+        currentActivity: normalizeOptionalString(turnContext?.currentActivity),
+        currentGoal: normalizeOptionalString(turnContext?.currentGoal),
+        activeTopic: topicCoverageContext?.activeTopic ?? undefined,
+        recentReferents: loreEntityHints.slice(0, 2).map((entry) => ({
+          kind: entry.entityType === 'world' ? 'location' : entry.entityType === 'character' ? 'topic' : 'topic',
+          text: entry.matchedText,
+          id: entry.entityId,
+        })),
+        loreScopes: normalizeStringArray(npcProfile?.loreScopes),
+        selfLoreScopes: normalizeStringArray(npcProfile?.selfLoreScopes),
+        relatedLoreScopes: normalizeStringArray(npcProfile?.relatedLoreScopes),
+        entityIds: loreEntityHints
+          .filter((entry) => entry.filterKind === 'entityIds')
+          .map((entry) => entry.entityId),
+        locationIds: loreEntityHints
+          .filter((entry) => entry.filterKind === 'locationIds')
+          .map((entry) => entry.entityId),
+        tagHints: loreEntityHints.map((entry) => entry.matchedText),
+      });
+      const routing = routeTurnIntent(message, npcName, {
+        history,
+        scene: {
+          regionName: normalizeOptionalString(turnContext?.regionName),
+          regionPath: normalizeOptionalString(turnContext?.regionPath),
+          currentActivity: normalizeOptionalString(turnContext?.currentActivity),
+          currentGoal: normalizeOptionalString(turnContext?.currentGoal),
+        },
+        loreEntityHints,
+        evidencePreview: interpretationPreview,
+      });
       const routingRefinement = refineRouteWithLoreEntityMentions({
         route: routing,
         playerMessage: message,
         loreArtifacts,
       });
       const resolvedRouting = routingRefinement.route;
-      const queryType = normalizeOptionalString(turnContext.queryType) ?? routeIntentToQueryType(resolvedRouting.intent);
+      const queryType: QueryType = (() => {
+        const explicit = normalizeOptionalString(turnContext.queryType);
+        return explicit === 'conversation'
+          || explicit === 'self_query'
+          || explicit === 'other_query'
+          || explicit === 'world_query'
+          || explicit === 'mixed_query'
+          ? explicit
+          : routeIntentToQueryType(resolvedRouting.intent);
+      })();
       turnContext.queryType = queryType;
       turnContext.routingIntent = resolvedRouting.intent;
       turnContext.routingPolicyPath = resolvedRouting.policyPath;
@@ -1512,6 +1640,7 @@ export async function createSugarAgentSession(options = {}) {
         canRetrieveLore,
         shouldAttemptLoreRetrieval,
         playerMessage: message,
+        interpretation: resolvedRouting.interpretation,
         mode: toMode(turnContext?.interactionMode),
         routingIntent: resolvedRouting.intent,
         queryType,
@@ -1545,6 +1674,8 @@ export async function createSugarAgentSession(options = {}) {
         history,
         regionPath: turnContext?.regionPath,
         regionName: turnContext?.regionName,
+        currentActivity: turnContext?.currentActivity,
+        currentGoal: turnContext?.currentGoal,
       });
       // ---------------------------------------------------------------
       // Evidence-first pipeline (ADR-SA-025)
@@ -1576,6 +1707,8 @@ export async function createSugarAgentSession(options = {}) {
         mode: resolvedMode,
         locationId: normalizeOptionalString(turnContext?.regionName)
           ?? normalizeOptionalString(turnContext?.regionPath),
+        currentActivity: normalizeOptionalString(turnContext?.currentActivity),
+        currentGoal: normalizeOptionalString(turnContext?.currentGoal),
         activeBeatId: normalizeOptionalString(turnOptionsRecord.beatContract?.beatId),
       });
 
@@ -1588,21 +1721,25 @@ export async function createSugarAgentSession(options = {}) {
         routingIntent: resolvedRouting.intent,
         topicCoverage: topicCoverageContext,
         playerMessage: message,
-        normalizeForEchoCheck: (text) => sanitizePromptText(text).toLowerCase(),
+        normalizeForEchoCheck: (text: string) => sanitizePromptText(text).toLowerCase(),
         maxNovelty: 0.34,
       });
-      const relevantEvidenceItems = evidencePackForPipeline.items.filter((item) => isEvidenceItemRelevantForTurn(item, {
+      const relevantEvidenceItems = enrichedEvidencePack.items.filter((item) => isEvidenceItemRelevantForTurn(item, {
         queryType,
         routeIntent: resolvedRouting.intent,
         selfEntityId: npcProfile.selfEntityId,
         npcId: args.npc,
       }));
-      const hasDirectAnswerEvidence = hasDirectAnswerableStateEvidence(relevantEvidenceItems, message);
+      const hasDirectAnswerEvidence = hasDirectAnswerableStateEvidence(
+        relevantEvidenceItems,
+        resolvedRouting.interpretation ?? message,
+      );
 
       const initiativePolicy = resolveInitiativePolicy({
         mode: resolvedMode,
         routingIntent: resolvedRouting.intent,
         queryType,
+        interpretation: resolvedRouting.interpretation,
         playerMessage: message,
         playerHasQuestion,
         turnIndexWithNpc,

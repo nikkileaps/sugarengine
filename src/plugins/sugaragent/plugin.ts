@@ -288,6 +288,72 @@ function emitFallbackLog(input: {
   console.warn(`[sugaragent][fallback][${input.kind}] ${summary}`, payload);
 }
 
+function formatGroundingSummary(input: {
+  npcId: string;
+  stage: string;
+  routeIntent?: string;
+  queryType?: string;
+  interpretation?: {
+    lane?: string;
+    target?: string;
+    facet?: string;
+    timeframe?: string;
+    confidence?: number;
+    ambiguous?: boolean;
+  } | null;
+  validationDecision?: string;
+  retrievalCandidateCount?: number;
+  retrievalSelectedCount?: number;
+  retrievalQualityReason?: string;
+  planSpeechAct?: string;
+  planClaimCount?: number;
+  providerUsedFallback?: boolean;
+  pluginAppliedFallback?: boolean;
+  selfEntityId?: string;
+  loreScopeCount?: number;
+  selfLoreScopeCount?: number;
+  relatedLoreScopeCount?: number;
+}): string {
+  const interpretation = input.interpretation ?? {};
+  const interpretationSummary = interpretation.lane
+    ? `${interpretation.lane}/${interpretation.target ?? 'unknown'}/${interpretation.facet ?? 'unknown'}/${interpretation.timeframe ?? 'unknown'}`
+    : 'none';
+  const confidence = typeof interpretation.confidence === 'number'
+    ? interpretation.confidence.toFixed(2)
+    : 'na';
+  return [
+    `npc=${input.npcId}`,
+    `stage=${input.stage}`,
+    `route=${input.routeIntent ?? 'unknown'}`,
+    `qt=${input.queryType ?? 'conversation'}`,
+    `interp=${interpretationSummary}`,
+    `conf=${confidence}`,
+    `ambiguous=${interpretation.ambiguous === true ? 'yes' : 'no'}`,
+    `profileSelf=${input.selfEntityId ?? 'none'}`,
+    `scopes=${input.loreScopeCount ?? 0}/${input.selfLoreScopeCount ?? 0}/${input.relatedLoreScopeCount ?? 0}`,
+    `retrieval=${input.retrievalCandidateCount ?? 0}/${input.retrievalSelectedCount ?? 0}`,
+    `retrievalReason=${input.retrievalQualityReason ?? 'unknown'}`,
+    `plan=${input.planSpeechAct ?? 'unknown'}:${input.planClaimCount ?? 0}`,
+    `validation=${input.validationDecision ?? 'unknown'}`,
+    `providerFallback=${input.providerUsedFallback === true ? 'yes' : 'no'}`,
+    `pluginFallback=${input.pluginAppliedFallback === true ? 'yes' : 'no'}`,
+  ].join(' ');
+}
+
+function shouldWarnOnMissingSelfKnowledgeProfile(input: {
+  routeIntent?: string;
+  queryType?: string;
+  selfEntityId?: string;
+  selfLoreScopeCount?: number;
+  loreScopeCount?: number;
+}): boolean {
+  const isSelfKnowledge = input.routeIntent === 'identity_self' || input.queryType === 'self_query';
+  if (!isSelfKnowledge) return false;
+  const hasSelfEntityId = typeof input.selfEntityId === 'string' && input.selfEntityId.trim().length > 0;
+  const hasRetrievalScope = (input.selfLoreScopeCount ?? 0) > 0 || (input.loreScopeCount ?? 0) > 0;
+  return !hasSelfEntityId && !hasRetrievalScope;
+}
+
 function toSafeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return value;
@@ -1527,7 +1593,49 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           timestamp: now,
         });
         notifyMissingGameLoreBundle(diagnostics, request);
-        console.debug('[sugaragent][grounding]', {
+        const diagnosticsRecord = diagnostics as Record<string, unknown>;
+        const evidenceFirstDiagnostics = isRecord(diagnosticsRecord.evidenceFirst)
+          ? diagnosticsRecord.evidenceFirst as Record<string, unknown>
+          : undefined;
+        const planOutcome = isRecord(evidenceFirstDiagnostics?.planOutcome)
+          ? evidenceFirstDiagnostics.planOutcome as Record<string, unknown>
+          : undefined;
+        const interpretation = isRecord(diagnostics.routing?.interpretation)
+          ? diagnostics.routing?.interpretation
+          : null;
+        const loreScopeCount = Array.isArray(npcProfile?.loreScopes) ? npcProfile.loreScopes.length : 0;
+        const selfLoreScopeCount = Array.isArray(npcProfile?.selfLoreScopes) ? npcProfile.selfLoreScopes.length : 0;
+        const relatedLoreScopeCount = Array.isArray(npcProfile?.relatedLoreScopes) ? npcProfile.relatedLoreScopes.length : 0;
+        const planSpeechAct = toSafeString(planOutcome?.speechAct);
+        const planClaimCount = toSafeNumber(planOutcome?.claimCount, 0);
+        console.debug(`[sugaragent][grounding] ${formatGroundingSummary({
+          npcId: request.npcId,
+          stage: groundingDebug.stage,
+          routeIntent: groundingDebug.routeIntent,
+          queryType: groundingDebug.queryType,
+          interpretation: interpretation
+            ? {
+                lane: toSafeString(interpretation.lane),
+                target: toSafeString(interpretation.target),
+                facet: toSafeString(interpretation.facet),
+                timeframe: toSafeString(interpretation.timeframe),
+                confidence: toSafeNumber(interpretation.confidence, NaN),
+                ambiguous: interpretation.ambiguous === true,
+              }
+            : null,
+          validationDecision: diagnostics.validation?.decision,
+          retrievalCandidateCount: diagnostics.retrieval?.candidateCount ?? 0,
+          retrievalSelectedCount: diagnostics.retrieval?.selectedCount ?? 0,
+          retrievalQualityReason: diagnostics.retrieval?.qualityReason ?? 'unknown',
+          planSpeechAct,
+          planClaimCount,
+          providerUsedFallback: usedProviderFallback,
+          pluginAppliedFallback: usedGroundingFallback,
+          selfEntityId: npcProfile?.selfEntityId,
+          loreScopeCount,
+          selfLoreScopeCount,
+          relatedLoreScopeCount,
+        })}`, {
           npcId: request.npcId,
           stage: groundingDebug.stage,
           routeIntent: groundingDebug.routeIntent,
@@ -1537,7 +1645,36 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           unsupportedClaims: groundingDebug.unsupportedClaims,
           requiresRepair: groundingDebug.requiresRepair,
           fallbackApplied: usedGroundingFallback,
+          interpretation,
+          profile: {
+            resolved: Boolean(npcProfile),
+            selfEntityId: npcProfile?.selfEntityId,
+            loreScopeCount,
+            selfLoreScopeCount,
+            relatedLoreScopeCount,
+          },
+          retrieval: diagnostics.retrieval,
+          planOutcome,
         });
+        if (shouldWarnOnMissingSelfKnowledgeProfile({
+          routeIntent: groundingDebug.routeIntent,
+          queryType: groundingDebug.queryType,
+          selfEntityId: npcProfile?.selfEntityId,
+          selfLoreScopeCount,
+          loreScopeCount,
+        })) {
+          console.warn(
+            `[sugaragent][authoring][warn] npc=${request.npcId} self-knowledge turn without selfEntityId or self/world lore scopes; self questions may abstain.`,
+            {
+              npcId: request.npcId,
+              routeIntent: groundingDebug.routeIntent,
+              queryType: groundingDebug.queryType,
+              selfEntityId: npcProfile?.selfEntityId,
+              loreScopes: npcProfile?.loreScopes ?? [],
+              selfLoreScopes: npcProfile?.selfLoreScopes ?? [],
+            },
+          );
+        }
         if (
           diagnostics.validation?.decision === 'fallback'
           || diagnostics.validation?.decision === 'repair'

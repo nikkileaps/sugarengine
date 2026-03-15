@@ -115,6 +115,8 @@ interface BuildGroundingEvidenceInput {
   history?: unknown;
   regionPath?: unknown;
   regionName?: unknown;
+  currentActivity?: unknown;
+  currentGoal?: unknown;
 }
 
 function isRecord(value: unknown): value is RecordLike {
@@ -222,6 +224,8 @@ export function buildGroundingEvidenceEntries({
   history,
   regionPath,
   regionName,
+  currentActivity,
+  currentGoal,
 }: BuildGroundingEvidenceInput): GroundingEvidenceEntry[] {
   const entries: GroundingEvidenceEntry[] = [];
   const seen = new Set<string>();
@@ -254,6 +258,7 @@ export function buildGroundingEvidenceEntries({
 
   const regionLabel = formatRegionLabel(regionName, regionPath);
   const normalizedRegionPath = normalizeOptionalString(regionPath);
+  const normalizedSelfEntityId = normalizeOptionalString(selfEntityId);
   if (regionLabel || normalizedRegionPath) {
     pushEntry({
       sourceId: normalizedRegionPath ? `runtime:current_location:${normalizedRegionPath}` : 'runtime:current_location',
@@ -286,7 +291,51 @@ export function buildGroundingEvidenceEntries({
     });
   }
 
-  const normalizedSelfEntityId = normalizeOptionalString(selfEntityId);
+  const normalizedCurrentActivity = normalizeOptionalString(currentActivity);
+  if (normalizedCurrentActivity) {
+    pushEntry({
+      sourceId: 'runtime:current_activity',
+      sourceType: 'routine_state',
+      text: `Right now I am ${normalizedCurrentActivity}.`,
+      provenance: {
+        kind: 'current_activity',
+        activity: normalizedCurrentActivity,
+      },
+      entityIds: normalizedSelfEntityId ? [normalizedSelfEntityId] : [],
+      anchorTerms: [
+        normalizedCurrentActivity,
+        'current activity',
+        'what are you doing',
+        'what are you up to',
+        'doing right now',
+        'up to right now',
+        'right now',
+      ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0),
+      selfAttributed: Boolean(normalizedSelfEntityId),
+    });
+  }
+
+  const normalizedCurrentGoal = normalizeOptionalString(currentGoal);
+  if (normalizedCurrentGoal) {
+    pushEntry({
+      sourceId: 'runtime:current_goal',
+      sourceType: 'routine_state',
+      text: `My current goal is ${normalizedCurrentGoal}.`,
+      provenance: {
+        kind: 'current_goal',
+        goal: normalizedCurrentGoal,
+      },
+      entityIds: normalizedSelfEntityId ? [normalizedSelfEntityId] : [],
+      anchorTerms: [
+        normalizedCurrentGoal,
+        'current goal',
+        'what are you trying to do',
+        'what is your goal',
+        'what are you aiming for',
+      ].filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0),
+      selfAttributed: Boolean(normalizedSelfEntityId),
+    });
+  }
   const factById = isRecord(loreArtifacts?.factById)
     ? loreArtifacts.factById
     : {};

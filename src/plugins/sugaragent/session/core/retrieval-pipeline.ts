@@ -1,6 +1,13 @@
-// @ts-nocheck
 import { retrieveLoreChunks } from '../../lore/lore-lib';
-import { isKnowledgeSeekingQueryType } from './routing';
+import {
+  expandFacetQueryTokenVariants,
+  extractFacetQueryTokens,
+} from './knowledge-query';
+import {
+  isKnowledgeSeekingQueryType,
+  type QueryType,
+  type RoutingIntent,
+} from './routing';
 import {
   buildCorrectiveLoreQuery,
   buildRerankCacheKey,
@@ -10,8 +17,67 @@ import {
   resolveRerankBudgetTier,
   resolveRerankCandidateCap,
 } from './retrieval-governance';
+import type { QueryInterpretation } from './turn-contracts';
 
-function isRecord(value) {
+interface RecordLike {
+  [key: string]: unknown;
+}
+
+interface ScopedRetrievalPoolsInput {
+  queryType: QueryType;
+  routingIntent: RoutingIntent | 'unclear';
+  loreScopes?: unknown;
+  selfLoreScopes?: unknown;
+  relatedLoreScopes?: unknown;
+}
+
+interface ScopedRetrievalPools {
+  loreScopes: string[];
+  selfLoreScopes: string[];
+  relatedLoreScopes: string[];
+}
+
+interface CorrectiveRetrievalInput {
+  qualityReason?: string;
+  queryType: QueryType;
+  routingIntent: RoutingIntent | 'unclear';
+  loreScopes?: unknown;
+  selfLoreScopes?: unknown;
+  relatedLoreScopes?: unknown;
+  selfEntityId?: unknown;
+}
+
+interface RetrievalFilters {
+  entityIds?: string[];
+  locationIds?: string[];
+  factionIds?: string[];
+}
+
+type RerankCache = Map<string, { ranked: Array<Record<string, unknown>> }>;
+
+interface GovernedLoreRetrievalInput {
+  loreArtifacts: unknown;
+  canRetrieveLore: boolean;
+  shouldAttemptLoreRetrieval: boolean;
+  playerMessage: string;
+  interpretation?: QueryInterpretation | null;
+  mode: unknown;
+  routingIntent: RoutingIntent | 'unclear';
+  queryType: QueryType;
+  activeBeatId?: string;
+  loreScopes?: unknown;
+  selfLoreScopes?: unknown;
+  relatedLoreScopes?: unknown;
+  selfEntityId?: unknown;
+  hasBeatContract: boolean;
+  rerankCache?: RerankCache;
+  artifactVersion?: unknown;
+  modelVersion?: unknown;
+  rerankerClass?: string;
+  retrievalFilters?: RetrievalFilters;
+}
+
+function isRecord(value: unknown): value is RecordLike {
   return typeof value === 'object' && value !== null;
 }
 
@@ -19,18 +85,44 @@ function hasRetrievalScopes({
   loreScopes,
   selfLoreScopes,
   relatedLoreScopes,
-}) {
+}: {
+  loreScopes?: unknown;
+  selfLoreScopes?: unknown;
+  relatedLoreScopes?: unknown;
+}): boolean {
   return (Array.isArray(loreScopes) && loreScopes.length > 0)
     || (Array.isArray(selfLoreScopes) && selfLoreScopes.length > 0)
     || (Array.isArray(relatedLoreScopes) && relatedLoreScopes.length > 0);
 }
 
-function normalizeStringArray(value) {
+function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((entry) => typeof entry === 'string')
+    .filter((entry): entry is string => typeof entry === 'string')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function buildInterpretationRetrievalQuery(
+  playerMessage: unknown,
+  interpretation?: QueryInterpretation | null,
+): string {
+  if (!interpretation || typeof interpretation !== 'object') return String(playerMessage ?? '');
+  const focusText = typeof interpretation.focusText === 'string' && interpretation.focusText.trim().length > 0
+    ? interpretation.focusText.trim()
+    : String(playerMessage ?? '').trim();
+  const expandedTokens: string[] = [];
+  const seen = new Set<string>();
+  for (const token of extractFacetQueryTokens(interpretation)) {
+    for (const variant of expandFacetQueryTokenVariants(token)) {
+      if (!variant || seen.has(variant)) continue;
+      seen.add(variant);
+      expandedTokens.push(variant);
+    }
+  }
+  return expandedTokens.length > 0
+    ? `${focusText} ${expandedTokens.join(' ')}`
+    : focusText || String(playerMessage ?? '');
 }
 
 function deriveScopedRetrievalPools({
@@ -39,7 +131,7 @@ function deriveScopedRetrievalPools({
   loreScopes,
   selfLoreScopes,
   relatedLoreScopes,
-}) {
+}: ScopedRetrievalPoolsInput): ScopedRetrievalPools {
   const normalizedLoreScopes = normalizeStringArray(loreScopes);
   const normalizedSelfLoreScopes = normalizeStringArray(selfLoreScopes);
   const normalizedRelatedLoreScopes = normalizeStringArray(relatedLoreScopes);
@@ -82,7 +174,7 @@ function deriveScopedRetrievalPools({
   };
 }
 
-function shouldAttemptCorrectiveRetrieval(input) {
+function shouldAttemptCorrectiveRetrieval(input: CorrectiveRetrievalInput): boolean {
   const reason = typeof input?.qualityReason === 'string' ? input.qualityReason : 'unknown';
   if (reason !== 'coverage_low' && reason !== 'support_low' && reason !== 'no_candidates') {
     return false;
@@ -110,7 +202,7 @@ function shouldAttemptCorrectiveRetrieval(input) {
   return true;
 }
 
-export function computeRetrievalQualityScore(quality) {
+export function computeRetrievalQualityScore(quality: unknown): number {
   if (!isRecord(quality)) return 0;
   const coverage = typeof quality.coverage === 'number' ? quality.coverage : 0;
   const support = typeof quality.supportConfidence === 'number' ? quality.supportConfidence : 0;
@@ -124,6 +216,7 @@ export function runGovernedLoreRetrieval({
   canRetrieveLore,
   shouldAttemptLoreRetrieval,
   playerMessage,
+  interpretation,
   mode,
   routingIntent,
   queryType,
@@ -138,7 +231,7 @@ export function runGovernedLoreRetrieval({
   modelVersion,
   rerankerClass,
   retrievalFilters,
-}) {
+}: GovernedLoreRetrievalInput) {
   const normalizedMode = normalizeConversationModeForPolicy(mode);
   const budgetTier = resolveRerankBudgetTier({
     mode: normalizedMode,
@@ -211,12 +304,13 @@ export function runGovernedLoreRetrieval({
   }
 
   const retrieveMaxResults = Math.max(candidateCap * 2, candidateCap);
-  const initialCandidates = retrieveLoreChunks(loreArtifacts, playerMessage, {
+  const retrievalQuery = buildInterpretationRetrievalQuery(playerMessage, interpretation);
+  const initialCandidates = retrieveLoreChunks(loreArtifacts, retrievalQuery, {
     ...scopeOptions,
     maxResults: retrieveMaxResults,
   });
   const initialCacheKey = buildRerankCacheKey({
-    query: playerMessage,
+    query: retrievalQuery,
     queryType,
     routingIntent,
     mode: normalizedMode,
@@ -231,7 +325,7 @@ export function runGovernedLoreRetrieval({
   });
   const initialRerank = rerankLoreMatches({
     candidates: initialCandidates,
-    query: playerMessage,
+    query: retrievalQuery,
     queryType,
     mode: normalizedMode,
     budgetTier,
@@ -241,6 +335,7 @@ export function runGovernedLoreRetrieval({
   const initialSelected = initialRerank.ranked.slice(0, Math.min(3, candidateCap));
   const initialQuality = evaluateRetrievalQuality({
     query: playerMessage,
+    interpretation,
     mode: normalizedMode,
     queryType,
     routeIntent: routingIntent,
@@ -264,7 +359,7 @@ export function runGovernedLoreRetrieval({
   const attemptLogs = [
     {
       attempt: 'initial',
-      query: playerMessage,
+      query: retrievalQuery,
       candidateCount: initialCandidates.length,
       selectedCount: initialSelected.length,
       quality: {
@@ -292,10 +387,10 @@ export function runGovernedLoreRetrieval({
     selfEntityId,
   })) {
     correctiveAttempted = true;
-    const correctiveQuery = buildCorrectiveLoreQuery(playerMessage, queryType, routingIntent);
-    let correctiveLoreScopes = [...loreScopes];
-    let correctiveSelfLoreScopes = [...selfLoreScopes];
-    let correctiveRelatedLoreScopes = [...relatedLoreScopes];
+    const correctiveQuery = buildCorrectiveLoreQuery(retrievalQuery, queryType, routingIntent);
+    let correctiveLoreScopes = normalizeStringArray(loreScopes);
+    let correctiveSelfLoreScopes = normalizeStringArray(selfLoreScopes);
+    let correctiveRelatedLoreScopes = normalizeStringArray(relatedLoreScopes);
 
     if (queryType === 'self_query' || routingIntent === 'identity_self') {
       if (correctiveSelfLoreScopes.length > 0) {
@@ -345,6 +440,7 @@ export function runGovernedLoreRetrieval({
     const correctiveSelected = correctiveRerank.ranked.slice(0, Math.min(3, candidateCap));
     const correctiveQuality = evaluateRetrievalQuality({
       query: playerMessage,
+      interpretation,
       mode: normalizedMode,
       queryType,
       routeIntent: routingIntent,

@@ -471,6 +471,9 @@ export default defineConfig({
               routeIntent: routeIntent ?? undefined,
               queryType: queryType ?? undefined,
               policyPath: policyPath ?? undefined,
+              interpretation: (typeof pipeline.routing === 'object' && pipeline.routing !== null && typeof (pipeline.routing as Record<string, unknown>).interpretation === 'object' && (pipeline.routing as Record<string, unknown>).interpretation !== null)
+                ? (pipeline.routing as Record<string, unknown>).interpretation as Record<string, unknown>
+                : undefined,
             },
             mode,
             modeReason,

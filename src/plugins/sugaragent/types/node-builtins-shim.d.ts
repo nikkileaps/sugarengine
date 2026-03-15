@@ -44,3 +44,7 @@ declare module 'node:os' {
   const os: any;
   export default os;
 }
+
+declare const process: {
+  env: Record<string, string | undefined>;
+};

@@ -1,3 +1,6 @@
+import { interpretQuery } from './query-interpretation';
+import type { EvidencePreview, QueryInterpretation } from './turn-contracts';
+
 export type QueryType = 'conversation' | 'self_query' | 'other_query' | 'world_query' | 'mixed_query';
 export type RoutingIntent = 'social_chat' | 'session_recall' | 'identity_self' | 'lore_world' | 'lore_other' | 'mixed_knowledge' | 'unclear';
 export type RoutingPolicyPath = 'chat' | 'memory_first' | 'self_knowledge' | 'lore_knowledge' | 'safe_chat';
@@ -8,6 +11,7 @@ export interface RoutingResult {
   margin: number;
   candidateScores: Array<{ intent: string; score: number }>;
   policyPath: RoutingPolicyPath;
+  interpretation?: QueryInterpretation;
 }
 
 export interface LoreEntityRouteMatch {
@@ -199,6 +203,28 @@ function buildRefinedRoutingResult(
     margin: Number(Math.max(route.margin, 0.22).toFixed(4)),
     candidateScores,
     policyPath: routeIntentToPolicyPath(intent),
+    interpretation: route.interpretation
+      ? {
+          ...route.interpretation,
+          lane: intent === 'social_chat'
+            ? 'social'
+            : intent === 'session_recall'
+              ? 'memory'
+              : 'knowledge',
+          target: intent === 'identity_self'
+            ? 'self'
+            : intent === 'lore_world'
+              ? 'world'
+              : intent === 'lore_other'
+                ? 'other'
+                : intent === 'mixed_knowledge'
+                  ? 'mixed'
+                  : 'unknown',
+          confidence: Number(overrideScore.toFixed(4)),
+          margin: Number(Math.max(route.margin, 0.22).toFixed(4)),
+          ambiguous: false,
+        }
+      : undefined,
   };
 }
 
@@ -292,8 +318,71 @@ export function routeIntentToPolicyPath(intent: string): RoutingPolicyPath {
   return 'safe_chat';
 }
 
-export function routeTurnIntent(playerMessage: unknown, npcName: unknown): RoutingResult {
+function projectInterpretationIntent(interpretation: QueryInterpretation): RoutingIntent {
+  if (interpretation.ambiguous) return 'unclear';
+  if (interpretation.lane === 'social') return 'social_chat';
+  if (interpretation.lane === 'memory') return 'session_recall';
+  if (interpretation.lane === 'knowledge') {
+    if (interpretation.target === 'self') return 'identity_self';
+    if (interpretation.target === 'world') return 'lore_world';
+    if (interpretation.target === 'other') return 'lore_other';
+    if (interpretation.target === 'mixed') return 'mixed_knowledge';
+  }
+  return 'unclear';
+}
+
+function projectInterpretationCandidateScores(interpretation: QueryInterpretation): Array<{ intent: string; score: number }> {
+  const scoreByIntent = new Map<string, number>();
+  for (const candidate of interpretation.candidateScores) {
+    const intent = projectInterpretationIntent({
+      ...interpretation,
+      lane: candidate.lane,
+      target: candidate.target,
+      facet: candidate.facet,
+      timeframe: candidate.timeframe,
+      ambiguous: false,
+      confidence: candidate.score,
+      margin: 0,
+      candidateScores: [],
+    });
+    const current = scoreByIntent.get(intent) ?? 0;
+    if (candidate.score > current) {
+      scoreByIntent.set(intent, candidate.score);
+    }
+  }
+  return [...scoreByIntent.entries()]
+    .map(([intent, score]) => ({
+      intent,
+      score: Number(score.toFixed(4)),
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
+export function routeTurnIntent(
+  playerMessage: unknown,
+  npcName: unknown,
+  options?: {
+    history?: Array<{ role?: unknown; text?: unknown }>;
+    scene?: {
+      regionName?: string;
+      regionPath?: string;
+      currentActivity?: string;
+      currentGoal?: string;
+    };
+    loreEntityHints?: LoreEntityRouteMatch[];
+    evidencePreview?: Partial<EvidencePreview> | null;
+  },
+): RoutingResult {
   const source = normalizeRoutingSource(playerMessage);
+  const interpretation = interpretQuery({
+    playerMessage: source,
+    npcName: typeof npcName === 'string' ? npcName : undefined,
+    history: options?.history,
+    scene: options?.scene,
+    loreEntityHints: options?.loreEntityHints,
+    evidencePreview: options?.evidencePreview,
+  });
+
   if (!source) {
     return {
       intent: 'social_chat',
@@ -301,123 +390,35 @@ export function routeTurnIntent(playerMessage: unknown, npcName: unknown): Routi
       margin: 1,
       candidateScores: [{ intent: 'social_chat', score: 1 }],
       policyPath: 'chat',
+      interpretation: {
+        ...interpretation,
+        lane: 'social',
+        target: 'unknown',
+        facet: 'unknown',
+        timeframe: 'unknown',
+        confidence: 1,
+        margin: 1,
+        ambiguous: false,
+      },
     };
   }
-  const lower = source.toLowerCase();
-  const npcLower = String(npcName ?? '').trim().toLowerCase();
-  const hasQuestion = hasLikelyQuestionForm(source);
-  const hasKnowledgeCue = /\b(who|what|when|where|why|how|explain|tell me|do you know|know about|know anything about|history|origin|founded|creation|remember)\b/.test(lower);
-
-  const recallCue = /\b(remember me|have we met|did we meet|met before|what did i (say|mention|tell you)|what do you remember about me|do you remember what i|from when we talked before|from last time)\b/.test(lower);
-  const biographyCue = /\b(who are you|your name|about you|about yourself|where are you from|your past|your background|your family)\b/.test(lower)
-    || /\b(what(?:'s| is) your job|do you have a job|what do you do for (?:a )?(?:job|living|work)|where do you work|what is your occupation)\b/.test(lower)
-    || /(?:^|\b)what do you do(?:\?|$)/.test(lower)
-    || (/\b(you|your)\b/.test(lower) && /\b(name|past|background|family|from|job|work|occupation)\b/.test(lower));
-  if (isLikelySmallTalkQuery(source)) {
-    return {
-      intent: 'social_chat',
-      confidence: 0.94,
-      margin: 0.6,
-      candidateScores: [
-        { intent: 'social_chat', score: 0.94 },
-        { intent: 'session_recall', score: 0.16 },
-      ],
-      policyPath: 'chat',
-    };
-  }
-  const worldCue = /\b(city|town|village|region|history|event|world|place|creation|founded|origin|map|forest|station|gate)\b/.test(lower);
-
-  let otherCue = false;
-  const otherTargetMatch = lower.match(/\b(?:tell me about|know(?:\s+anything)? about|what about)\s+([a-z0-9._-]{3,})\b/);
-  if (otherTargetMatch) {
-    const target = otherTargetMatch[1];
-    const excluded = new Set([
-      'you',
-      'yourself',
-      'your',
-      'me',
-      'myself',
-      'town',
-      'city',
-      'world',
-      'history',
-      'place',
-      'this',
-      'that',
-      'here',
-      'there',
-    ]);
-    if (target && !excluded.has(target) && target !== npcLower) {
-      otherCue = true;
-    }
-  }
-
-  const scores = {
-    social_chat: 0.18,
-    session_recall: 0.08,
-    identity_self: 0.1,
-    lore_world: 0.1,
-    lore_other: 0.1,
-    mixed_knowledge: 0.1,
-  };
-
-  if (!hasQuestion && !hasKnowledgeCue) {
-    scores.social_chat += 0.66;
-  }
-  if (recallCue && hasQuestion) {
-    scores.session_recall += 0.8;
-  }
-  if (biographyCue) {
-    scores.identity_self += 0.72;
-  }
-  if (worldCue) {
-    scores.lore_world += 0.64;
-  }
-  if (otherCue) {
-    scores.lore_other += 0.68;
-  }
-
-  const hasMultiKnowledgeSignals = [biographyCue, worldCue, otherCue].filter(Boolean).length >= 2;
-  if (hasMultiKnowledgeSignals || (hasKnowledgeCue && !recallCue && !biographyCue && worldCue && otherCue)) {
-    scores.mixed_knowledge += 0.72;
-  }
-  if (hasKnowledgeCue && hasQuestion) {
-    scores.mixed_knowledge += 0.12;
-  }
-
-  if (recallCue && !hasQuestion) {
-    scores.session_recall -= 0.3;
-    scores.social_chat += 0.24;
-  }
-
-  if (biographyCue && recallCue && !worldCue && !otherCue) {
-    scores.session_recall += 0.12;
-  }
-
-  const candidates = Object.entries(scores)
-    .map(([intent, score]) => ({
-      intent,
-      score: Math.max(0, Math.min(1, score)),
-    }))
-    .sort((a, b) => b.score - a.score);
-
-  const top = candidates[0] ?? { intent: 'social_chat', score: 0.5 };
-  const second = candidates[1] ?? { intent: 'social_chat', score: 0 };
-  const confidence = top.score;
-  const margin = Math.max(0, top.score - second.score);
-  const isAmbiguous = confidence < 0.48 || margin < 0.12;
-  const intent = (isAmbiguous ? 'unclear' : top.intent) as RoutingIntent;
-  const policyPath = routeIntentToPolicyPath(intent);
-
+  const intent = projectInterpretationIntent(interpretation);
+  const candidateScores = projectInterpretationCandidateScores(interpretation);
+  const forceSocialChat = isLikelySmallTalkQuery(source)
+    && interpretation.lane === 'social'
+    && !interpretation.ambiguous;
   return {
-    intent,
-    confidence: Number(confidence.toFixed(4)),
-    margin: Number(margin.toFixed(4)),
-    candidateScores: candidates.map((entry) => ({
-      intent: entry.intent,
-      score: Number(entry.score.toFixed(4)),
-    })),
-    policyPath,
+    intent: forceSocialChat ? 'social_chat' : intent,
+    confidence: Number((forceSocialChat ? Math.max(0.94, interpretation.confidence) : interpretation.confidence).toFixed(4)),
+    margin: Number((forceSocialChat ? Math.max(0.24, interpretation.margin) : interpretation.margin).toFixed(4)),
+    candidateScores: forceSocialChat
+      ? [
+          { intent: 'social_chat', score: Number(Math.max(0.94, interpretation.confidence).toFixed(4)) },
+          ...candidateScores.filter((entry) => entry.intent !== 'social_chat'),
+        ].slice(0, 6)
+      : candidateScores,
+    policyPath: routeIntentToPolicyPath(forceSocialChat ? 'social_chat' : intent),
+    interpretation,
   };
 }
 

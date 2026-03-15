@@ -8,6 +8,7 @@ import {
   resolveConversationMode,
   resolveRerankBudgetTier,
 } from './retrieval-governance';
+import { buildEvidencePreview, interpretQuery } from './query-interpretation';
 
 describe('retrieval-governance', () => {
   it('applies lore override thresholds deterministically', () => {
@@ -97,6 +98,48 @@ describe('retrieval-governance', () => {
         {
           score: 1.9,
           rerankScore: 0.41,
+          pool: 'self',
+          chunk: {
+            chunkId: 'lore.entities.npcs.rick-roll#overview',
+            pageId: 'lore.entities.npcs.rick-roll',
+            title: 'Rick Roll',
+            sectionHeading: 'Overview',
+            summary: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station.',
+            content: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+            metadata: {
+              id: 'lore.entities.npcs.rick-roll',
+              title: 'Rick Roll',
+              entity_ids: ['npc.rick-roll'],
+              tags: ['rick', 'cheese', 'shop'],
+            },
+          },
+        },
+      ],
+    });
+
+    expect(quality.pass).toBe(true);
+    expect(quality.reason).toBe('sufficient');
+    expect(quality.coverage).toBeGreaterThan(0.2);
+  });
+
+  it('treats short self job questions as covered when interpretation resolves occupation semantics', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'What do you do?',
+      npcName: 'Rick Roll',
+      evidencePreview: buildEvidencePreview({
+        selfEntityId: 'npc.rick-roll',
+      }),
+    });
+    const quality = evaluateRetrievalQuality({
+      query: 'What do you do?',
+      interpretation,
+      mode: 'character',
+      queryType: 'self_query',
+      routeIntent: 'identity_self',
+      selectedMatches: [
+        {
+          score: 1.8,
+          rerankScore: 0.4,
           pool: 'self',
           chunk: {
             chunkId: 'lore.entities.npcs.rick-roll#overview',

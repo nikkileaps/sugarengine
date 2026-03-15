@@ -78,6 +78,94 @@ export interface TurnRoutingDecision {
 }
 
 // ---------------------------------------------------------------------------
+// Query interpretation (ADR-SA-032)
+// ---------------------------------------------------------------------------
+
+export type QueryLane = 'social' | 'knowledge' | 'memory';
+export type QueryTarget = 'self' | 'world' | 'other' | 'mixed' | 'unknown';
+export type QueryFacet =
+  | 'identity'
+  | 'occupation'
+  | 'current_activity'
+  | 'location'
+  | 'background'
+  | 'preference'
+  | 'relationship'
+  | 'general_lore'
+  | 'unknown';
+export type QueryTimeframe = 'current' | 'habitual' | 'past' | 'future' | 'unknown';
+
+export interface ResolvedReferent {
+  kind: 'npc' | 'entity' | 'location' | 'faction' | 'topic';
+  text: string;
+  id?: string;
+  confidence: number;
+}
+
+export interface DiscourseMarkers {
+  repair: boolean;
+  filler: boolean;
+  contrast: boolean;
+  emphasis: boolean;
+}
+
+export interface EvidencePreview {
+  selfSummary: {
+    entityId?: string;
+    identityTokens: string[];
+    occupationTokens: string[];
+    backgroundTokens: string[];
+    preferenceTokens: string[];
+  };
+  sceneSummary: {
+    regionName?: string;
+    regionPath?: string;
+    currentActivity?: string;
+    currentGoal?: string;
+  };
+  topicSummary: {
+    activeTopic?: string;
+    recentReferents: Array<{
+      kind: 'npc' | 'location' | 'topic';
+      text: string;
+      id?: string;
+    }>;
+  };
+  scopeHints: {
+    loreScopes: string[];
+    selfLoreScopes: string[];
+    relatedLoreScopes: string[];
+    entityIds: string[];
+    locationIds: string[];
+    tagHints: string[];
+  };
+}
+
+export interface QueryInterpretationCandidate {
+  lane: QueryLane;
+  target: QueryTarget;
+  facet: QueryFacet;
+  timeframe: QueryTimeframe;
+  score: number;
+}
+
+export interface QueryInterpretation {
+  schemaVersion: 1;
+  lane: QueryLane;
+  target: QueryTarget;
+  facet: QueryFacet;
+  timeframe: QueryTimeframe;
+  focusText: string;
+  normalizedText: string;
+  referents: ResolvedReferent[];
+  discourse: DiscourseMarkers;
+  candidateScores: QueryInterpretationCandidate[];
+  confidence: number;
+  margin: number;
+  ambiguous: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // NPC state snapshot (ADR-SA-025)
 // ---------------------------------------------------------------------------
 

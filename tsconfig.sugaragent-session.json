@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/plugins/sugaragent/types/node-builtins-shim.d.ts",
+    "src/plugins/sugaragent/session/runtime.ts",
+    "src/plugins/sugaragent/session/core/evidence-first-pipeline.ts",
+    "src/plugins/sugaragent/session/core/retrieval-pipeline.ts"
+  ],
+  "exclude": []
+}

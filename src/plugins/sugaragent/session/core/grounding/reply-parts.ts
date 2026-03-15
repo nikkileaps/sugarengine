@@ -355,7 +355,7 @@ export function normalizeReplyPartsForValidation(input: {
       .sort((left, right) => right.score - left.score || left.slotId.localeCompare(right.slotId));
 
     if (scored.length === 0) return [];
-    const topScore = scored[0].score;
+    const topScore = scored[0]?.score ?? 0;
     if (topScore < 0.68) return [];
     const cutoff = Math.max(0.68, topScore - 0.08);
     return scored

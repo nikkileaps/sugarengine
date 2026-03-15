@@ -37,6 +37,8 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - [029-retrieval-hardening-and-evidence-governance-cutover.md](./029-retrieval-hardening-and-evidence-governance-cutover.md)
 - [030-memory-provenance-and-contamination-control.md](./030-memory-provenance-and-contamination-control.md)
 - [031-cross-plugin-language-adaptation-boundary.md](./031-cross-plugin-language-adaptation-boundary.md)
+- [032-shared-query-interpretation-and-semantic-routing-layer.md](./032-shared-query-interpretation-and-semantic-routing-layer.md)
+- [033-local-embedding-runtime-and-vector-artifact-contract.md](./033-local-embedding-runtime-and-vector-artifact-contract.md)
 
 
 
@@ -52,3 +54,4 @@ SugarAgent is responsible for free-form conversational delivery and structured e
 ADR-023 remains historical context for the rejected exact quote claim-tag contract.
 ADR-024 is the active grounded-turn contract: runtime-owned reply parts with turn-local support slots and deterministic validation.
 ADR-025..031 define the intended cutover from model-first factual generation to a fully live evidence-first pipeline, plus the epistemology, memory, and optional SugarLang interoperability contracts required to support it cleanly.
+ADR-032..033 define the next stabilization layer after that cutover: shared semantic interpretation and real local embedding/vector support.
