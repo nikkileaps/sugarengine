@@ -404,12 +404,13 @@ export class SugarEngine {
       ));
 
       // NPC data - look up display name and dialogue from database
-      const npcInfo = this.npcDatabase.get(npcDef.id);
-      const displayName = npcInfo?.name ?? npcDef.id;
+      const resolvedNpcId = npcDef.npcId ?? npcDef.id;
+      const npcInfo = this.npcDatabase.get(resolvedNpcId);
+      const displayName = npcInfo?.name ?? resolvedNpcId;
       const dialogueId = npcInfo?.dialogue;
 
       this.world.addComponent(entity, new NPC(
-        npcDef.id,
+        resolvedNpcId,
         displayName,
         dialogueId
       ));
@@ -452,8 +453,8 @@ export class SugarEngine {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.position.set(npcDef.position.x, npcDef.position.y + 0.7, npcDef.position.z);
-      mesh.name = `npc-${npcDef.id}`;
-      mesh.userData.npcId = npcDef.id;
+      mesh.name = `npc-${resolvedNpcId}`;
+      mesh.userData.npcId = resolvedNpcId;
       mesh.userData.entityId = entity;
       this.scene.add(mesh);
 
@@ -466,7 +467,7 @@ export class SugarEngine {
       // Fire-and-forget: upgrade placeholder to loaded model in the background
       if (npcInfo?.model) {
         this.pendingModelLoads.push(
-          this.upgradeNPCModel(entity, npcDef.id, npcInfo, npcDef.position.x, npcDef.position.y, npcDef.position.z),
+          this.upgradeNPCModel(entity, resolvedNpcId, npcInfo, npcDef.position.x, npcDef.position.y, npcDef.position.z),
         );
       }
     }
@@ -751,11 +752,12 @@ export class SugarEngine {
 
       this.world.addComponent(entity, new Position(worldX, worldY, worldZ));
 
-      const npcInfo = this.npcDatabase.get(npcDef.id);
-      const displayName = npcInfo?.name ?? npcDef.id;
+      const resolvedNpcId = npcDef.npcId ?? npcDef.id;
+      const npcInfo = this.npcDatabase.get(resolvedNpcId);
+      const displayName = npcInfo?.name ?? resolvedNpcId;
       const dialogueId = npcInfo?.dialogue;
 
-      this.world.addComponent(entity, new NPC(npcDef.id, displayName, dialogueId));
+      this.world.addComponent(entity, new NPC(resolvedNpcId, displayName, dialogueId));
 
       // Add behavior tree if defined in NPC database (ADR-017)
       if (npcInfo?.behaviorTree) {
@@ -787,8 +789,8 @@ export class SugarEngine {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.position.set(worldX, worldY + 0.7, worldZ);
-      mesh.name = `npc-${npcDef.id}`;
-      mesh.userData.npcId = npcDef.id;
+      mesh.name = `npc-${resolvedNpcId}`;
+      mesh.userData.npcId = resolvedNpcId;
       mesh.userData.entityId = entity;
       mesh.userData.regionId = regionId;
       this.scene.add(mesh);
@@ -799,7 +801,7 @@ export class SugarEngine {
 
       if (npcInfo?.model) {
         this.pendingModelLoads.push(
-          this.upgradeNPCModel(entity, npcDef.id, npcInfo, worldX, worldY, worldZ),
+          this.upgradeNPCModel(entity, resolvedNpcId, npcInfo, worldX, worldY, worldZ),
         );
       }
     }

@@ -15,6 +15,101 @@ function isRecord(value) {
   return typeof value === 'object' && value !== null;
 }
 
+function hasRetrievalScopes({
+  loreScopes,
+  selfLoreScopes,
+  relatedLoreScopes,
+}) {
+  return (Array.isArray(loreScopes) && loreScopes.length > 0)
+    || (Array.isArray(selfLoreScopes) && selfLoreScopes.length > 0)
+    || (Array.isArray(relatedLoreScopes) && relatedLoreScopes.length > 0);
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function deriveScopedRetrievalPools({
+  queryType,
+  routingIntent,
+  loreScopes,
+  selfLoreScopes,
+  relatedLoreScopes,
+}) {
+  const normalizedLoreScopes = normalizeStringArray(loreScopes);
+  const normalizedSelfLoreScopes = normalizeStringArray(selfLoreScopes);
+  const normalizedRelatedLoreScopes = normalizeStringArray(relatedLoreScopes);
+
+  if (queryType === 'self_query' || routingIntent === 'identity_self') {
+    return {
+      loreScopes: normalizedSelfLoreScopes.length > 0 ? [] : normalizedLoreScopes,
+      selfLoreScopes: normalizedSelfLoreScopes,
+      relatedLoreScopes: [],
+    };
+  }
+
+  if (queryType === 'world_query' || routingIntent === 'lore_world') {
+    return {
+      loreScopes: normalizedLoreScopes,
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+    };
+  }
+
+  if (queryType === 'other_query' || routingIntent === 'lore_other') {
+    if (normalizedRelatedLoreScopes.length > 0) {
+      return {
+        loreScopes: [],
+        selfLoreScopes: [],
+        relatedLoreScopes: normalizedRelatedLoreScopes,
+      };
+    }
+    return {
+      loreScopes: normalizedLoreScopes,
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+    };
+  }
+
+  return {
+    loreScopes: normalizedLoreScopes,
+    selfLoreScopes: normalizedSelfLoreScopes,
+    relatedLoreScopes: normalizedRelatedLoreScopes,
+  };
+}
+
+function shouldAttemptCorrectiveRetrieval(input) {
+  const reason = typeof input?.qualityReason === 'string' ? input.qualityReason : 'unknown';
+  if (reason !== 'coverage_low' && reason !== 'support_low' && reason !== 'no_candidates') {
+    return false;
+  }
+  if (!hasRetrievalScopes(input)) {
+    return false;
+  }
+
+  const queryType = input?.queryType;
+  const routingIntent = input?.routingIntent;
+  const loreScopes = Array.isArray(input?.loreScopes) ? input.loreScopes : [];
+  const selfLoreScopes = Array.isArray(input?.selfLoreScopes) ? input.selfLoreScopes : [];
+  const relatedLoreScopes = Array.isArray(input?.relatedLoreScopes) ? input.relatedLoreScopes : [];
+
+  if ((queryType === 'self_query' || routingIntent === 'identity_self') && selfLoreScopes.length === 0 && !input?.selfEntityId) {
+    return false;
+  }
+  if ((queryType === 'world_query' || routingIntent === 'lore_world') && loreScopes.length === 0) {
+    return false;
+  }
+  if ((queryType === 'other_query' || routingIntent === 'lore_other') && relatedLoreScopes.length === 0 && loreScopes.length === 0) {
+    return false;
+  }
+
+  return true;
+}
+
 export function computeRetrievalQualityScore(quality) {
   if (!isRecord(quality)) return 0;
   const coverage = typeof quality.coverage === 'number' ? quality.coverage : 0;
@@ -42,6 +137,7 @@ export function runGovernedLoreRetrieval({
   artifactVersion,
   modelVersion,
   rerankerClass,
+  retrievalFilters,
 }) {
   const normalizedMode = normalizeConversationModeForPolicy(mode);
   const budgetTier = resolveRerankBudgetTier({
@@ -56,13 +152,21 @@ export function runGovernedLoreRetrieval({
     || routingIntent === 'lore_world'
     || routingIntent === 'lore_other'
     || routingIntent === 'mixed_knowledge';
-  const scopeOptions = {
+  const scopedPools = deriveScopedRetrievalPools({
+    queryType,
+    routingIntent,
     loreScopes,
     selfLoreScopes,
     relatedLoreScopes,
+  });
+  const scopeOptions = {
+    loreScopes: scopedPools.loreScopes,
+    selfLoreScopes: scopedPools.selfLoreScopes,
+    relatedLoreScopes: scopedPools.relatedLoreScopes,
     selfEntityId,
     queryType,
     activeBeatIds: typeof activeBeatId === 'string' ? [activeBeatId] : [],
+    filters: retrievalFilters,
   };
 
   const baseResult = {
@@ -117,10 +221,11 @@ export function runGovernedLoreRetrieval({
     routingIntent,
     mode: normalizedMode,
     budgetTier,
-    loreScopes,
-    selfLoreScopes,
-    relatedLoreScopes,
+    loreScopes: scopedPools.loreScopes,
+    selfLoreScopes: scopedPools.selfLoreScopes,
+    relatedLoreScopes: scopedPools.relatedLoreScopes,
     selfEntityId,
+    retrievalFilters,
     artifactVersion,
     modelVersion,
   });
@@ -177,7 +282,15 @@ export function runGovernedLoreRetrieval({
     },
   ];
 
-  if (knowledgeTurn && !initialQuality.pass) {
+  if (knowledgeTurn && !initialQuality.pass && shouldAttemptCorrectiveRetrieval({
+    qualityReason: initialQuality.reason,
+    queryType,
+    routingIntent,
+    loreScopes: scopedPools.loreScopes,
+    selfLoreScopes: scopedPools.selfLoreScopes,
+    relatedLoreScopes: scopedPools.relatedLoreScopes,
+    selfEntityId,
+  })) {
     correctiveAttempted = true;
     const correctiveQuery = buildCorrectiveLoreQuery(playerMessage, queryType, routingIntent);
     let correctiveLoreScopes = [...loreScopes];
@@ -216,6 +329,7 @@ export function runGovernedLoreRetrieval({
       selfLoreScopes: correctiveSelfLoreScopes,
       relatedLoreScopes: correctiveRelatedLoreScopes,
       selfEntityId,
+      retrievalFilters,
       artifactVersion,
       modelVersion,
     });
@@ -273,6 +387,8 @@ export function runGovernedLoreRetrieval({
     }
     totalRerankLatencyMs += correctiveRerank.latencyMs;
     qualityPath = finalQuality.pass ? 'corrective_pass' : 'corrective_fail';
+  } else if (knowledgeTurn && !initialQuality.pass) {
+    qualityPath = 'single_pass';
   } else if (knowledgeTurn && initialQuality.pass) {
     qualityPath = 'single_pass';
   } else if (!knowledgeTurn) {

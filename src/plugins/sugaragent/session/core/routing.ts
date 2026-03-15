@@ -10,10 +10,244 @@ export interface RoutingResult {
   policyPath: RoutingPolicyPath;
 }
 
+export interface LoreEntityRouteMatch {
+  entityId: string;
+  entityType: 'world' | 'character' | 'faction' | 'unknown';
+  matchedText: string;
+  filterKind: 'entityIds' | 'locationIds' | 'factionIds' | null;
+}
+
+export interface LoreEntityRouteRefinement {
+  route: RoutingResult;
+  matches: LoreEntityRouteMatch[];
+  loreEntityIds: string[];
+  retrievalFilters: {
+    entityIds?: string[];
+    locationIds?: string[];
+    factionIds?: string[];
+  };
+}
+
 function normalizeRoutingSource(playerMessage: unknown): string {
   const source = String(playerMessage ?? '').trim();
   if (!source) return '';
   return source.replace(/\s+/g, ' ');
+}
+
+function normalizeRouteLookupText(text: unknown): string {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00c0-\u024f\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeLoreAlias(value: unknown): string {
+  const normalized = normalizeRouteLookupText(value)
+    .replace(/\b(lore|locations|location|npcs|npc|factions|faction|history|world)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length >= 3 ? normalized : '';
+}
+
+function aliasFromId(value: unknown): string {
+  const source = String(value ?? '').trim();
+  if (!source) return '';
+  const lastSegment = source.split('.').pop() ?? source;
+  return normalizeLoreAlias(lastSegment.replace(/[_-]+/g, ' '));
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function buildLoreEntityAliases(chunk: unknown): Array<{
+  alias: string;
+  entityId: string;
+  entityType: LoreEntityRouteMatch['entityType'];
+  filterKind: LoreEntityRouteMatch['filterKind'];
+}> {
+  if (!isRecord(chunk)) return [];
+  const metadata = isRecord(chunk.metadata) ? chunk.metadata : {};
+  const pageId = typeof chunk.pageId === 'string' ? chunk.pageId : '';
+  const metadataId = typeof metadata.id === 'string' ? metadata.id : '';
+  const title = typeof chunk.title === 'string'
+    ? chunk.title
+    : (typeof metadata.title === 'string' ? metadata.title : '');
+  const locationIds = normalizeStringArray(metadata.location_ids);
+  const factionIds = normalizeStringArray(metadata.faction_ids);
+  const entityIds = normalizeStringArray(metadata.entity_ids);
+  const candidates: Array<{
+    alias: string;
+    entityId: string;
+    entityType: LoreEntityRouteMatch['entityType'];
+    filterKind: LoreEntityRouteMatch['filterKind'];
+  }> = [];
+  const seen = new Set<string>();
+
+  const pushAlias = (
+    rawAlias: unknown,
+    entityId: string,
+    entityType: LoreEntityRouteMatch['entityType'],
+    filterKind: LoreEntityRouteMatch['filterKind'],
+  ) => {
+    const alias = normalizeLoreAlias(rawAlias);
+    if (!alias || alias.length < 4) return;
+    const key = `${entityType}:${entityId}:${alias}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ alias, entityId, entityType, filterKind });
+  };
+
+  const pageLooksCharacter = pageId.includes('.npcs.') || metadataId.includes('.npcs.');
+  const pageLooksWorld = pageId.includes('.locations.') || metadataId.includes('.locations.')
+    || pageId.includes('.history.') || metadataId.includes('.history.')
+    || pageId.includes('.world.') || metadataId.includes('.world.');
+
+  for (const locationId of locationIds) {
+    pushAlias(aliasFromId(locationId), locationId, 'world', 'locationIds');
+    pushAlias(title, locationId, 'world', 'locationIds');
+  }
+  for (const factionId of factionIds) {
+    pushAlias(aliasFromId(factionId), factionId, 'faction', 'factionIds');
+    pushAlias(title, factionId, 'faction', 'factionIds');
+  }
+  for (const entityId of entityIds) {
+    const entityType = entityId.startsWith('npc.') || entityId.startsWith('character.')
+      || pageLooksCharacter
+      ? 'character'
+      : pageLooksWorld
+        ? 'world'
+        : 'unknown';
+    pushAlias(aliasFromId(entityId), entityId, entityType, 'entityIds');
+    pushAlias(title, entityId, entityType, 'entityIds');
+  }
+
+  if (candidates.length === 0 && title) {
+    const entityType = pageLooksWorld ? 'world' : pageLooksCharacter ? 'character' : 'unknown';
+    const entityId = metadataId || pageId || normalizeLoreAlias(title);
+    pushAlias(title, entityId, entityType, null);
+    pushAlias(aliasFromId(metadataId || pageId), entityId, entityType, null);
+  }
+
+  return candidates;
+}
+
+export function collectLoreEntityRouteMatches(
+  playerMessage: unknown,
+  loreArtifacts: unknown,
+): LoreEntityRouteMatch[] {
+  const normalizedMessage = normalizeRouteLookupText(playerMessage);
+  if (!normalizedMessage) return [];
+  const chunks = isRecord(loreArtifacts) && Array.isArray(loreArtifacts.chunks)
+    ? loreArtifacts.chunks
+    : [];
+  const matches: LoreEntityRouteMatch[] = [];
+  const seen = new Set<string>();
+
+  for (const chunk of chunks) {
+    const aliases = buildLoreEntityAliases(chunk);
+    for (const candidate of aliases) {
+      const pattern = new RegExp(`(^|\\s)${escapeRegex(candidate.alias)}(?=$|\\s)`, 'i');
+      if (!pattern.test(normalizedMessage)) continue;
+      const key = `${candidate.entityType}:${candidate.entityId}:${candidate.alias}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      matches.push({
+        entityId: candidate.entityId,
+        entityType: candidate.entityType,
+        matchedText: candidate.alias,
+        filterKind: candidate.filterKind,
+      });
+    }
+  }
+
+  return matches;
+}
+
+function buildRefinedRoutingResult(
+  route: RoutingResult,
+  intent: RoutingIntent,
+): RoutingResult {
+  if (intent === route.intent) return route;
+  const overrideScore = Math.max(route.confidence, 0.86);
+  const candidateScores = [
+    { intent, score: overrideScore },
+    ...route.candidateScores.filter((entry) => entry.intent !== intent),
+  ]
+    .slice(0, 6)
+    .map((entry, index) => ({
+      intent: entry.intent,
+      score: Number(Math.max(0, Math.min(1, index === 0 ? overrideScore : entry.score)).toFixed(4)),
+    }));
+
+  return {
+    intent,
+    confidence: Number(overrideScore.toFixed(4)),
+    margin: Number(Math.max(route.margin, 0.22).toFixed(4)),
+    candidateScores,
+    policyPath: routeIntentToPolicyPath(intent),
+  };
+}
+
+export function refineRouteWithLoreEntityMentions(input: {
+  route: RoutingResult;
+  playerMessage: unknown;
+  loreArtifacts?: unknown;
+}): LoreEntityRouteRefinement {
+  const route = input.route;
+  const matches = collectLoreEntityRouteMatches(input.playerMessage, input.loreArtifacts);
+  const retrievalFilters: LoreEntityRouteRefinement['retrievalFilters'] = {};
+  for (const match of matches) {
+    if (match.filterKind === 'entityIds') {
+      retrievalFilters.entityIds = [...(retrievalFilters.entityIds ?? []), match.entityId];
+    } else if (match.filterKind === 'locationIds') {
+      retrievalFilters.locationIds = [...(retrievalFilters.locationIds ?? []), match.entityId];
+    } else if (match.filterKind === 'factionIds') {
+      retrievalFilters.factionIds = [...(retrievalFilters.factionIds ?? []), match.entityId];
+    }
+  }
+
+  const normalizedMessage = normalizeRouteLookupText(input.playerMessage);
+  const hasKnowledgeCue = /\b(who|what|when|where|why|how|explain|tell me|do you know|know about|know anything about|history|origin|founded|creation|remember)\b/i.test(normalizedMessage);
+  const hasKnowledgeIntent = hasLikelyQuestionForm(input.playerMessage)
+    || hasKnowledgeCue
+    || route.intent === 'lore_world'
+    || route.intent === 'lore_other'
+    || route.intent === 'mixed_knowledge'
+    || route.intent === 'unclear';
+
+  let refinedRoute = route;
+  if (hasKnowledgeIntent && matches.length > 0) {
+    const hasWorld = matches.some((match) => match.entityType === 'world' || match.entityType === 'faction');
+    const hasCharacter = matches.some((match) => match.entityType === 'character');
+    if (hasWorld && !hasCharacter) {
+      refinedRoute = buildRefinedRoutingResult(route, 'lore_world');
+    } else if (hasCharacter && !hasWorld) {
+      refinedRoute = buildRefinedRoutingResult(route, 'lore_other');
+    } else if (hasWorld && hasCharacter) {
+      refinedRoute = buildRefinedRoutingResult(route, 'mixed_knowledge');
+    }
+  }
+
+  return {
+    route: refinedRoute,
+    matches,
+    loreEntityIds: matches.map((match) => match.entityId),
+    retrievalFilters,
+  };
 }
 
 export function hasLikelyQuestionForm(playerMessage: unknown): boolean {
@@ -76,7 +310,9 @@ export function routeTurnIntent(playerMessage: unknown, npcName: unknown): Routi
 
   const recallCue = /\b(remember me|have we met|did we meet|met before|what did i (say|mention|tell you)|what do you remember about me|do you remember what i|from when we talked before|from last time)\b/.test(lower);
   const biographyCue = /\b(who are you|your name|about you|about yourself|where are you from|your past|your background|your family)\b/.test(lower)
-    || (/\b(you|your)\b/.test(lower) && /\b(name|past|background|family|from)\b/.test(lower));
+    || /\b(what(?:'s| is) your job|do you have a job|what do you do for (?:a )?(?:job|living|work)|where do you work|what is your occupation)\b/.test(lower)
+    || /(?:^|\b)what do you do(?:\?|$)/.test(lower)
+    || (/\b(you|your)\b/.test(lower) && /\b(name|past|background|family|from|job|work|occupation)\b/.test(lower));
   if (isLikelySmallTalkQuery(source)) {
     return {
       intent: 'social_chat',

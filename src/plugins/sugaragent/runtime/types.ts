@@ -29,6 +29,7 @@ export interface RuntimeGenerateStructuredRequest {
   context?: {
     gameId?: string;
     regionPath?: string;
+    regionName?: string;
     episodeId?: string;
     runtimeMode?: SugarAgentRuntimeMode;
     interactionMode?: 'scripted' | 'agent' | 'hybrid';
@@ -49,6 +50,7 @@ export interface RuntimeGenerateStructuredResponse {
   jsonText: string;
   attempts?: number;
   usedFallback?: boolean;
+  fallbackKind?: 'provider_unavailable' | 'validation_fallback' | 'deterministic_runtime';
   validationErrors?: string[];
   diagnostics?: Record<string, unknown>;
 }

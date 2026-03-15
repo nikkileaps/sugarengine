@@ -301,8 +301,8 @@ export function createSocialChatReply({ playerMessage, npcName }, deps) {
 
 export function createGroundedUncertaintyReply(queryType) {
   const utterance = queryType === 'self_query'
-    ? 'I am not sure yet. I do not want to guess about my own background without records.'
-    : 'I am not sure. I do not have reliable records about that right now.';
+    ? "I don't know. I don't want to guess about my own background."
+    : "I don't know.";
   return {
     utterance,
     emotion: 'uncertain',

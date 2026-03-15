@@ -40,6 +40,46 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
   const [agentLoreScopesDraft, setAgentLoreScopesDraft] = useState('');
   const [agentSelfLoreScopesDraft, setAgentSelfLoreScopesDraft] = useState('');
   const [agentRelatedLoreScopesDraft, setAgentRelatedLoreScopesDraft] = useState('');
+  const [availableLoreScopes, setAvailableLoreScopes] = useState<Set<string> | null>(null);
+
+  // Fetch available lore scopes for validation
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/__sugaragent/runtime', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'listLoreScopes' }),
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!cancelled && data?.scopes) {
+          setAvailableLoreScopes(new Set(data.scopes));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const validateScope = (scope: string): boolean => {
+    if (!availableLoreScopes) return true; // Not loaded yet, don't warn
+    const normalized = scope.trim().toLowerCase();
+    if (!normalized) return true;
+    const withoutPrefix = normalized.startsWith('lore.') ? normalized.slice(5) : normalized;
+    // Check direct match or prefix match
+    if (availableLoreScopes.has(normalized) || availableLoreScopes.has(withoutPrefix)) return true;
+    for (const available of availableLoreScopes) {
+      if (available.startsWith(`${withoutPrefix}.`) || available.endsWith(`.${withoutPrefix}`)) return true;
+    }
+    return false;
+  };
+
+  const getUnmatchedScopes = (draft: string): string[] => {
+    if (!availableLoreScopes) return [];
+    return draft
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !validateScope(s));
+  };
 
   // Find dialogues where this NPC speaks
   const npcDialogues = dialogues.filter((d) =>
@@ -515,6 +555,11 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                     autosize
                     size="sm"
                   />
+                  {getUnmatchedScopes(agentLoreScopesDraft).map((scope) => (
+                    <Text key={scope} size="xs" c="red" mt={-8}>
+                      No lore chunks match scope "{scope}"
+                    </Text>
+                  ))}
 
                   <Textarea
                     label="Self Lore Scopes"
@@ -530,6 +575,11 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                     autosize
                     size="sm"
                   />
+                  {getUnmatchedScopes(agentSelfLoreScopesDraft).map((scope) => (
+                    <Text key={scope} size="xs" c="red" mt={-8}>
+                      No lore chunks match scope "{scope}"
+                    </Text>
+                  ))}
 
                   <Textarea
                     label="Related Lore Scopes"
@@ -545,6 +595,11 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                     autosize
                     size="sm"
                   />
+                  {getUnmatchedScopes(agentRelatedLoreScopesDraft).map((scope) => (
+                    <Text key={scope} size="xs" c="red" mt={-8}>
+                      No lore chunks match scope "{scope}"
+                    </Text>
+                  ))}
                 </Stack>
               </Paper>
             </Stack>

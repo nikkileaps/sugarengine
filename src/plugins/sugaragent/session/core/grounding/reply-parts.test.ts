@@ -69,6 +69,29 @@ describe('reply-parts', () => {
     });
   });
 
+  it('parses inferred and rumor reply parts', () => {
+    expect(parseReplyPartsResponseDetailed('{"parts":[{"kind":"inferred","text":"I think the bridge is watched after dark.","support":["E1","E2"]},{"kind":"rumor","text":"I heard that smugglers use the old tunnel.","support":["E3"]}],"emotion":"guarded","intent":"answer","proposedIntents":[]}')).toEqual({
+      turn: {
+        parts: [
+          {
+            kind: 'inferred',
+            text: 'I think the bridge is watched after dark.',
+            support: ['E1', 'E2'],
+          },
+          {
+            kind: 'rumor',
+            text: 'I heard that smugglers use the old tunnel.',
+            support: ['E3'],
+          },
+        ],
+        emotion: 'guarded',
+        intent: 'answer',
+        proposedIntents: [],
+        beatEvidence: undefined,
+      },
+    });
+  });
+
   it('prefers the top-level reply-parts object over nested beat-evidence objects in raw runtime output', () => {
     const rawRuntimeOutput = [
       'Loading model...',
@@ -127,6 +150,7 @@ describe('reply-parts', () => {
     });
 
     expect(prompt).toContain('Allowed support slots:');
+    expect(prompt).toContain('Allowed part kinds: social, grounded, inferred, rumor, uncertain, close.');
     expect(prompt).toContain('- E1 [owner=world]:');
     expect(prompt).toContain('"support":["E1"]');
     expect(repairPrompt).toContain('Previous response failed: invalid_support_slot.');
@@ -167,7 +191,7 @@ describe('reply-parts', () => {
           entityIds: ['npc.bippity'],
         },
       ],
-      failureReason: 'knowledge_turn_requires_grounded_or_uncertain',
+      failureReason: 'knowledge_turn_requires_knowledge_or_uncertain',
     });
 
     expect(prompt).toContain('at least one part MUST be grounded');
@@ -303,6 +327,42 @@ describe('reply-parts', () => {
     ]);
   });
 
+  it('binds inferred lore parts to the best matching support slots when ids are omitted', () => {
+    const normalized = normalizeReplyPartsForValidation({
+      queryType: 'other_query',
+      supportSlots: [
+        {
+          slotId: 'E1',
+          sourceId: 'lore.bridge',
+          snippet: 'The bridge is watched after dark.',
+          sourceType: 'lore_chunk',
+          ownerType: 'world',
+          selfAttributed: false,
+          entityIds: ['bridge.old'],
+        },
+      ],
+      turn: {
+        parts: [
+          {
+            kind: 'inferred',
+            text: 'I think the bridge is watched after dark.',
+          },
+        ],
+        emotion: 'guarded',
+        intent: 'answer',
+        proposedIntents: [],
+      },
+    });
+
+    expect(normalized?.parts).toEqual([
+      {
+        kind: 'inferred',
+        text: 'I think the bridge is watched after dark.',
+        support: ['E1'],
+      },
+    ]);
+  });
+
   it('materializes final public output from grounded reply parts', () => {
     const output = materializeTurnOutputFromReplyParts({
       turn: {
@@ -332,6 +392,52 @@ describe('reply-parts', () => {
       {
         sourceId: 'lore.earendale',
         snippet: 'The Wordlark Hollow Resort and Spa is located just outside Earendale.',
+      },
+    ]);
+  });
+
+  it('materializes citations from inferred and rumor parts too', () => {
+    const output = materializeTurnOutputFromReplyParts({
+      turn: {
+        parts: [
+          { kind: 'inferred', text: 'I think the bridge is watched after dark.', support: ['E1'] },
+          { kind: 'rumor', text: 'I heard the tunnel is used by smugglers.', support: ['E2'] },
+        ],
+        emotion: 'guarded',
+        intent: 'answer',
+        proposedIntents: [],
+      },
+      supportSlots: [
+        {
+          slotId: 'E1',
+          sourceId: 'lore.bridge',
+          snippet: 'The bridge is watched after dark.',
+          sourceType: 'lore_chunk',
+          ownerType: 'world',
+          selfAttributed: false,
+          entityIds: ['bridge.old'],
+        },
+        {
+          slotId: 'E2',
+          sourceId: 'lore.tunnel',
+          snippet: 'People whisper that smugglers use the old tunnel.',
+          sourceType: 'lore_chunk',
+          ownerType: 'world',
+          selfAttributed: false,
+          entityIds: ['tunnel.old'],
+        },
+      ],
+    });
+
+    expect(output.utterance).toBe('I think the bridge is watched after dark. I heard the tunnel is used by smugglers.');
+    expect(output.citations).toEqual([
+      {
+        sourceId: 'lore.bridge',
+        snippet: 'The bridge is watched after dark.',
+      },
+      {
+        sourceId: 'lore.tunnel',
+        snippet: 'People whisper that smugglers use the old tunnel.',
       },
     ]);
   });

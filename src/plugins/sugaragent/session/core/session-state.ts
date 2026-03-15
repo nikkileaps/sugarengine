@@ -61,6 +61,20 @@ const TOPIC_STOPWORDS = new Set([
   'who',
   'why',
   'with',
+  'yeah',
+  'yep',
+  'yup',
+  'ok',
+  'okay',
+  'well',
+  'man',
+  'dude',
+  'hmm',
+  'uh',
+  'umm',
+  'huh',
+  'right',
+  'sure',
   'you',
   'your',
 ]);
@@ -292,8 +306,6 @@ export function extractSalientFacts(message: unknown): string[] {
     /i like ([^.!?]{3,80})/i,
     /i need ([^.!?]{3,80})/i,
     /i have ([^.!?]{3,80})/i,
-    /there is ([^.!?]{3,100})/i,
-    /there's ([^.!?]{3,100})/i,
     /i promised ([^.!?]{3,100})/i,
     /i gave you ([^.!?]{3,100})/i,
     /i am worried about ([^.!?]{3,100})/i,
@@ -309,11 +321,54 @@ export function extractSalientFacts(message: unknown): string[] {
     }
   }
 
-  if (lower.includes('fire') && lower.includes('mountain')) {
-    facts.push('There is a fire in the mountains.');
+  return Array.from(new Set(facts));
+}
+
+function persistMemoryWritesToNpc(
+  npc: SessionNpcState,
+  memoryWrites: unknown,
+  now: number,
+): void {
+  const writes = Array.isArray(memoryWrites) ? memoryWrites : [];
+  if (writes.length === 0) return;
+
+  const nextFacts = new Set(npc.facts);
+  for (const write of writes) {
+    if (!isRecord(write)) continue;
+    const type = typeof write.type === 'string' ? write.type : 'unknown';
+    const source = typeof write.source === 'string' ? write.source : 'runtime_memory';
+    const ownerType = typeof write.ownerType === 'string' && EVIDENCE_OWNER_TYPES.has(write.ownerType)
+      ? write.ownerType
+      : 'unknown';
+    const text = normalizeFact(write.text);
+    if (!text) continue;
+
+    if (type === 'player_fact') {
+      nextFacts.add(text);
+      npc.events.push({
+        id: `player_fact:${now}:${randomId()}`,
+        type: 'player_fact',
+        ownerType: 'player',
+        text,
+        timestamp: now,
+        source,
+      });
+      continue;
+    }
+
+    if (type === 'npc_commitment' || type === 'shared_event') {
+      npc.events.push({
+        id: `${type}:${now}:${randomId()}`,
+        type,
+        ownerType,
+        text,
+        timestamp: now,
+        source,
+      });
+    }
   }
 
-  return Array.from(new Set(facts));
+  npc.facts = Array.from(nextFacts).slice(-MAX_SESSION_FACTS_PER_NPC);
 }
 
 export function ensureSessionNpc(state: SessionState, npcId: string): SessionNpcState {
@@ -611,42 +666,50 @@ export function applyTurnToSession(
   npcId: string,
   playerMessage: unknown,
   npcReply: unknown,
+  options?: {
+    memoryWrites?: unknown;
+  },
 ): void {
   if (!session) return;
   const now = Date.now();
   const npc = ensureSessionNpc(session.state, npcId);
   npc.updatedAt = now;
 
-  const newFacts = extractSalientFacts(playerMessage);
-  if (newFacts.length > 0) {
-    const merged = Array.from(new Set([...npc.facts, ...newFacts]));
-    npc.facts = merged.slice(-MAX_SESSION_FACTS_PER_NPC);
-    for (const fact of newFacts) {
+  const hasExplicitMemoryWrites = Array.isArray(options?.memoryWrites);
+  if (hasExplicitMemoryWrites) {
+    persistMemoryWritesToNpc(npc, options?.memoryWrites, now);
+  } else {
+    const newFacts = extractSalientFacts(playerMessage);
+    if (newFacts.length > 0) {
+      const merged = Array.from(new Set([...npc.facts, ...newFacts]));
+      npc.facts = merged.slice(-MAX_SESSION_FACTS_PER_NPC);
+      for (const fact of newFacts) {
+        npc.events.push({
+          id: `player_fact:${now}:${randomId()}`,
+          type: 'player_fact',
+          ownerType: 'player',
+          text: fact,
+          timestamp: now,
+          source: 'player_message',
+        });
+      }
+    }
+
+    const npcCommitmentMatches = String(npcReply ?? '')
+      .split(/(?<=[.!?])\s+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => /\b(i will|i'll|i can|i promise|let me)\b/i.test(entry))
+      .slice(0, 2);
+    for (const commitment of npcCommitmentMatches) {
       npc.events.push({
-        id: `player_fact:${now}:${randomId()}`,
-        type: 'player_fact',
-        ownerType: 'player',
-        text: fact,
+        id: `npc_commitment:${now}:${randomId()}`,
+        type: 'npc_commitment',
+        ownerType: 'npc',
+        text: normalizeFact(commitment),
         timestamp: now,
-        source: 'player_message',
+        source: 'npc_reply',
       });
     }
-  }
-
-  const npcCommitmentMatches = String(npcReply ?? '')
-    .split(/(?<=[.!?])\s+/)
-    .map((entry) => entry.trim())
-    .filter((entry) => /\b(i will|i'll|i can|i promise|let me)\b/i.test(entry))
-    .slice(0, 2);
-  for (const commitment of npcCommitmentMatches) {
-    npc.events.push({
-      id: `npc_commitment:${now}:${randomId()}`,
-      type: 'npc_commitment',
-      ownerType: 'npc',
-      text: normalizeFact(commitment),
-      timestamp: now,
-      source: 'npc_reply',
-    });
   }
 
   updateNpcTopicCoverage(npc, playerMessage, now);

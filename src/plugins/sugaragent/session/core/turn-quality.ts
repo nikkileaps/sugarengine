@@ -18,6 +18,8 @@ interface TurnQualityOptions {
   isFirstMeeting?: unknown;
   routingIntent?: unknown;
   queryType?: unknown;
+  regionPath?: unknown;
+  regionName?: unknown;
 }
 
 const PLAYER_ATTRIBUTION_STOP_WORDS = new Set([
@@ -84,6 +86,28 @@ const PLAYER_ATTRIBUTION_SYNONYMS = new Map([
   ['pastimes', ['hobby', 'hobbies', 'pastime']],
 ]);
 
+const LOCATION_CONTEXT_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'at',
+  'for',
+  'here',
+  'in',
+  'my',
+  'of',
+  'on',
+  'our',
+  'place',
+  'region',
+  'spot',
+  'that',
+  'the',
+  'there',
+  'this',
+  'to',
+  'town',
+]);
+
 function normalizeQueryType(value: unknown): QueryType {
   if (
     value === 'conversation'
@@ -119,8 +143,23 @@ function normalizeFact(text: unknown): string {
     .replace(/[.?!]+$/g, '');
 }
 
+function normalizeLocationPhrase(text: unknown): string {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00c0-\u024f\s'-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function sanitizePromptText(text: unknown): string {
   return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function tokenizeLocationPhrase(text: unknown): string[] {
+  return normalizeLocationPhrase(text)
+    .split(/\s+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 1 && !LOCATION_CONTEXT_STOP_WORDS.has(entry));
 }
 
 export function normalizeForEchoCheck(text: unknown): string {
@@ -278,6 +317,124 @@ function isLikelyUngroundedFirstMeetingGreetingReply(utterance: unknown, playerM
     /\byou\s+(own|run|manage|sell|bake|built|founded)\b/,
   ];
   return patterns.some((pattern) => pattern.test(normalized));
+}
+
+function isLikelyGenericAssistantSocialReply(
+  utterance: unknown,
+  options: TurnQualityOptions = {},
+): boolean {
+  const routingIntent = normalizeRoutingIntent(options.routingIntent);
+  const queryType = normalizeQueryType(options.queryType);
+  if (routingIntent !== 'social_chat' && queryType !== 'conversation') {
+    return false;
+  }
+
+  const normalized = normalizeForEchoCheck(utterance);
+  if (!normalized) return false;
+
+  const genericPatterns = [
+    /\btell me more\b/,
+    /\bhow can i help\b/,
+    /\bhelp where i can\b/,
+    /\bwhat can i help with\b/,
+    /\bcould you clarify\b/,
+    /\bcan you clarify\b/,
+    /\bi m here to help\b/,
+    /\blet me know how i can help\b/,
+  ];
+
+  return genericPatterns.some((pattern) => pattern.test(normalized));
+}
+
+function extractLocationAssertionPhrases(text: unknown): string[] {
+  const source = typeof text === 'string' ? text : '';
+  if (!source.trim()) return [];
+  const phrases: string[] = [];
+  const seen = new Set<string>();
+  const patterns = [
+    /\bwelcome to\s+(?:the\s+)?([a-z0-9\u00c0-\u024f' -]{2,48}?)(?=$|[,.!?;:]|\s+(?:and|but)\b)/gi,
+    /\bwe(?:'re| are)\s+(?:at|in)\s+(?:the\s+)?([a-z0-9\u00c0-\u024f' -]{2,48}?)(?=$|[,.!?;:]|\s+(?:and|but)\b)/gi,
+    /\byou(?:'re| are)\s+(?:at|in)\s+(?:the\s+)?([a-z0-9\u00c0-\u024f' -]{2,48}?)(?=$|[,.!?;:]|\s+(?:and|but)\b)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      const phrase = normalizeLocationPhrase(match[1] ?? '');
+      if (!phrase || seen.has(phrase)) continue;
+      seen.add(phrase);
+      phrases.push(phrase);
+    }
+  }
+
+  return phrases;
+}
+
+function extractPlayerDestinationPhrases(text: unknown): string[] {
+  const source = typeof text === 'string' ? text : '';
+  if (!source.trim()) return [];
+  const phrases: string[] = [];
+  const seen = new Set<string>();
+  const patterns = [
+    /\b(?:headed|heading|going|traveling|travelling|moving)\s+to\s+(?:the\s+)?([a-z0-9\u00c0-\u024f' -]{2,48}?)(?=$|[,.!?;:]|\s+(?:to|for)\b)/gi,
+    /\bon my way to\s+(?:the\s+)?([a-z0-9\u00c0-\u024f' -]{2,48}?)(?=$|[,.!?;:]|\s+(?:to|for)\b)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      const phrase = normalizeLocationPhrase(match[1] ?? '');
+      if (!phrase || seen.has(phrase)) continue;
+      seen.add(phrase);
+      phrases.push(phrase);
+    }
+  }
+
+  return phrases;
+}
+
+function locationTokensOverlap(left: string[], right: string[]): boolean {
+  if (left.length === 0 || right.length === 0) return false;
+  const rightSet = new Set(right);
+  return left.some((token) => rightSet.has(token));
+}
+
+function findCurrentLocationMismatch(
+  utterance: unknown,
+  playerMessage: unknown,
+  options: TurnQualityOptions = {},
+): string | null {
+  const routingIntent = normalizeRoutingIntent(options.routingIntent);
+  const queryType = normalizeQueryType(options.queryType);
+  if (routingIntent !== 'social_chat' && queryType !== 'conversation') {
+    return null;
+  }
+
+  const authoritativeTokens = [
+    ...tokenizeLocationPhrase(options.regionName),
+    ...tokenizeLocationPhrase(options.regionPath),
+  ];
+  if (authoritativeTokens.length === 0) return null;
+
+  const assertedPhrases = extractLocationAssertionPhrases(utterance);
+  const playerDestinations = extractPlayerDestinationPhrases(playerMessage);
+  if (assertedPhrases.length === 0 || playerDestinations.length === 0) return null;
+
+  for (const asserted of assertedPhrases) {
+    const assertedTokens = tokenizeLocationPhrase(asserted);
+    if (locationTokensOverlap(assertedTokens, authoritativeTokens)) continue;
+    for (const destination of playerDestinations) {
+      const destinationTokens = tokenizeLocationPhrase(destination);
+      if (
+        locationTokensOverlap(assertedTokens, destinationTokens)
+        && !locationTokensOverlap(destinationTokens, authoritativeTokens)
+      ) {
+        return asserted;
+      }
+    }
+  }
+
+  return null;
 }
 
 function normalizePlayerAttributionText(text: unknown): string {
@@ -648,6 +805,19 @@ export function validateTurnQuality(
     return {
       valid: false,
       reason: 'first meeting greeting includes ungrounded player assumptions',
+    };
+  }
+  if (isLikelyGenericAssistantSocialReply(utterance, options)) {
+    return {
+      valid: false,
+      reason: 'social reply sounds like generic assistant filler',
+    };
+  }
+  const locationMismatch = findCurrentLocationMismatch(utterance, playerMessage, options);
+  if (locationMismatch) {
+    return {
+      valid: false,
+      reason: `social reply conflicts with authoritative current location: ${locationMismatch}`,
     };
   }
   if (shouldEnforcePlayerAttributionGrounding(options)) {

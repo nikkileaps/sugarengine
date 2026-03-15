@@ -241,6 +241,7 @@ export class Game {
         new SugarAgentProviderAdapter(this.pluginManager, {
           gameId: config.gameId,
           getCurrentRegion: () => this.engine.getCurrentRegion(),
+          getCurrentRegionInfo: () => this.getRegionInfo(),
           getCurrentEpisode: () => this.config.currentEpisode,
           getNpcInteractionMode: (npcId) => this.getNpcInteractionMode(npcId),
           getNpcInteractionPolicy: (npcId) => this.getNpcInteractionPolicy(npcId),

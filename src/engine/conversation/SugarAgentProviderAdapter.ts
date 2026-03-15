@@ -17,6 +17,7 @@ import type {
 export interface SugarAgentAdapterContext {
   gameId?: string;
   getCurrentRegion(): string | undefined;
+  getCurrentRegionInfo?(): { path: string; name?: string } | null;
   getCurrentEpisode(): string | undefined;
   getNpcInteractionMode(npcId: string): 'scripted' | 'agent' | 'hybrid';
   getNpcInteractionPolicy(npcId: string): 'scripted-first' | 'agent-first' | 'fallback';
@@ -67,6 +68,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
     playerInput?: PlayerInput,
   ): Promise<ProviderTurnOutput> {
     const message = playerInput?.text ?? '';
+    const regionInfo = this.adapterContext.getCurrentRegionInfo?.() ?? null;
 
     // Bridge engine-mediated pedagogy constraints into the agent turn request
     const pedagogyContext: PluginPedagogyContext | undefined =
@@ -123,7 +125,8 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
       playerMessage: message,
       context: {
         gameId: this.adapterContext.gameId,
-        regionPath: this.adapterContext.getCurrentRegion(),
+        regionPath: regionInfo?.path ?? this.adapterContext.getCurrentRegion(),
+        regionName: regionInfo?.name,
         episodeId: this.adapterContext.getCurrentEpisode(),
         interactionMode: this.adapterContext.getNpcInteractionMode(session.npcId),
         interactionPolicy: this.adapterContext.getNpcInteractionPolicy(session.npcId),

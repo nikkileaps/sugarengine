@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PLUGIN_API_VERSION } from '../../engine/plugins';
 import type { SugarAgentAuthoringBundleV1 } from './authoring/artifacts';
 import { createSugarAgentPlugin } from './plugin';
@@ -109,6 +109,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   });
 
   it('requires a reply-parts contract for grounded turns and converts legacy grounded output to uncertainty', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
       runtimeBridge: {
         async health() {
@@ -155,7 +156,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     });
 
     expect(turn?.intent).toBe('uncertain');
-    expect(turn?.utterance.toLowerCase()).toContain('not sure');
+    expect(turn?.utterance.toLowerCase()).toContain("don't know");
     expect(turn?.utterance.toLowerCase()).not.toContain('local language runtime is unavailable');
     expect(turn?.diagnostics?.validation?.decision).toBe('fallback');
     expect(turn?.diagnostics?.validation?.errors?.join(' | ')).toContain('reply-parts contract missing for grounded turn');
@@ -164,6 +165,14 @@ describe('createSugarAgentPlugin (phase 3)', () => {
       success: false,
       failureReason: 'required_but_not_provided_by_runtime',
     });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[sugaragent][fallback][grounding_contract_missing]'),
+      expect.objectContaining({
+        kind: 'grounding_contract_missing',
+        npcId: 'npc-baker',
+      }),
+    );
+    errorSpy.mockRestore();
   });
 
   it('accepts mixed social and factual turns when the runtime supplies reply-parts validation', async () => {
@@ -240,6 +249,187 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(turn?.diagnostics?.validation?.errors?.join(' | ') ?? '').not.toContain('reply-parts contract missing');
   });
 
+  it('trusts evidence-first runtime diagnostics without requiring legacy reply-parts markers', async () => {
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'I think the resort is just outside Earendale.',
+              emotion: 'warm',
+              intent: 'answer_lore',
+              proposedIntents: [],
+              citations: [
+                {
+                  sourceId: 'lore.locations.earendale',
+                  snippet: 'The resort sits just outside Earendale.',
+                },
+              ],
+            }),
+            diagnostics: {
+              pipelineVersion: 'evidence_first_v1',
+              routing: {
+                routeIntent: 'lore_world',
+                queryType: 'world_query',
+                policyPath: 'lore_knowledge',
+              },
+              evidenceFirst: {
+                turnPath: 'grounded',
+              },
+              validation: {
+                decision: 'accept',
+                errors: [],
+                unsupportedClaims: 0,
+                requiresRepair: false,
+                npcOutputValidated: true,
+              },
+              generation: {
+                replyParts: {
+                  attempted: false,
+                  success: false,
+                },
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'what do you know about the resort near here?',
+    });
+
+    expect(turn?.utterance).toContain('just outside Earendale');
+    expect(turn?.diagnostics?.validation?.decision).toBe('accept');
+    expect(turn?.diagnostics?.routing).toMatchObject({
+      routeIntent: 'lore_world',
+      queryType: 'world_query',
+    });
+    expect(turn?.diagnostics?.validation?.errors?.join(' | ') ?? '').not.toContain('reply-parts contract missing');
+  });
+
+  it('trusts deterministic evidence-first runtime fallbacks instead of treating them as provider fallback failures', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'I am not sure. I do not have reliable records about that right now.',
+              emotion: 'neutral',
+              intent: 'uncertain',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            usedFallback: true,
+            fallbackKind: 'deterministic_runtime',
+            diagnostics: {
+              pipelineVersion: 'evidence_first_v1',
+              routing: {
+                routeIntent: 'lore_world',
+                queryType: 'world_query',
+                policyPath: 'lore_knowledge',
+              },
+              evidenceFirst: {
+                turnPath: 'grounded',
+              },
+              retrieval: {
+                attempted: true,
+                candidateCount: 0,
+                selectedCount: 0,
+                qualityPath: 'abstain',
+                qualityReason: 'no_candidates',
+                correctiveAttempted: false,
+              },
+              validation: {
+                decision: 'fallback',
+                errors: [],
+                unsupportedClaims: 0,
+                requiresRepair: true,
+                npcOutputValidated: true,
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'Do you know anything about Earendale?',
+    });
+
+    expect(turn?.intent).toBe('uncertain');
+    expect(turn?.diagnostics?.retrieval?.qualityReason).toBe('no_candidates');
+    expect(turn?.diagnostics?.validation?.decision).toBe('fallback');
+    expect(turn?.diagnostics?.routing).toMatchObject({
+      routeIntent: 'lore_world',
+      queryType: 'world_query',
+    });
+    const snapshot = plugin.serializeState?.() as {
+      runtime?: {
+        lastOutcome?: string;
+      };
+    };
+    expect(snapshot.runtime?.lastOutcome).toBe('deterministic_runtime_fallback');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[sugaragent][fallback][deterministic_runtime]'),
+      expect.objectContaining({
+        kind: 'deterministic_runtime',
+        npcId: 'npc-baker',
+        routeIntent: 'lore_world',
+        queryType: 'world_query',
+        retrievalQualityReason: 'no_candidates',
+      }),
+    );
+    warnSpy.mockRestore();
+  });
+
   it('preserves mixed-initiative decision metadata from provider diagnostics', async () => {
     const plugin = createSugarAgentPlugin({
       runtimeBridge: {
@@ -310,6 +500,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   });
 
   it('uses abstain initiative when provider fails and returns provider-unavailable output', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
       runtimeBridge: {
         async health() {
@@ -350,6 +541,14 @@ describe('createSugarAgentPlugin (phase 3)', () => {
       policyBounded: true,
     });
     expect(turn?.utterance.toLowerCase()).toContain('local language runtime is unavailable');
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[sugaragent][fallback][provider_unavailable]'),
+      expect.objectContaining({
+        kind: 'provider_unavailable',
+        npcId: 'npc-baker',
+      }),
+    );
+    errorSpy.mockRestore();
   });
 
   it('does not run grounding against provider fallback output returned by the runtime bridge', async () => {

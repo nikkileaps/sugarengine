@@ -49,6 +49,7 @@ interface ResolveInitiativePolicyInput {
   noveltyState: NoveltyState;
   beatContract: unknown;
   hasEvidence: boolean;
+  hasDirectAnswerEvidence?: boolean;
   retrievalConfidence: number;
   isFirstMeeting: boolean;
   isLikelyGreetingOnlyMessage?: (playerMessage: unknown) => boolean;
@@ -395,7 +396,10 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
     action = 'abstain';
     initiator = 'npc';
     reason = 'knowledge-turn-missing-evidence';
-  } else if (routingIntent === 'unclear' || (playerHasQuestion && retrievalConfidence < 0.2 && routingIntent !== 'session_recall')) {
+  } else if (
+    (routingIntent === 'unclear' || (playerHasQuestion && retrievalConfidence < 0.2 && routingIntent !== 'session_recall'))
+    && !normalizeBoolean(input.hasDirectAnswerEvidence)
+  ) {
     action = 'clarify';
     initiator = 'npc';
     reason = 'ambiguous-or-low-confidence-intent';

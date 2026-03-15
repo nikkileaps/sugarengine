@@ -98,6 +98,7 @@ export interface PluginPedagogyContext {
 export interface PluginAgentContext {
   gameId?: string;
   regionPath?: string;
+  regionName?: string;
   episodeId?: string;
   interactionMode?: 'scripted' | 'agent' | 'hybrid';
   interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
@@ -140,6 +141,11 @@ export type PluginAgentValidationSource = 'none' | 'npc_output' | 'progression_g
 export type PluginAgentBeatEvaluationStatus = 'passed' | 'failed' | 'not_applicable';
 
 export interface PluginAgentTurnDiagnostics {
+  routing?: {
+    routeIntent?: string;
+    queryType?: string;
+    policyPath?: string;
+  };
   mode?: PluginAgentConversationMode;
   modeReason?: string;
   modeResolution?: {
@@ -194,7 +200,14 @@ export interface PluginAgentTurnDiagnostics {
     selectedCount?: number;
     qualityPath?: string;
     qualityReason?: string;
+    qualityGatePassed?: boolean;
     correctiveAttempted?: boolean;
+  };
+  authoring?: {
+    available?: boolean;
+    path?: string;
+    missingGameBundle?: boolean;
+    errorMessage?: string;
   };
   validation?: {
     decision?: PluginAgentValidationDecision;

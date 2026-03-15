@@ -25,6 +25,7 @@ export interface NPCMovementDefinition {
 
 export interface NPCDefinition {
   id: string;
+  npcId?: string;
   position: Vec3;
   movement?: NPCMovementDefinition;
 }

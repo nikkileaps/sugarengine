@@ -15,7 +15,7 @@ import type {
 import { LocalLLMProvider } from './providers/llm/LocalLLMProvider';
 import type { LLMGenerateResult } from './providers/llm/types';
 import type { LocalRuntimeBridge } from './runtime';
-import { HttpLocalRuntimeBridge, TauriLocalRuntimeBridge } from './runtime';
+import { HttpLocalRuntimeBridge } from './runtime';
 import type { SugarAgentAuthoringBundleV1 } from './authoring/artifacts';
 import {
   isObjectiveActiveInQuestSnapshot,
@@ -62,6 +62,8 @@ export interface SugarAgentPluginOptions {
   runtimeMode?: 'llama' | 'auto' | 'mock';
   /**
    * Optional packed authoring bundle resolved outside engine core.
+   * This is appropriate for export/build style entrypoints that hand the plugin a prepacked artifact.
+   * Normal preview/game runtime should usually derive SugarAgent authoring from project data in memory.
    */
   authoringBundle?: SugarAgentAuthoringBundleV1 | null;
 }
@@ -137,7 +139,15 @@ export interface SugarAgentRuntimeStatusV1 {
   provider: 'local' | 'deterministic';
   healthy: boolean;
   detail?: string;
-  lastOutcome?: 'ready' | 'provider_ok' | 'provider_fallback_validation' | 'provider_error' | 'provider_unavailable';
+  lastOutcome?:
+    | 'ready'
+    | 'provider_ok'
+    | 'validation_fallback'
+    | 'deterministic_runtime_fallback'
+    | 'grounding_contract_missing'
+    | 'beat_turn_budget_fallback'
+    | 'provider_error'
+    | 'provider_unavailable';
   lastAttempts?: number;
   lastValidationErrors?: string[];
   lastTurnDiagnostics?: PluginAgentTurnDiagnostics;
@@ -171,6 +181,113 @@ function toSafeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+type SugarAgentLoggedFallbackKind =
+  | 'provider_unavailable'
+  | 'provider_error'
+  | 'validation_fallback'
+  | 'deterministic_runtime'
+  | 'grounding_contract_missing'
+  | 'beat_turn_budget';
+
+function normalizeLoggedFallbackKind(value: unknown): SugarAgentLoggedFallbackKind | undefined {
+  return value === 'provider_unavailable'
+    || value === 'provider_error'
+    || value === 'validation_fallback'
+    || value === 'deterministic_runtime'
+    || value === 'grounding_contract_missing'
+    || value === 'beat_turn_budget'
+    ? value
+    : undefined;
+}
+
+function fallbackReasonLabel(kind: SugarAgentLoggedFallbackKind | undefined): string | undefined {
+  if (kind === 'provider_unavailable') return 'provider-unavailable';
+  if (kind === 'provider_error') return 'provider-error';
+  if (kind === 'validation_fallback') return 'validation-fallback';
+  if (kind === 'deterministic_runtime') return 'deterministic-runtime-fallback';
+  if (kind === 'grounding_contract_missing') return 'grounding-contract-missing';
+  if (kind === 'beat_turn_budget') return 'beat-turn-budget-fallback';
+  return undefined;
+}
+
+function fallbackOutcomeLabel(kind: SugarAgentLoggedFallbackKind | undefined): SugarAgentRuntimeStatusV1['lastOutcome'] | undefined {
+  if (kind === 'provider_unavailable') return 'provider_unavailable';
+  if (kind === 'provider_error') return 'provider_error';
+  if (kind === 'validation_fallback') return 'validation_fallback';
+  if (kind === 'deterministic_runtime') return 'deterministic_runtime_fallback';
+  if (kind === 'grounding_contract_missing') return 'grounding_contract_missing';
+  if (kind === 'beat_turn_budget') return 'beat_turn_budget_fallback';
+  return undefined;
+}
+
+function fallbackLogSeverity(kind: SugarAgentLoggedFallbackKind): 'warn' | 'error' {
+  if (kind === 'provider_unavailable' || kind === 'provider_error' || kind === 'grounding_contract_missing') {
+    return 'error';
+  }
+  return 'warn';
+}
+
+function emitFallbackLog(input: {
+  npcId: string;
+  kind: SugarAgentLoggedFallbackKind;
+  stage: string;
+  routeIntent?: string;
+  queryType?: string;
+  attempts?: number;
+  validationDecision?: string;
+  validationErrors?: string[];
+  retrievalAttempted?: boolean;
+  retrievalCandidateCount?: number;
+  retrievalSelectedCount?: number;
+  retrievalQualityPath?: string;
+  retrievalQualityReason?: string;
+  retrievalQualityGatePassed?: boolean;
+  correctiveAttempted?: boolean;
+  replyPartsAttempted?: boolean;
+  replyPartsSuccess?: boolean;
+  replyPartsFailureReason?: string;
+  returnedCitations?: number;
+  detail?: string;
+}): void {
+  const severity = fallbackLogSeverity(input.kind);
+  const summary = [
+    `npc=${input.npcId}`,
+    `stage=${input.stage}`,
+    `route=${input.routeIntent ?? 'unknown'}`,
+    `qt=${input.queryType ?? 'conversation'}`,
+    `validation=${input.validationDecision ?? 'fallback'}`,
+    `retrieval=${input.retrievalQualityReason ?? 'unknown'}`,
+    `candidates=${input.retrievalCandidateCount ?? 0}/${input.retrievalSelectedCount ?? 0}`,
+  ].join(' ');
+  const payload = {
+    npcId: input.npcId,
+    kind: input.kind,
+    stage: input.stage,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    attempts: input.attempts,
+    validationDecision: input.validationDecision,
+    validationErrors: input.validationErrors ?? [],
+    retrievalAttempted: input.retrievalAttempted ?? false,
+    retrievalCandidateCount: input.retrievalCandidateCount ?? 0,
+    retrievalSelectedCount: input.retrievalSelectedCount ?? 0,
+    retrievalQualityPath: input.retrievalQualityPath ?? 'unknown',
+    retrievalQualityReason: input.retrievalQualityReason ?? 'unknown',
+    retrievalQualityGatePassed: input.retrievalQualityGatePassed ?? false,
+    retrievalCorrectiveAttempted: input.correctiveAttempted ?? false,
+    replyPartsAttempted: input.replyPartsAttempted ?? false,
+    replyPartsSuccess: input.replyPartsSuccess ?? false,
+    replyPartsFailureReason: input.replyPartsFailureReason,
+    returnedCitations: input.returnedCitations ?? 0,
+    detail: input.detail,
+  };
+  if (severity === 'error') {
+    console.error(`[sugaragent][fallback][${input.kind}] ${summary}`, payload);
+    return;
+  }
+  console.warn(`[sugaragent][fallback][${input.kind}] ${summary}`, payload);
+}
+
 function toSafeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return value;
@@ -187,6 +304,7 @@ function enforcePreviewGrounding(
       | 'skipped-provider-fallback'
       | 'skipped-runtime-grounding-not-required'
       | 'trusted-runtime-grounding'
+      | 'trusted-evidence-first-runtime'
       | 'missing-reply-parts-contract';
     routeIntent: string;
     queryType: string;
@@ -205,7 +323,42 @@ function enforcePreviewGrounding(
   const providerReplyParts = isRecord(providerGeneration.replyParts)
     ? providerGeneration.replyParts
     : {};
+  const providerPipelineVersion = toSafeString(generated.diagnostics?.pipelineVersion)
+    ?? toSafeString((generated.diagnostics as Record<string, unknown> | undefined)?.version);
+  const providerEvidenceFirst = isRecord((generated.diagnostics as Record<string, unknown> | undefined)?.evidenceFirst)
+    ? ((generated.diagnostics as Record<string, unknown>).evidenceFirst as Record<string, unknown>)
+    : null;
+  const providerRouting = isRecord((generated.diagnostics as Record<string, unknown> | undefined)?.routing)
+    ? ((generated.diagnostics as Record<string, unknown>).routing as Record<string, unknown>)
+    : null;
   const providerValidationDecision = toSafeString(providerValidation.decision);
+  if (
+    providerPipelineVersion === 'evidence_first_v1'
+    || isRecord(providerEvidenceFirst)
+  ) {
+    const routing = routeTurnIntent(request.playerMessage, request.npcName ?? request.npcId);
+    const resolvedRouteIntent = toSafeString(providerRouting?.routeIntent) ?? routing.intent;
+    const resolvedQueryType = toSafeString(providerRouting?.queryType) ?? routeIntentToQueryType(resolvedRouteIntent);
+    return {
+      generated,
+      usedGroundingFallback: false,
+      groundingDebug: {
+        stage: 'trusted-evidence-first-runtime',
+        routeIntent: resolvedRouteIntent,
+        queryType: resolvedQueryType,
+        evidenceCount: Array.isArray(generated.output.citations) ? generated.output.citations.length : 0,
+        decision: providerValidationDecision === 'fallback'
+          ? 'fallback'
+          : providerValidationDecision === 'repair'
+            ? 'repair'
+            : 'accept',
+        unsupportedClaims: typeof providerValidation.unsupportedClaims === 'number'
+          ? providerValidation.unsupportedClaims
+          : 0,
+        requiresRepair: providerValidation.requiresRepair === true,
+      },
+    };
+  }
   if (generated.usedFallback) {
     return {
       generated,
@@ -221,7 +374,6 @@ function enforcePreviewGrounding(
       },
     };
   }
-
   const npcName = request.npcName ?? request.npcId;
   const routing = routeTurnIntent(request.playerMessage, npcName);
   const queryType = routeIntentToQueryType(routing.intent);
@@ -473,10 +625,6 @@ function normalizeInteractionPolicy(value: unknown): RuntimeInteractionPolicyInp
   return 'unknown';
 }
 
-function isTauriRuntimeEnvironment(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
-}
-
 function resolveTurnMode(options: {
   interactionMode: unknown;
   interactionPolicy: unknown;
@@ -586,6 +734,7 @@ function normalizeTurnDiagnostics(
     hasBeatContract: boolean;
     previousMode?: PluginAgentTurnDiagnostics['mode'];
     usedFallback: boolean;
+    fallbackReason?: string;
     validationErrors: string[];
     timestamp: number;
   },
@@ -635,7 +784,7 @@ function normalizeTurnDiagnostics(
         action: 'abstain',
         primaryGoal: 'repair_goal',
         expectedPlayerResponseType: 'free_text',
-        reason: 'provider-fallback',
+        reason: options.fallbackReason ?? 'fallback',
         policyBounded: true,
       }
       : defaultInitiativeForMode(mode)),
@@ -654,7 +803,7 @@ function normalizeTurnDiagnostics(
       candidateCount: 0,
       selectedCount: 0,
       qualityPath: 'not_required',
-      qualityReason: 'provider-unavailable',
+      qualityReason: options.fallbackReason ?? 'not_required',
       correctiveAttempted: false,
     },
     validation: {
@@ -951,13 +1100,19 @@ function parseRuntimeStatus(raw: unknown, now: number): SugarAgentRuntimeStatusV
       ? 'deterministic'
       : null;
   if (!provider) return null;
-  const lastOutcome = raw.lastOutcome === 'ready'
-    || raw.lastOutcome === 'provider_ok'
-    || raw.lastOutcome === 'provider_fallback_validation'
-    || raw.lastOutcome === 'provider_error'
-    || raw.lastOutcome === 'provider_unavailable'
-    ? raw.lastOutcome
-    : undefined;
+  const rawLastOutcome = toSafeString(raw.lastOutcome);
+  const lastOutcome = rawLastOutcome === 'provider_fallback_validation'
+    ? 'validation_fallback'
+    : rawLastOutcome === 'ready'
+      || rawLastOutcome === 'provider_ok'
+      || rawLastOutcome === 'validation_fallback'
+      || rawLastOutcome === 'deterministic_runtime_fallback'
+      || rawLastOutcome === 'grounding_contract_missing'
+      || rawLastOutcome === 'beat_turn_budget_fallback'
+      || rawLastOutcome === 'provider_error'
+      || rawLastOutcome === 'provider_unavailable'
+      ? rawLastOutcome
+      : undefined;
   return {
     provider,
     healthy: raw.healthy === true,
@@ -1099,15 +1254,6 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     if (options.disableProvider) return null;
     if (options.runtimeBridge) return options.runtimeBridge;
     if (typeof window !== 'undefined') {
-      if (isTauriRuntimeEnvironment()) {
-        return new TauriLocalRuntimeBridge({
-          runtimeMode: resolvedRuntimeMode,
-          // Keep preview/dev parity when native command surface is not available yet.
-          fallbackBridge: new HttpLocalRuntimeBridge({
-            runtimeMode: resolvedRuntimeMode,
-          }),
-        });
-      }
       return new HttpLocalRuntimeBridge({
         runtimeMode: resolvedRuntimeMode,
       });
@@ -1265,6 +1411,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const runtimeContext = {
       gameId: request.context?.gameId,
       regionPath: request.context?.regionPath,
+      regionName: request.context?.regionName,
       episodeId: request.context?.episodeId,
       runtimeMode: resolvedRuntimeMode,
       interactionMode,
@@ -1281,6 +1428,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         hasBeatContract: true,
         previousMode,
         usedFallback: true,
+        fallbackReason: 'beat-turn-budget-fallback',
         validationErrors: ['turn-budget-exhausted-fallback-routed'],
         timestamp: now,
       });
@@ -1303,6 +1451,22 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
       };
       diagnostics.timestampMs = now;
       recordLastTurnDiagnostics(diagnostics);
+      emitFallbackLog({
+        npcId: request.npcId,
+        kind: 'beat_turn_budget',
+        stage: 'beat-turn-budget',
+        routeIntent: 'beat',
+        queryType: 'conversation',
+        validationDecision: diagnostics.validation?.decision,
+        validationErrors: diagnostics.validation?.errors ?? [],
+        retrievalAttempted: diagnostics.retrieval?.attempted ?? false,
+        retrievalCandidateCount: diagnostics.retrieval?.candidateCount ?? 0,
+        retrievalSelectedCount: diagnostics.retrieval?.selectedCount ?? 0,
+        retrievalQualityPath: diagnostics.retrieval?.qualityPath ?? 'not_required',
+        retrievalQualityReason: diagnostics.retrieval?.qualityReason ?? 'turn-budget-exhausted-fallback-routed',
+        retrievalQualityGatePassed: diagnostics.retrieval?.qualityGatePassed ?? false,
+        returnedCitations: 0,
+      });
 
       const actions: NonNullable<PluginAgentTurnResult['actions']> = [];
       if (beatContract.fallbackScriptId) {
@@ -1346,12 +1510,19 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         } = enforcePreviewGrounding(generatedFromProvider, request);
         const usedProviderFallback = generatedFromProvider.usedFallback;
         const usedFallback = usedProviderFallback || usedGroundingFallback;
+        const providerFallbackKind = normalizeLoggedFallbackKind(generatedFromProvider.fallbackKind);
+        const preliminaryFallbackKind = usedGroundingFallback
+          ? 'grounding_contract_missing'
+          : usedProviderFallback
+            ? (providerFallbackKind === 'provider_unavailable' ? 'provider_unavailable' : 'validation_fallback')
+            : providerFallbackKind;
         const diagnostics = normalizeTurnDiagnostics(generated.diagnostics, {
           interactionMode,
           interactionPolicy,
           hasBeatContract: Boolean(beatContract),
           previousMode,
           usedFallback,
+          fallbackReason: fallbackReasonLabel(preliminaryFallbackKind),
           validationErrors: generated.validationErrors,
           timestamp: now,
         });
@@ -1388,6 +1559,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
             retrievalSelectedCount: diagnostics.retrieval?.selectedCount ?? 0,
             retrievalQualityPath: diagnostics.retrieval?.qualityPath ?? 'unknown',
             retrievalQualityReason: diagnostics.retrieval?.qualityReason ?? 'unknown',
+            retrievalQualityGatePassed: diagnostics.retrieval?.qualityGatePassed ?? false,
             retrievalCorrectiveAttempted: diagnostics.retrieval?.correctiveAttempted ?? false,
             replyPartsAttempted: diagnostics.generation?.replyParts?.attempted ?? false,
             replyPartsSuccess: diagnostics.generation?.replyParts?.success ?? false,
@@ -1401,42 +1573,47 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
             returnedCitations: Array.isArray(generated.output.citations) ? generated.output.citations.length : 0,
           });
         }
+        const validationDecision = diagnostics.validation?.decision;
+        const loggedFallbackKind = normalizeLoggedFallbackKind(
+          usedGroundingFallback
+            ? 'grounding_contract_missing'
+            : usedProviderFallback
+              ? (providerFallbackKind === 'provider_unavailable' ? 'provider_unavailable' : 'validation_fallback')
+              : validationDecision === 'fallback'
+                ? (providerFallbackKind ?? 'deterministic_runtime')
+                : undefined,
+        );
         updateRuntimeStatus({
           provider: 'local',
           healthy: true,
-          detail: usedProviderFallback
-            ? (generated.fallbackKind === 'provider_unavailable' ? 'provider-unavailable' : 'validation-fallback')
-            : usedGroundingFallback
-              ? 'grounding-fallback'
-              : 'provider-ok',
-          lastOutcome: usedFallback
-            ? (generated.fallbackKind === 'provider_unavailable' ? 'provider_unavailable' : 'provider_fallback_validation')
-            : 'provider_ok',
+          detail: fallbackReasonLabel(loggedFallbackKind) ?? 'provider-ok',
+          lastOutcome: fallbackOutcomeLabel(loggedFallbackKind) ?? 'provider_ok',
           lastAttempts: generated.attempts,
           lastValidationErrors: generated.validationErrors.slice(-3),
           lastTurnDiagnostics: diagnostics,
         });
-        if (usedProviderFallback) {
-          if (generated.fallbackKind === 'provider_unavailable') {
-            console.warn('[sugaragent] Local provider is unavailable; returning provider-unavailable output.', {
-              npcId: request.npcId,
-              attempts: generated.attempts,
-              errors: generated.validationErrors,
-            });
-          } else {
-            console.warn('[sugaragent] Local provider returned fallback output after validation failures.', {
-              npcId: request.npcId,
-              attempts: generated.attempts,
-              errors: generated.validationErrors,
-            });
-          }
-        }
-        if (usedGroundingFallback) {
-          console.warn('[sugaragent] Reply-parts contract was missing for a grounded turn; returning uncertainty response.', {
+        if (loggedFallbackKind) {
+          emitFallbackLog({
             npcId: request.npcId,
+            kind: loggedFallbackKind,
+            stage: groundingDebug.stage,
             routeIntent: groundingDebug.routeIntent,
             queryType: groundingDebug.queryType,
-            errors: generated.validationErrors,
+            attempts: generated.attempts,
+            validationDecision,
+            validationErrors: diagnostics.validation?.errors ?? [],
+            retrievalAttempted: diagnostics.retrieval?.attempted ?? false,
+            retrievalCandidateCount: diagnostics.retrieval?.candidateCount ?? 0,
+            retrievalSelectedCount: diagnostics.retrieval?.selectedCount ?? 0,
+            retrievalQualityPath: diagnostics.retrieval?.qualityPath ?? 'unknown',
+            retrievalQualityReason: diagnostics.retrieval?.qualityReason ?? 'unknown',
+            retrievalQualityGatePassed: diagnostics.retrieval?.qualityGatePassed ?? false,
+            correctiveAttempted: diagnostics.retrieval?.correctiveAttempted ?? false,
+            replyPartsAttempted: diagnostics.generation?.replyParts?.attempted ?? false,
+            replyPartsSuccess: diagnostics.generation?.replyParts?.success ?? false,
+            replyPartsFailureReason: diagnostics.generation?.replyParts?.failureReason,
+            returnedCitations: Array.isArray(generated.output.citations) ? generated.output.citations.length : 0,
+            detail: fallbackReasonLabel(loggedFallbackKind),
           });
         }
         const providerTurn = usedProviderFallback && generated.fallbackKind === 'provider_unavailable'
@@ -1460,17 +1637,27 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           hasBeatContract: Boolean(beatContract),
           previousMode,
           usedFallback: true,
+          fallbackReason: 'provider-error',
           validationErrors: [`provider-error: ${detail}`],
           timestamp: now,
         });
         updateRuntimeStatus({
           provider: 'local',
           healthy: false,
-          detail,
+          detail: 'provider-error',
           lastOutcome: 'provider_error',
           lastTurnDiagnostics: diagnostics,
         });
-        console.warn('[sugaragent] Local provider failed in runAgentTurn, using deterministic fallback.', error);
+        emitFallbackLog({
+          npcId: request.npcId,
+          kind: 'provider_error',
+          stage: 'runAgentTurn-catch',
+          routeIntent: 'unknown',
+          queryType: 'conversation',
+          validationDecision: diagnostics.validation?.decision,
+          validationErrors: diagnostics.validation?.errors ?? [],
+          detail,
+        });
         turn = buildProviderUnavailableTurn(request.npcName);
         turn = {
           ...turn,
@@ -1484,6 +1671,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         hasBeatContract: Boolean(beatContract),
         previousMode,
         usedFallback: true,
+        fallbackReason: 'provider-unavailable',
         validationErrors: ['provider-unavailable'],
         timestamp: now,
       });
@@ -1493,6 +1681,16 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         detail: 'provider-unavailable',
         lastOutcome: 'provider_unavailable',
         lastTurnDiagnostics: diagnostics,
+      });
+      emitFallbackLog({
+        npcId: request.npcId,
+        kind: 'provider_unavailable',
+        stage: 'no-provider',
+        routeIntent: 'unknown',
+        queryType: 'conversation',
+        validationDecision: diagnostics.validation?.decision,
+        validationErrors: diagnostics.validation?.errors ?? [],
+        detail: 'provider unavailable',
       });
       turn = buildProviderUnavailableTurn(request.npcName);
       turn = {
@@ -1625,7 +1823,9 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     try {
       const health = await provider.health();
       if (!health.ok) {
-        console.warn('[sugaragent] Local provider unavailable; runAgentTurn will return provider-unavailable abstain output.', health.detail);
+        console.error('[sugaragent][provider][provider_unavailable] initialization-health-check-failed', {
+          detail: health.detail,
+        });
         localProvider = null;
         updateRuntimeStatus({
           provider: 'deterministic',
@@ -1643,9 +1843,11 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         lastOutcome: 'ready',
       });
     } catch (error) {
-      console.warn('[sugaragent] Failed to initialize local provider; runAgentTurn will return provider-unavailable abstain output.', error);
       localProvider = null;
       const detail = error instanceof Error ? error.message : String(error);
+      console.error('[sugaragent][provider][provider_unavailable] initialization-exception', {
+        detail,
+      });
       updateRuntimeStatus({
         provider: 'deterministic',
         healthy: false,

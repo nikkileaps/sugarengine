@@ -138,8 +138,8 @@ export function SpawnInspector({
           <Select
             label="NPC"
             data={npcs.map((n) => ({ value: n.id, label: n.name }))}
-            value={(spawn.data as NPCDefinition).id}
-            onChange={(val) => updateData({ id: val || '' })}
+            value={(spawn.data as NPCDefinition).npcId}
+            onChange={(val) => updateData({ npcId: val || '' })}
             searchable
             size="sm"
           />

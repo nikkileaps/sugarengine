@@ -78,4 +78,71 @@ describe('initiative', () => {
     expect(decision.primaryGoal).toBe('beat_goal');
     expect(decision.expectedPlayerResponseType).toBe('choice');
   });
+
+  it('does not clarify a self query when self evidence is already available', () => {
+    const policy = resolveInitiativePolicy({
+      mode: 'character',
+      routingIntent: 'identity_self',
+      queryType: 'self_query',
+      playerMessage: "What's your name?",
+      playerHasQuestion: true,
+      turnIndexWithNpc: 0,
+      noveltyState: {
+        turnPressure: false,
+        repeatedNpcReplyRisk: false,
+        activeTopic: null,
+        activeTopicNovelty: null,
+        exhaustedTopics: [],
+        trackedTopicCount: 0,
+        playerTopics: [],
+        topicExhausted: false,
+        exhausted: false,
+        initiativeHistory: {
+          recentNpcQuestionCount: 0,
+          recentNpcReplyCount: 0,
+          repeatedNpcReplyRisk: false,
+        },
+      },
+      beatContract: null,
+      hasEvidence: true,
+      retrievalConfidence: 0.76,
+      isFirstMeeting: true,
+    });
+
+    expect(policy.decision.action).toBe('player_respond');
+  });
+
+  it('does not clarify an unclear question when direct answer evidence is already available', () => {
+    const policy = resolveInitiativePolicy({
+      mode: 'character',
+      routingIntent: 'unclear',
+      queryType: 'conversation',
+      playerMessage: 'Where are we right now?',
+      playerHasQuestion: true,
+      turnIndexWithNpc: 1,
+      noveltyState: {
+        turnPressure: false,
+        repeatedNpcReplyRisk: false,
+        activeTopic: null,
+        activeTopicNovelty: null,
+        exhaustedTopics: [],
+        trackedTopicCount: 0,
+        playerTopics: [],
+        topicExhausted: false,
+        exhausted: false,
+        initiativeHistory: {
+          recentNpcQuestionCount: 0,
+          recentNpcReplyCount: 0,
+          repeatedNpcReplyRisk: false,
+        },
+      },
+      beatContract: null,
+      hasEvidence: true,
+      hasDirectAnswerEvidence: true,
+      retrievalConfidence: 0.42,
+      isFirstMeeting: false,
+    });
+
+    expect(policy.decision.action).toBe('player_respond');
+  });
 });

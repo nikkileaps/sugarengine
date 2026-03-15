@@ -25,6 +25,7 @@ export interface Vec3 {
 
 export interface NPCDefinition {
   id: string;
+  npcId: string;
   position: Vec3;
 }
 
@@ -115,8 +116,23 @@ interface RegionPanelProps {
   children: (result: RegionPanelResult) => ReactNode;
 }
 
+/**
+ * Migrate legacy NPC spawns that used `id` as the NPC reference.
+ * New format: `id` = spawn UUID, `npcId` = NPC reference.
+ */
+function migrateNpcSpawns(region: RegionEntry): RegionEntry {
+  if (!region.npcs?.length) return region;
+  let migrated = false;
+  const npcs = region.npcs.map((npc) => {
+    if (npc.npcId) return npc;
+    migrated = true;
+    return { id: generateUUID(), npcId: npc.id, position: npc.position };
+  });
+  return migrated ? { ...region, npcs } : region;
+}
+
 export function RegionPanel({
-  regions,
+  regions: rawRegions,
   onRegionsChange,
   npcs = [],
   items = [],
@@ -126,6 +142,7 @@ export function RegionPanel({
   episodes = [],
   children,
 }: RegionPanelProps) {
+  const regions = rawRegions.map(migrateNpcSpawns);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedSpawnId, setSelectedSpawnId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');

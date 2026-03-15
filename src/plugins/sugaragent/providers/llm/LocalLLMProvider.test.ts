@@ -151,6 +151,69 @@ describe('LocalLLMProvider', () => {
     expect(result.diagnostics?.validation?.decision).toBe('fallback');
   });
 
+  it('does not treat deterministic evidence-first runtime fallbacks as provider failures', async () => {
+    const provider = new LocalLLMProvider({
+      runtime: {
+        async health() {
+          return { ok: true };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'I am not sure. I do not have reliable records about that right now.',
+              emotion: 'neutral',
+              intent: 'uncertain',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            usedFallback: true,
+            fallbackKind: 'deterministic_runtime',
+            diagnostics: {
+              pipelineVersion: 'evidence_first_v1',
+              validation: {
+                decision: 'fallback',
+                errors: [],
+                unsupportedClaims: 0,
+                requiresRepair: true,
+              },
+              retrieval: {
+                attempted: true,
+                candidateCount: 0,
+                selectedCount: 0,
+                qualityPath: 'abstain',
+                qualityReason: 'no_candidates',
+                correctiveAttempted: false,
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+
+    const result = await provider.generateStructured({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'Do you know anything about Earendale?',
+    });
+
+    expect(result.usedFallback).toBe(false);
+    expect(result.fallbackKind).toBe('deterministic_runtime');
+    expect(result.output.intent).toBe('uncertain');
+    expect(result.diagnostics?.validation?.decision).toBe('fallback');
+    expect(result.diagnostics?.retrieval?.qualityReason).toBe('no_candidates');
+  });
+
   it('forwards npc profile, global safety bounds, and context to the runtime bridge', async () => {
     let capturedRequest: any = null;
     const provider = new LocalLLMProvider({

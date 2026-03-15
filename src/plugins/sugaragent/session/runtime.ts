@@ -14,7 +14,6 @@ import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   loadLoreArtifacts,
-  retrieveLoreChunks,
 } from '../lore/lore-lib';
 import {
   DEFAULT_MODEL_PROFILE,
@@ -22,6 +21,7 @@ import {
 } from '../runtime/model-profiles';
 import {
   isKnowledgeSeekingQueryType,
+  refineRouteWithLoreEntityMentions,
   routeIntentToQueryType,
   routeIntentUsesLore,
   routeTurnIntent,
@@ -41,7 +41,6 @@ import {
 import {
   REPLY_PARTS_JSON_SCHEMA,
   buildReplyPartsPrompt,
-  buildReplyPartsRepairPrompt,
   buildSupportSlotsFromGroundingEvidence,
   filterSupportSlotsForQueryType,
   materializeTurnOutputFromReplyParts,
@@ -55,6 +54,47 @@ import {
 import {
   createGroundedUncertaintyReply,
 } from './core/turn-realization';
+import {
+  runEvidenceFirstPipeline,
+  buildNpcStateSnapshot,
+  enrichEvidencePackWithEpistemics,
+  hasDirectAnswerableStateEvidence,
+  isEvidenceItemRelevantForTurn,
+} from './core/evidence-first-pipeline';
+import {
+  resolveLanguageAdaptationContext,
+} from './core/language-adaptation';
+import {
+  runGovernedLoreRetrieval,
+} from './core/retrieval-pipeline';
+import {
+  buildEvidencePack,
+  resolveConversationMode,
+} from './core/retrieval-governance';
+import {
+  resolveInitiativePolicy,
+} from './core/initiative';
+import {
+  hasLikelyQuestionForm,
+} from './core/routing';
+import {
+  computeNoveltyState,
+} from './core/turn-planning';
+import {
+  extractNpcCommitments,
+  filterMemoryWrites,
+} from './core/memory-provenance';
+import {
+  verifyRealizationAgainstPlan,
+} from './core/semantic/verification';
+import {
+  extractDeclaredIdentityName,
+  isLikelyGreetingOnlyMessage,
+  validateTurnQuality,
+} from './core/turn-quality';
+import {
+  checkSocialResponseForFactualLeakage,
+} from './core/turn-path-routing';
 
 const execFileAsync = promisify(execFile);
 const BUNDLE_ROOT = path.resolve('src/plugins/sugaragent/runtime/bundle');
@@ -161,18 +201,310 @@ function sanitizeRuntimeOutput(text) {
   return withoutAnsi.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
+function computeEvidenceBackedRetrievalConfidence(input) {
+  const queryType = input?.queryType;
+  const routeIntent = input?.routeIntent;
+  const retrievalMatches = Array.isArray(input?.retrievalMatches) ? input.retrievalMatches : [];
+  const evidenceItems = Array.isArray(input?.evidenceItems) ? input.evidenceItems : [];
+
+  if (retrievalMatches.length > 0) return 0.7;
+
+  const npcEvidenceCount = evidenceItems.filter((item) => item?.ownerType === 'npc' || item?.ownerType === 'beat').length;
+  if ((queryType === 'self_query' || routeIntent === 'identity_self') && npcEvidenceCount > 0) {
+    return 0.76;
+  }
+  if (evidenceItems.length > 0) return 0.42;
+  return 0.1;
+}
+
 function parseReplyPartsTurnFromText(text) {
   if (typeof text !== 'string' || text.trim().length === 0) return null;
   return parseReplyPartsResponseDetailed(text).turn;
 }
 
-function fallbackOutput(playerMessage) {
+function buildValidatedPlanSupportSlots(input) {
+  const plan = isRecord(input?.plan) ? input.plan : {};
+  const claims = Array.isArray(plan.claims) ? plan.claims : [];
+  const evidenceIdToItem = input?.evidencePack?.evidenceIdToItem instanceof Map
+    ? input.evidencePack.evidenceIdToItem
+    : new Map();
+  const allowedSourceIds = new Set();
+  for (const claim of claims) {
+    if (!isRecord(claim) || !Array.isArray(claim.evidenceIds)) continue;
+    for (const evidenceId of claim.evidenceIds) {
+      const item = evidenceIdToItem.get(evidenceId);
+      const sourceId = normalizeOptionalString(item?.sourceId);
+      if (sourceId) allowedSourceIds.add(sourceId);
+    }
+  }
+  if (allowedSourceIds.size === 0) return [];
+
+  const evidenceEntries = Array.isArray(input?.evidenceEntries) ? input.evidenceEntries : [];
+  const filteredEvidenceEntries = evidenceEntries.filter((entry) => allowedSourceIds.has(entry.sourceId));
+  return filterSupportSlotsForQueryType({
+    supportSlots: buildSupportSlotsFromGroundingEvidence({
+      evidenceEntries: filteredEvidenceEntries,
+      selfEntityId: input?.selfEntityId,
+      npcId: input?.npcId,
+      maxSlots: 6,
+    }),
+    queryType: input?.queryType,
+  });
+}
+
+function buildPlanBoundReplyPartsPrompt(input) {
+  const basePrompt = buildReplyPartsPrompt({
+    npcName: input.npcName,
+    playerMessage: input.playerMessage,
+    queryType: input.queryType,
+    routeIntent: input.routeIntent,
+    supportSlots: input.supportSlots,
+  });
+  const plan = isRecord(input.plan) ? input.plan : {};
+  const claims = Array.isArray(plan.claims) ? plan.claims : [];
+  const planLines = [
+    'Validated plan:',
+    `- Speech act: ${sanitizePromptText(plan.speechAct || 'chat')}`,
+    `- Route intent: ${sanitizePromptText(plan.routeIntent || input.routeIntent || 'unknown')}`,
+  ];
+
+  if (claims.length === 0) {
+    planLines.push('- No factual claims are allowed in this reply.');
+  } else {
+    planLines.push('- Allowed factual claims:');
+    claims.slice(0, 4).forEach((claim, index) => {
+      const evidenceIds = Array.isArray(claim?.evidenceIds) ? claim.evidenceIds.join(', ') : '';
+      const mode = sanitizePromptText(claim?.mode || 'grounded');
+      const requiredHedge = sanitizePromptText(claim?.requiredHedge || 'none');
+      const text = sanitizePromptText(claim?.text || '');
+      planLines.push(`  ${index + 1}. [mode=${mode}; hedge=${requiredHedge}] ${text}${evidenceIds ? ` [evidence=${evidenceIds}]` : ''}`);
+    });
+  }
+
+  planLines.push('You may paraphrase or combine the allowed claims, but you must not add new facts.');
+  planLines.push('Preserve certainty level exactly:');
+  planLines.push('- grounded: no hedge required');
+  planLines.push('- inferred: use a soft hedge such as "I think" or "it seems"');
+  planLines.push('- rumor: use a strong hedge such as "I heard" or "people say"');
+  planLines.push('If the validated plan is uncertain, return an uncertain part instead of guessing.');
+
+  return `${basePrompt}\n${planLines.join('\n')}`;
+}
+
+function buildSocialFastReplyPartsPrompt(input) {
+  const npcName = input?.npcName;
+  const playerMessage = input?.playerMessage;
+  const turnContext = isRecord(input?.turnContext)
+    ? {
+      ...input.turnContext,
+      queryType: 'conversation',
+      routingIntent: 'social_chat',
+    }
+    : {
+      queryType: 'conversation',
+      routingIntent: 'social_chat',
+    };
+
+  const blocks = [
+    `You are ${sanitizePromptText(npcName || 'NPC')}, an NPC in a game.`,
+    'This is a social fast-path turn. The player is not asking for grounded lore.',
+    'Reply naturally and in character. Sound like a person in the world, not a generic assistant.',
+    'Keep the visible reply concise: 1 to 2 short sentences.',
+    'Prefer exactly one social part unless a second social part helps the flow.',
+    'Do not use grounded parts.',
+    'Do not use uncertain parts.',
+    'Do not invent world facts, quest facts, location facts, or private player facts.',
+    'Do not dump biography or backstory unless the player directly asks.',
+    'If the player greets you, greet them naturally.',
+    'If the player introduces themselves, acknowledge that naturally.',
+    'Avoid generic filler like "Tell me more", "What can I help with?", or "Could you clarify?" unless it is truly necessary.',
+    buildGlobalSafetyBlock(input?.globalSafetyBounds),
+    buildNpcProfileBlock(input?.npcProfile),
+    buildTurnContextBlock(turnContext),
+    buildMemoryFactBlock(input?.memoryFacts),
+    buildHistoryBlock(input?.history),
+    buildReplyPartsPrompt({
+      npcName,
+      playerMessage,
+      queryType: 'conversation',
+      routeIntent: 'social_chat',
+      supportSlots: [],
+    }),
+    'Style examples:',
+    'Player: "hello"',
+    'Assistant JSON: {"parts":[{"kind":"social","text":"Hi. I\'m the station keeper."}],"emotion":"warm","intent":"conversation","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}',
+    'Player: "I\'m Mim."',
+    'Assistant JSON: {"parts":[{"kind":"social","text":"Nice to meet you, Mim. I\'m the station keeper."}],"emotion":"warm","intent":"conversation","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}',
+    'Player: "thanks"',
+    'Assistant JSON: {"parts":[{"kind":"social","text":"You\'re welcome."}],"emotion":"warm","intent":"conversation","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}',
+    'For this turn, every part must be kind "social" or "close".',
+    `Current player message: ${sanitizePromptText(playerMessage)}`,
+  ].filter(Boolean);
+
+  return blocks.join('\n');
+}
+
+async function realizeValidatedPlanWithReplyPartsTransport(input) {
+  const {
+    runtime,
+    ensureModelLoaded,
+    npcName,
+    playerMessage,
+    queryType,
+    routeIntent,
+    plan,
+    evidencePack,
+    evidenceEntries,
+    selfEntityId,
+    npcId,
+    generationDiagnostics,
+  } = input;
+
+  const planClaims = Array.isArray(plan?.claims) ? plan.claims : [];
+  const speechAct = normalizeOptionalString(plan?.speechAct) ?? 'chat';
+  if (planClaims.length === 0 && speechAct !== 'chat' && speechAct !== 'answer' && speechAct !== 'recall') {
+    generationDiagnostics.replyParts.skippedReason = 'no-realization-needed';
+    return null;
+  }
+
+  const allowedSupportSlots = buildValidatedPlanSupportSlots({
+    plan,
+    evidencePack,
+    evidenceEntries,
+    selfEntityId,
+    npcId,
+    queryType,
+  });
+
+  await ensureModelLoaded();
+  generationDiagnostics.draft.attempted = true;
+  generationDiagnostics.replyParts.attempted = true;
+  generationDiagnostics.replyParts.allowedSupportSlots = allowedSupportSlots.map((slot) => slot.slotId);
+
+  const prompt = buildPlanBoundReplyPartsPrompt({
+    npcName,
+    playerMessage,
+    queryType,
+    routeIntent,
+    plan,
+    supportSlots: allowedSupportSlots,
+  });
+  const generated = await runtime.generateJson({
+    kind: 'validated-plan-realization',
+    prompt,
+    schemaText: REPLY_PARTS_JSON_SCHEMA,
+    maxTokens: 180,
+    attempt: 1,
+    input: {
+      npcName,
+      playerMessage,
+      supportSlots: allowedSupportSlots,
+      turnContext: {
+        queryType,
+        routeIntent,
+      },
+    },
+  });
+
+  const replyPartsSourceText = typeof generated.rawText === 'string' && generated.rawText.trim().length > 0
+    ? generated.rawText
+    : generated.jsonText;
+  generationDiagnostics.replyParts.rawResponsePreview = sanitizePromptText(replyPartsSourceText).slice(0, 320);
+
+  const parsed = parseReplyPartsTurnFromText(replyPartsSourceText);
+  if (!parsed) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'reply-parts-invalid-json';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = 'invalid_json';
+    return null;
+  }
+
+  const normalized = normalizeReplyPartsForValidation({
+    turn: parsed,
+    supportSlots: allowedSupportSlots,
+    queryType,
+  }) ?? parsed;
+  generationDiagnostics.replyParts.rawPartsPreview = normalized.parts.map((part) => ({
+    kind: part.kind,
+    text: part.text,
+    support: Array.isArray(part.support) ? part.support : undefined,
+  }));
+
+  const validation = validateReplyPartsContract({
+    parts: normalized.parts,
+    supportSlots: allowedSupportSlots,
+    queryType,
+    intent: normalized.intent,
+  });
+  const realizedKnowledgeParts = normalized.parts.filter((part) => (
+    part.kind === 'grounded' || part.kind === 'inferred' || part.kind === 'rumor'
+  )).length;
+  generationDiagnostics.replyParts.partCount = normalized.parts.length;
+  generationDiagnostics.replyParts.groundedPartCount = realizedKnowledgeParts;
+
+  if (!validation.valid) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'reply-parts-validation-failed';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = buildReplyPartsValidationRepairReason(validation);
+    return null;
+  }
+
+  const mustCarryKnowledge = planClaims.length > 0 && (speechAct === 'answer' || speechAct === 'recall');
+  const realizedUncertainParts = normalized.parts.filter((part) => part.kind === 'uncertain').length;
+  if (mustCarryKnowledge && realizedKnowledgeParts === 0 && realizedUncertainParts > 0) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'reply-parts-regressed-to-uncertain';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = 'reply-parts-regressed-to-uncertain';
+    return null;
+  }
+
+  generationDiagnostics.draft.success = true;
+  generationDiagnostics.replyParts.success = true;
+  generationDiagnostics.replyParts.failureReason = undefined;
+
+  return materializeTurnOutputFromReplyParts({
+    turn: {
+      ...normalized,
+      beatEvidence: isRecord(normalized.beatEvidence)
+        ? normalized.beatEvidence
+        : {
+          coveredFacts: [],
+          uncoveredFacts: [],
+          completionSignal: 'none',
+          confidence: 0,
+        },
+    },
+    supportSlots: allowedSupportSlots,
+  });
+}
+
+function buildMockSocialReplyParts(requestInput) {
+  const input = isRecord(requestInput) ? requestInput : {};
+  const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
+  const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
+  const declaredName = extractDeclaredIdentityName(playerMessage);
+
+  let text = `Hi. I'm ${npcName}.`;
+  if (declaredName) {
+    const safeName = declaredName.charAt(0).toUpperCase() + declaredName.slice(1);
+    text = `Nice to meet you, ${safeName}. I'm ${npcName}.`;
+  } else if (!isLikelyGreetingOnlyMessage(playerMessage) && playerMessage) {
+    text = 'That makes sense.';
+  }
+
   return {
-    utterance: `I heard you say "${playerMessage}". I need a moment, please try again.`,
-    emotion: 'neutral',
+    parts: [
+      {
+        kind: 'social',
+        text,
+      },
+    ],
+    emotion: 'warm',
     intent: 'conversation',
     proposedIntents: [],
-    citations: [],
     beatEvidence: {
       coveredFacts: [],
       uncoveredFacts: [],
@@ -180,6 +512,155 @@ function fallbackOutput(playerMessage) {
       confidence: 0,
     },
   };
+}
+
+async function realizeSocialFastWithReplyPartsTransport(input) {
+  const {
+    runtime,
+    ensureModelLoaded,
+    npcName,
+    playerMessage,
+    history,
+    memoryFacts,
+    npcProfile,
+    globalSafetyBounds,
+    turnContext,
+    isFirstMeeting,
+    generationDiagnostics,
+  } = input;
+
+  await ensureModelLoaded();
+  generationDiagnostics.draft.attempted = true;
+  generationDiagnostics.replyParts.attempted = true;
+  generationDiagnostics.replyParts.allowedSupportSlots = [];
+
+  const prompt = buildSocialFastReplyPartsPrompt({
+    npcName,
+    playerMessage,
+    history,
+    memoryFacts,
+    npcProfile,
+    globalSafetyBounds,
+    turnContext,
+  });
+
+  const generated = await runtime.generateJson({
+    kind: 'social-fast-realization',
+    prompt,
+    schemaText: REPLY_PARTS_JSON_SCHEMA,
+    maxTokens: 140,
+    attempt: 1,
+    temperature: '0.72',
+    input: {
+      npcName,
+      playerMessage,
+      turnContext: {
+        queryType: 'conversation',
+        routingIntent: 'social_chat',
+      },
+      supportSlots: [],
+    },
+  });
+
+  const replyPartsSourceText = typeof generated.rawText === 'string' && generated.rawText.trim().length > 0
+    ? generated.rawText
+    : generated.jsonText;
+  generationDiagnostics.replyParts.rawResponsePreview = sanitizePromptText(replyPartsSourceText).slice(0, 320);
+
+  const parsed = parseReplyPartsTurnFromText(replyPartsSourceText);
+  if (!parsed) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'social-fast-invalid-json';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = 'invalid_json';
+    return null;
+  }
+
+  const normalized = normalizeReplyPartsForValidation({
+    turn: parsed,
+    supportSlots: [],
+    queryType: 'conversation',
+  }) ?? parsed;
+  generationDiagnostics.replyParts.rawPartsPreview = normalized.parts.map((part) => ({
+    kind: part.kind,
+    text: part.text,
+  }));
+
+  const validation = validateReplyPartsContract({
+    parts: normalized.parts,
+    supportSlots: [],
+    queryType: 'conversation',
+    intent: normalized.intent,
+  });
+  generationDiagnostics.replyParts.partCount = normalized.parts.length;
+  generationDiagnostics.replyParts.groundedPartCount = normalized.parts.filter((part) => part.kind === 'grounded').length;
+
+  if (!validation.valid) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'social-fast-reply-parts-validation-failed';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = buildReplyPartsValidationRepairReason(validation);
+    return null;
+  }
+
+  if (normalized.parts.some((part) => part.kind !== 'social' && part.kind !== 'close')) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'social-fast-non-social-part';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = 'social_fast_requires_social_parts';
+    return null;
+  }
+
+  const materialized = materializeTurnOutputFromReplyParts({
+    turn: {
+      ...normalized,
+      beatEvidence: isRecord(normalized.beatEvidence)
+        ? normalized.beatEvidence
+        : {
+          coveredFacts: [],
+          uncoveredFacts: [],
+          completionSignal: 'none',
+          confidence: 0,
+        },
+    },
+    supportSlots: [],
+  });
+
+  const quality = validateTurnQuality(
+    materialized,
+    playerMessage,
+    history,
+    memoryFacts,
+    {
+      initiativeAction: 'player_respond',
+      npcName,
+      isFirstMeeting,
+      routingIntent: 'social_chat',
+      queryType: 'conversation',
+      regionPath: turnContext?.regionPath,
+      regionName: turnContext?.regionName,
+    },
+  );
+  if (!quality.valid) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = `social-fast-turn-quality:${quality.reason}`;
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = quality.reason;
+    return null;
+  }
+
+  if (checkSocialResponseForFactualLeakage(materialized.utterance)) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'social-fast-factual-leakage';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = 'social_fast_factual_leakage';
+    return null;
+  }
+
+  generationDiagnostics.draft.success = true;
+  generationDiagnostics.replyParts.success = true;
+  generationDiagnostics.replyParts.failureReason = undefined;
+  return materialized;
 }
 
 function toMode(interactionMode) {
@@ -359,6 +840,7 @@ function buildTurnContextBlock(turnContext) {
   const lines = [];
   const gameId = normalizeOptionalString(turnContext.gameId);
   const regionPath = normalizeOptionalString(turnContext.regionPath);
+  const regionName = normalizeOptionalString(turnContext.regionName);
   const episodeId = normalizeOptionalString(turnContext.episodeId);
   const queryType = normalizeOptionalString(turnContext.queryType);
   const routingIntent = normalizeOptionalString(turnContext.routingIntent);
@@ -366,7 +848,17 @@ function buildTurnContextBlock(turnContext) {
   const interactionMode = normalizeOptionalString(turnContext.interactionMode);
   const interactionPolicy = normalizeOptionalString(turnContext.interactionPolicy);
   if (gameId) lines.push(`- Game: ${sanitizePromptText(gameId)}`);
-  if (regionPath) lines.push(`- Region: ${sanitizePromptText(regionPath)}`);
+  if (regionName) {
+    lines.push(`- Current location (authoritative): ${sanitizePromptText(regionName)}`);
+  } else if (regionPath) {
+    lines.push(`- Current region (authoritative): ${sanitizePromptText(regionPath)}`);
+  }
+  if (regionPath && regionPath !== regionName) {
+    lines.push(`- Region path: ${sanitizePromptText(regionPath)}`);
+  }
+  if (regionName || regionPath) {
+    lines.push('- Treat the current location above as authoritative. A destination the player mentions is not the current location.');
+  }
   if (episodeId) lines.push(`- Episode: ${sanitizePromptText(episodeId)}`);
   if (interactionMode) lines.push(`- Interaction mode: ${sanitizePromptText(interactionMode)}`);
   if (interactionPolicy) lines.push(`- Interaction policy: ${sanitizePromptText(interactionPolicy)}`);
@@ -385,6 +877,15 @@ function buildTurnContextBlock(turnContext) {
       lines.push('- Active topic appears exhausted; gracefully wrap up and suggest a new topic.');
     }
   }
+  const isFirstMeeting = turnContext.isFirstMeeting === true;
+  const turnIndex = Number.isFinite(turnContext.turnIndexWithNpc) ? turnContext.turnIndexWithNpc : undefined;
+  if (turnIndex != null) {
+    lines.push(`- Turn ${turnIndex} with this player${isFirstMeeting ? ' (first meeting)' : ''}`);
+  }
+  if (!isFirstMeeting) {
+    lines.push('- You already know this player. Do NOT re-introduce yourself or repeat your name unless asked.');
+  }
+
   if (lines.length === 0) return null;
   return ['Turn context:', ...lines].join('\n');
 }
@@ -410,6 +911,7 @@ function buildLlamaPrompt(input) {
     'Respond in the same language as the player message unless asked to switch languages.',
     'If the player message is English, respond in English.',
     'Never repeat the player message verbatim.',
+    'Never repeat something you already said in the conversation history.',
     'Keep the total visible reply concise (1-2 sentences).',
     buildGlobalSafetyBlock(globalSafetyBounds),
     buildNpcProfileBlock(npcProfile),
@@ -591,6 +1093,11 @@ function createMockRuntime() {
     if (!loaded) {
       throw new Error('Model must be loaded before generateStructured');
     }
+    if (request?.kind === 'social-fast-realization') {
+      return {
+        jsonText: JSON.stringify(buildMockSocialReplyParts(request?.input ?? request)),
+      };
+    }
     return {
       jsonText: JSON.stringify(buildMockReplyParts(request?.input ?? request)),
     };
@@ -725,9 +1232,16 @@ function defaultPipelineDiagnostics(input) {
   const policyPath = input.routing?.policyPath ?? 'safe_chat';
   const queryType = input.queryType ?? routeIntentToQueryType(routeIntent);
   const loreMatchCount = Array.isArray(input.loreMatches) ? input.loreMatches.length : 0;
+  const retrieval = isRecord(input.retrieval) ? input.retrieval : {};
   const missingGameLoreBundle = input.missingGameLoreBundle === true;
   const retrievalAttempted = input.retrievalAttempted === true
     || (missingGameLoreBundle && isKnowledgeSeekingQueryType(queryType));
+  const retrievalCandidateCount = Number.isFinite(retrieval.candidateCount)
+    ? Math.max(0, Math.floor(Number(retrieval.candidateCount)))
+    : (retrievalAttempted ? loreMatchCount : 0);
+  const retrievalSelectedCount = Number.isFinite(retrieval.selectedCount)
+    ? Math.max(0, Math.floor(Number(retrieval.selectedCount)))
+    : loreMatchCount;
   const validationErrors = Array.isArray(input.validationErrors) ? input.validationErrors : [];
   const validationDecision = normalizeOptionalString(input.validationDecision)
     ?? (input.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'));
@@ -747,15 +1261,18 @@ function defaultPipelineDiagnostics(input) {
     queryType,
     retrieval: {
       attempted: retrievalAttempted,
-      candidateCount: retrievalAttempted ? loreMatchCount : 0,
-      selectedCount: loreMatchCount,
+      candidateCount: retrievalCandidateCount,
+      selectedCount: retrievalSelectedCount,
       qualityPath: missingGameLoreBundle
         ? 'error'
-        : retrievalAttempted ? (loreMatchCount > 0 ? 'single_pass' : 'abstain') : 'not_required',
+        : normalizeOptionalString(retrieval.qualityPath)
+          ?? (retrievalAttempted ? (retrievalSelectedCount > 0 ? 'single_pass' : 'abstain') : 'not_required'),
       qualityReason: missingGameLoreBundle
         ? 'missing_game_lore_bundle'
-        : retrievalAttempted ? (loreMatchCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not_required',
-      correctiveAttempted: false,
+        : normalizeOptionalString(retrieval.qualityReason)
+          ?? (retrievalAttempted ? (retrievalSelectedCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not_required'),
+      qualityGatePassed: retrieval.qualityGatePassed === true,
+      correctiveAttempted: retrieval.correctiveAttempted === true,
     },
     initiative: {
       decision: {
@@ -785,52 +1302,6 @@ function defaultPipelineDiagnostics(input) {
       progressionGateEvaluated: false,
     },
     generation: isRecord(input.generation) ? input.generation : createGenerationDiagnostics(),
-  };
-}
-
-function resolveLoreRetrieval(input) {
-  const loreArtifacts = input.loreArtifacts;
-  if (!loreArtifacts) {
-    return {
-      attempted: false,
-      matches: [],
-    };
-  }
-
-  const queryType = input.queryType;
-  const shouldRetrieve = isKnowledgeSeekingQueryType(queryType) || routeIntentUsesLore(input.routing.intent);
-  if (!shouldRetrieve) {
-    return {
-      attempted: false,
-      matches: [],
-    };
-  }
-
-  const loreScopes = normalizeStringArray(input.npcProfile?.loreScopes);
-  const selfLoreScopes = normalizeStringArray(input.npcProfile?.selfLoreScopes);
-  const relatedLoreScopes = normalizeStringArray(input.npcProfile?.relatedLoreScopes);
-  const selfEntityId = normalizeOptionalString(input.npcProfile?.selfEntityId);
-  const hasScopes = loreScopes.length > 0 || selfLoreScopes.length > 0 || relatedLoreScopes.length > 0;
-  const requireScopes = input.requireLoreScopeForRetrieval === true;
-  if (requireScopes && !hasScopes) {
-    return {
-      attempted: true,
-      matches: [],
-    };
-  }
-
-  const matches = retrieveLoreChunks(loreArtifacts, input.playerMessage, {
-    queryType,
-    loreScopes,
-    selfLoreScopes,
-    relatedLoreScopes,
-    selfEntityId,
-    maxResults: 4,
-  });
-
-  return {
-    attempted: true,
-    matches,
   };
 }
 
@@ -872,6 +1343,8 @@ function normalizeSessionOptions(options = {}) {
     ...DEFAULT_SESSION_OPTIONS,
     ...options,
   };
+  // The session runtime does not currently load packed SugarAgent authoring artifacts.
+  // Preview callers must pass resolved npcProfile/globalSafetyBounds from the host/plugin layer.
   if (typeof normalized.npc !== 'string' || normalized.npc.trim().length === 0) {
     throw new Error('Invalid npc value.');
   }
@@ -913,14 +1386,20 @@ export async function createSugarAgentSession(options = {}) {
   const runtime = runtimeMode === 'llama'
     ? createLlamaRuntime(args)
     : createMockRuntime();
+  let modelLoaded = false;
 
   const runtimeHealth = await runtime.health();
   if (!runtimeHealth.ok && runtimeMode === 'llama') {
     throw new Error(`Local runtime health check failed: ${runtimeHealth.detail ?? 'unknown error'}`);
   }
 
-  let modelLoaded = false;
   const baseTurnContext = isRecord(args.turnContext) ? args.turnContext : {};
+
+  async function ensureModelLoaded() {
+    if (modelLoaded) return;
+    await runtime.loadModel('chat-fast');
+    modelLoaded = true;
+  }
 
   return {
     startup: {
@@ -974,10 +1453,16 @@ export async function createSugarAgentSession(options = {}) {
       );
 
       const routing = routeTurnIntent(message, npcName);
-      const queryType = normalizeOptionalString(turnContext.queryType) ?? routeIntentToQueryType(routing.intent);
+      const routingRefinement = refineRouteWithLoreEntityMentions({
+        route: routing,
+        playerMessage: message,
+        loreArtifacts,
+      });
+      const resolvedRouting = routingRefinement.route;
+      const queryType = normalizeOptionalString(turnContext.queryType) ?? routeIntentToQueryType(resolvedRouting.intent);
       turnContext.queryType = queryType;
-      turnContext.routingIntent = routing.intent;
-      turnContext.routingPolicyPath = routing.policyPath;
+      turnContext.routingIntent = resolvedRouting.intent;
+      turnContext.routingPolicyPath = resolvedRouting.policyPath;
       const generationDiagnostics = createGenerationDiagnostics();
 
       if (args.provider === 'echo') {
@@ -991,9 +1476,9 @@ export async function createSugarAgentSession(options = {}) {
           usedFallback: false,
           validationErrors: [],
           loreMatches: [],
-          routing,
+          routing: resolvedRouting,
           pipeline: defaultPipelineDiagnostics({
-            routing,
+            routing: resolvedRouting,
             queryType,
             loreMatches: [],
             retrievalAttempted: false,
@@ -1012,19 +1497,42 @@ export async function createSugarAgentSession(options = {}) {
         };
       }
 
-      if (!modelLoaded) {
-        await runtime.loadModel('chat-fast');
-        modelLoaded = true;
-      }
+      const loreScopes = normalizeStringArray(npcProfile?.loreScopes);
+      const selfLoreScopes = normalizeStringArray(npcProfile?.selfLoreScopes);
+      const relatedLoreScopes = normalizeStringArray(npcProfile?.relatedLoreScopes);
+      const hasScopes = loreScopes.length > 0 || selfLoreScopes.length > 0 || relatedLoreScopes.length > 0;
+      const requireScopes = args.requireLoreScopeForRetrieval === true;
+      const canRetrieveLore = Boolean(loreArtifacts);
+      const shouldAttemptLoreRetrieval = canRetrieveLore
+        && (isKnowledgeSeekingQueryType(queryType) || routeIntentUsesLore(resolvedRouting.intent))
+        && (!requireScopes || hasScopes);
 
-      const retrieval = resolveLoreRetrieval({
+      const governedRetrieval = runGovernedLoreRetrieval({
         loreArtifacts,
+        canRetrieveLore,
+        shouldAttemptLoreRetrieval,
         playerMessage: message,
+        mode: toMode(turnContext?.interactionMode),
+        routingIntent: resolvedRouting.intent,
         queryType,
-        routing,
-        npcProfile,
-        requireLoreScopeForRetrieval: args.requireLoreScopeForRetrieval,
+        activeBeatId: normalizeOptionalString(turnOptionsRecord.beatContract?.beatId),
+        loreScopes,
+        selfLoreScopes,
+        relatedLoreScopes,
+        selfEntityId: npcProfile.selfEntityId,
+        hasBeatContract: Boolean(turnOptionsRecord.beatContract),
+        rerankCache: undefined,
+        artifactVersion: undefined,
+        modelVersion: undefined,
+        rerankerClass: 'lexical',
+        retrievalFilters: routingRefinement.retrievalFilters,
       });
+      const retrieval = {
+        attempted: governedRetrieval.governance.attempted,
+        matches: governedRetrieval.loreMatches,
+        quality: governedRetrieval.retrievalQuality,
+        governance: governedRetrieval.governance,
+      };
       const groundingEvidenceEntries = buildGroundingEvidenceEntries({
         loreMatches: retrieval.matches,
         loreArtifacts,
@@ -1035,38 +1543,157 @@ export async function createSugarAgentSession(options = {}) {
         memoryFacts,
         playerMessage: message,
         history,
+        regionPath: turnContext?.regionPath,
+        regionName: turnContext?.regionName,
       });
-      const supportSlots = filterSupportSlotsForQueryType({
-        supportSlots: buildSupportSlotsFromGroundingEvidence({
+      // ---------------------------------------------------------------
+      // Evidence-first pipeline (ADR-SA-025)
+      // Knowledge turns create and validate a plan before any LLM call.
+      // The LLM generation loop below is used as the realization transport
+      // for already-validated plans, or as fallback for social turns.
+      // ---------------------------------------------------------------
+      const mode = toMode(turnContext?.interactionMode);
+      const hasBeatContract = Boolean(turnOptionsRecord.beatContract);
+      const resolvedMode = resolveConversationMode(turnContext, hasBeatContract);
+      const evidencePackForPipeline = buildEvidencePack({
+        evidenceEntries: groundingEvidenceEntries,
+        loreMatches: retrieval.matches,
+        mode: resolvedMode,
+        playerMessage: message,
+        queryType,
+        routing: resolvedRouting,
+        selfEntityId: npcProfile.selfEntityId,
+        npcId: args.npc,
+      });
+      const enrichedEvidencePack = enrichEvidencePackWithEpistemics(
+        evidencePackForPipeline,
+        turnOptionsRecord.beatContract,
+      );
+      const snapshot = buildNpcStateSnapshot({
+        npcId: args.npc,
+        npcName,
+        selfEntityId: npcProfile.selfEntityId,
+        mode: resolvedMode,
+        locationId: normalizeOptionalString(turnContext?.regionName)
+          ?? normalizeOptionalString(turnContext?.regionPath),
+        activeBeatId: normalizeOptionalString(turnOptionsRecord.beatContract?.beatId),
+      });
+
+      // Resolve initiative policy
+      const playerHasQuestion = hasLikelyQuestionForm(message);
+      const turnIndexWithNpc = derivedContext.turnIndexWithNpc;
+      const noveltyState = computeNoveltyState({
+        history,
+        turnIndexWithNpc,
+        routingIntent: resolvedRouting.intent,
+        topicCoverage: topicCoverageContext,
+        playerMessage: message,
+        normalizeForEchoCheck: (text) => sanitizePromptText(text).toLowerCase(),
+        maxNovelty: 0.34,
+      });
+      const relevantEvidenceItems = evidencePackForPipeline.items.filter((item) => isEvidenceItemRelevantForTurn(item, {
+        queryType,
+        routeIntent: resolvedRouting.intent,
+        selfEntityId: npcProfile.selfEntityId,
+        npcId: args.npc,
+      }));
+      const hasDirectAnswerEvidence = hasDirectAnswerableStateEvidence(relevantEvidenceItems, message);
+
+      const initiativePolicy = resolveInitiativePolicy({
+        mode: resolvedMode,
+        routingIntent: resolvedRouting.intent,
+        queryType,
+        playerMessage: message,
+        playerHasQuestion,
+        turnIndexWithNpc,
+        noveltyState,
+        beatContract: turnOptionsRecord.beatContract,
+        hasEvidence: relevantEvidenceItems.length > 0,
+        hasDirectAnswerEvidence,
+        retrievalConfidence: computeEvidenceBackedRetrievalConfidence({
+          queryType,
+          routeIntent: resolvedRouting.intent,
+          retrievalMatches: retrieval.matches,
+          evidenceItems: relevantEvidenceItems,
+        }),
+        isFirstMeeting: derivedContext.isFirstMeeting,
+      });
+
+      // Resolve language adaptation context (context gathering only)
+      const adaptationContext = await resolveLanguageAdaptationContext(null, null);
+      snapshot.languageAdaptation = adaptationContext;
+
+      // Run the evidence-first pipeline
+      const efResult = await runEvidenceFirstPipeline({
+        playerMessage: message,
+        routing: resolvedRouting,
+        snapshot,
+        evidencePack: evidencePackForPipeline,
+        initiativePolicy,
+        beatContract: turnOptionsRecord.beatContract,
+        adaptationContext,
+        loreEntityIds: routingRefinement.loreEntityIds,
+      });
+
+      let efOutput = efResult.output;
+      let efPlanAcceptable = efResult.validatedPlan?.acceptable !== false;
+      const validationErrors = Array.isArray(efResult.validatedPlan?.errors)
+        ? [...efResult.validatedPlan.errors]
+        : [];
+      const validatedPlan = efResult.validatedPlan?.plan ?? efResult.plan;
+      const groundedTurn = efResult.turnRouting?.path === 'grounded';
+      const socialFastTurn = efResult.turnRouting?.path === 'social_fast';
+      const canUseModelRealization = groundedTurn
+        && efPlanAcceptable
+        && validatedPlan
+        && (
+          validatedPlan.speechAct === 'answer'
+          || validatedPlan.speechAct === 'recall'
+          || validatedPlan.speechAct === 'chat'
+        );
+
+      if (canUseModelRealization) {
+        const realized = await realizeValidatedPlanWithReplyPartsTransport({
+          runtime,
+          ensureModelLoaded,
+          npcName,
+          playerMessage: message,
+          queryType,
+          routeIntent: resolvedRouting.intent,
+          plan: validatedPlan,
+          evidencePack: enrichedEvidencePack,
           evidenceEntries: groundingEvidenceEntries,
           selfEntityId: npcProfile.selfEntityId,
           npcId: args.npc,
-          maxSlots: 6,
-        }),
-        queryType,
-      });
+          generationDiagnostics,
+        });
 
-      const attempt = Number.isFinite(turnOptionsRecord.attempt)
-        ? Math.max(1, Math.floor(turnOptionsRecord.attempt))
-        : 1;
-      const validationErrors = [];
-      let usedFallback = false;
-      let output = null;
-      let attemptsUsed = 0;
-      let validationDecision = 'accept';
-      let requiresRepair = false;
-      let unsupportedClaims = 0;
-      let internalRepair = turnOptionsRecord.repair === true;
-      let internalRepairReason = normalizeOptionalString(turnOptionsRecord.repairReason);
-
-      while (!output) {
-        attemptsUsed += 1;
-        const modelAttempt = attempt + attemptsUsed - 1;
-        resetGenerationDiagnosticsForAttempt(generationDiagnostics);
-        generationDiagnostics.draft.attempted = true;
-        generationDiagnostics.replyParts.attempted = true;
-        generationDiagnostics.replyParts.allowedSupportSlots = supportSlots.map((slot) => slot.slotId);
-        const generated = await runtime.generateStructured({
+        if (realized) {
+          const verification = verifyRealizationAgainstPlan(
+            realized.utterance,
+            validatedPlan,
+            enrichedEvidencePack,
+            snapshot,
+          );
+          efResult.diagnostics.semanticVerification = verification;
+          if (verification.ok) {
+            efOutput = realized;
+            efResult.diagnostics.deterministicFallbackUsed = false;
+          } else {
+            efResult.diagnostics.deterministicFallbackUsed = true;
+            validationErrors.push(...verification.errors);
+          }
+        } else {
+          efResult.diagnostics.deterministicFallbackUsed = true;
+          const replyPartsFailureReason = normalizeOptionalString(generationDiagnostics.replyParts.failureReason);
+          if (replyPartsFailureReason) {
+            validationErrors.push(replyPartsFailureReason);
+          }
+        }
+      } else if (socialFastTurn) {
+        const realized = await realizeSocialFastWithReplyPartsTransport({
+          runtime,
+          ensureModelLoaded,
           npcName,
           playerMessage: message,
           history,
@@ -1074,133 +1701,81 @@ export async function createSugarAgentSession(options = {}) {
           npcProfile,
           globalSafetyBounds,
           turnContext,
-          supportSlots,
-          attempt: modelAttempt,
-          repair: internalRepair,
-          repairReason: internalRepairReason,
+          isFirstMeeting: derivedContext.isFirstMeeting,
+          generationDiagnostics,
         });
-
-        const replyPartsSourceText = typeof generated.rawText === 'string' && generated.rawText.trim().length > 0
-          ? generated.rawText
-          : generated.jsonText;
-        generationDiagnostics.replyParts.rawResponsePreview = sanitizePromptText(replyPartsSourceText).slice(0, 320);
-        const parsed = parseReplyPartsTurnFromText(replyPartsSourceText);
-        if (!parsed) {
-          generationDiagnostics.draft.success = false;
-          generationDiagnostics.draft.failureReason = `attempt ${modelAttempt}: invalid JSON`;
-          generationDiagnostics.replyParts.success = false;
-          generationDiagnostics.replyParts.failureReason = 'invalid_json';
-          if (!internalRepair) {
-            internalRepair = true;
-            internalRepairReason = `attempt ${modelAttempt}: invalid JSON`;
-            continue;
+        if (realized) {
+          efOutput = realized;
+          efResult.diagnostics.deterministicFallbackUsed = false;
+        } else {
+          efResult.diagnostics.deterministicFallbackUsed = true;
+          const replyPartsFailureReason = normalizeOptionalString(generationDiagnostics.replyParts.failureReason);
+          if (replyPartsFailureReason) {
+            validationErrors.push(replyPartsFailureReason);
           }
-          usedFallback = true;
-          validationDecision = 'fallback';
-          requiresRepair = true;
-          validationErrors.push(`attempt ${modelAttempt}: invalid JSON`);
-          output = isKnowledgeSeekingQueryType(queryType)
-            ? {
-              ...createGroundedUncertaintyReply(queryType),
-            }
-            : fallbackOutput(message);
-          break;
         }
-
-        const normalizedReplyParts = normalizeReplyPartsForValidation({
-          turn: parsed,
-          supportSlots,
-          queryType,
-        }) ?? parsed;
-        generationDiagnostics.draft.success = true;
-        generationDiagnostics.draft.failureReason = undefined;
-        generationDiagnostics.replyParts.rawPartsPreview = normalizedReplyParts.parts.map((part) => ({
-          kind: part.kind,
-          text: part.text,
-          support: Array.isArray(part.support) ? part.support : undefined,
-        }));
-        const replyPartsValidation = validateReplyPartsContract({
-          parts: normalizedReplyParts.parts,
-          supportSlots,
-          queryType,
-          intent: normalizedReplyParts.intent,
-        });
-
-        if (replyPartsValidation.valid) {
-          generationDiagnostics.replyParts.success = true;
-          generationDiagnostics.replyParts.failureReason = undefined;
-          generationDiagnostics.replyParts.partCount = normalizedReplyParts.parts.length;
-          generationDiagnostics.replyParts.groundedPartCount = normalizedReplyParts.parts.filter((part) => part.kind === 'grounded').length;
-          output = materializeTurnOutputFromReplyParts({
-            turn: {
-              ...normalizedReplyParts,
-              beatEvidence: isRecord(normalizedReplyParts.beatEvidence)
-                ? normalizedReplyParts.beatEvidence
-                : {
-                  coveredFacts: [],
-                  uncoveredFacts: [],
-                  completionSignal: 'none',
-                  confidence: 0,
-                },
-            },
-            supportSlots,
-          });
-          validationDecision = 'accept';
-          unsupportedClaims = 0;
-          requiresRepair = false;
-          break;
-        }
-
-        const replyPartsRepairReason = buildReplyPartsValidationRepairReason(replyPartsValidation);
-        generationDiagnostics.replyParts.success = false;
-        generationDiagnostics.replyParts.failureReason = replyPartsRepairReason;
-        generationDiagnostics.replyParts.partCount = normalizedReplyParts.parts.length;
-        generationDiagnostics.replyParts.groundedPartCount = normalizedReplyParts.parts.filter((part) => part.kind === 'grounded').length;
-
-        if (!internalRepair) {
-          internalRepair = true;
-          internalRepairReason = replyPartsRepairReason;
-          continue;
-        }
-
-        output = {
-          ...createGroundedUncertaintyReply(queryType),
-        };
-        validationDecision = 'fallback';
-        requiresRepair = true;
-        unsupportedClaims = replyPartsValidation.summary.invalidGroundedParts || 1;
-        validationErrors.push(`pipeline-v4 reply-parts validation fallback: ${replyPartsRepairReason}`);
+      } else {
+        generationDiagnostics.replyParts.skippedReason = generationDiagnostics.replyParts.skippedReason ?? 'deterministic-plan';
       }
 
-      applyTurnToSession(session, args.npc, message, output.utterance);
+      const acceptedPlan = validatedPlan ?? {
+        claims: [],
+        memoryWrites: [],
+      };
+      const persistedMemoryWrites = [
+        ...filterMemoryWrites({ plan: acceptedPlan }),
+        ...extractNpcCommitments(efOutput.utterance, acceptedPlan),
+      ];
+
+      applyTurnToSession(session, args.npc, message, efOutput.utterance, {
+        memoryWrites: persistedMemoryWrites,
+      });
+
+      validationErrors.sort();
+      const dedupedValidationErrors = validationErrors.filter((entry, index, entries) => entries.indexOf(entry) === index);
+      const usedFallback = efResult.diagnostics.deterministicFallbackUsed === true || efPlanAcceptable === false;
 
       const pipeline = defaultPipelineDiagnostics({
-        routing,
+        routing: resolvedRouting,
         queryType,
         loreMatches: retrieval.matches,
+        retrieval: {
+          attempted: retrieval.attempted,
+          candidateCount: retrieval.governance.candidateCount,
+          selectedCount: retrieval.governance.selectedCount,
+          qualityPath: retrieval.governance.qualityPath,
+          qualityReason: retrieval.governance.qualityReason,
+          qualityGatePassed: retrieval.governance.qualityGatePassed,
+          correctiveAttempted: retrieval.governance.correctiveAttempted,
+        },
         retrievalAttempted: retrieval.attempted,
         missingGameLoreBundle: args.missingGameLoreBundle === true,
         usedFallback,
-        validationErrors,
-        validationDecision,
-        unsupportedClaims,
-        requiresRepair,
+        validationErrors: dedupedValidationErrors,
+        validationDecision: usedFallback ? 'fallback' : (efPlanAcceptable ? 'accept' : 'repair'),
+        unsupportedClaims: efResult.validatedPlan?.droppedClaims?.length ?? 0,
+        requiresRepair: usedFallback || !efPlanAcceptable,
         turnContext,
         generation: generationDiagnostics,
       });
+      pipeline.retrievalQuality = retrieval.quality;
+      pipeline.evidenceFirst = efResult.diagnostics;
+      pipeline.evidenceFirst.retrievalGovernance = retrieval.governance;
+      pipeline.version = 'evidence_first_v1';
 
       return {
-        output,
-        attempts: attemptsUsed,
+        output: efOutput,
+        attempts: generationDiagnostics.replyParts.attempted ? 1 : 0,
         usedFallback,
-        validationErrors,
+        fallbackKind: usedFallback ? 'deterministic_runtime' : undefined,
+        validationErrors: dedupedValidationErrors,
         loreMatches: retrieval.matches,
-        routing,
+        routing: resolvedRouting,
         pipeline,
         grounding: {
           summary: {
-            decision: validationDecision,
-            unsupportedCount: unsupportedClaims,
+            decision: usedFallback ? 'fallback' : (efPlanAcceptable ? 'accept' : 'repair'),
+            unsupportedCount: efResult.validatedPlan?.droppedClaims?.length ?? 0,
           },
         },
       };

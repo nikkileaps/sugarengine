@@ -125,8 +125,8 @@ export function RegionDetail({
     switch (spawn.type) {
       case 'npc': {
         const npcData = spawn.data as NPCDefinition;
-        const npc = npcs.find((n) => n.id === npcData.id);
-        return npc?.name || `NPC ${shortId(npcData.id)}`;
+        const npc = npcs.find((n) => n.id === npcData.npcId);
+        return npc?.name || `NPC ${shortId(npcData.npcId)}`;
       }
       case 'pickup': {
         const pickupData = spawn.data as PickupDefinition;
@@ -162,7 +162,7 @@ export function RegionDetail({
 
     switch (type) {
       case 'npc':
-        updated = { ...region, npcs: [...(region.npcs || []), { id: npcs[0]?.id || id, position: defaultPos }] };
+        updated = { ...region, npcs: [...(region.npcs || []), { id, npcId: npcs[0]?.id || '', position: defaultPos }] };
         break;
       case 'pickup':
         updated = { ...region, pickups: [...(region.pickups || []), { id, itemId: items[0]?.id || '', position: defaultPos, quantity: 1 }] };
