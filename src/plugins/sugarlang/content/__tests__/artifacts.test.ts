@@ -113,6 +113,19 @@ describe('artifact round-trip: Find the Luggage', () => {
     const { errors } = deserializeContentBundle(files);
     expect(errors).toEqual([]);
   });
+
+  it('warns when band policies are missing delivery contracts', () => {
+    const files = serializeContentBundle(BUNDLE, 'approved');
+    const rawBandPolicies = files.get('defaults/band-policies.json');
+    expect(rawBandPolicies).toBeTruthy();
+
+    const parsed = JSON.parse(rawBandPolicies!);
+    delete parsed.data.policies[1].deliveryContract;
+    files.set('defaults/band-policies.json', JSON.stringify(parsed, null, 2));
+
+    const { warnings } = deserializeContentBundle(files);
+    expect(warnings.some((warning) => warning.includes('missing deliveryContract fields'))).toBe(true);
+  });
 });
 
 describe('artifact path generators', () => {

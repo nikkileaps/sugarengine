@@ -31,7 +31,13 @@ describe('SugarAgentProviderAdapter', () => {
         npcName: 'Rick Cheese Roll',
         engagementKind: 'chat',
       } as any,
-      {} as any,
+      {
+        deliveryContract: {
+          detailLevel: 'concise',
+          maxKnowledgeClaims: 2,
+          maxKnowledgeParts: 2,
+        },
+      } as any,
       { text: 'hello' } as any,
     );
 
@@ -41,6 +47,13 @@ describe('SugarAgentProviderAdapter', () => {
       regionPath: 'regions.station',
       regionName: 'Station',
       episodeId: 'ep1',
+      pedagogyContext: {
+        deliveryContract: {
+          detailLevel: 'concise',
+          maxKnowledgeClaims: 2,
+          maxKnowledgeParts: 2,
+        },
+      },
     });
   });
 });

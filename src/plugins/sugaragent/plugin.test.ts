@@ -164,6 +164,18 @@ describe('createSugarAgentPlugin (phase 3)', () => {
           targetLanguage: 'es',
           supportLanguage: 'en',
           supportLanguagePolicy: 'light_support',
+          deliveryContract: {
+            detailLevel: 'concise',
+            maxKnowledgeClaims: 2,
+            maxKnowledgeParts: 2,
+            maxSentences: 3,
+            maxSentenceLength: 12,
+            maxClauseDepth: 2,
+            allowExactNumbers: false,
+            allowEnrichmentFacts: false,
+            preferConcreteFacts: true,
+            preferHighFrequencyLexicon: true,
+          },
           availableTrackedLexicalEntryIds: ['object.suitcase'],
           teachingSubset: {
             focusLexicalEntryIds: ['object.suitcase'],
@@ -188,6 +200,18 @@ describe('createSugarAgentPlugin (phase 3)', () => {
       targetLanguage: 'es',
       supportLanguage: 'en',
       supportLanguagePolicy: 'light_support',
+      deliveryContract: {
+        detailLevel: 'concise',
+        maxKnowledgeClaims: 2,
+        maxKnowledgeParts: 2,
+        maxSentences: 3,
+        maxSentenceLength: 12,
+        maxClauseDepth: 2,
+        allowExactNumbers: false,
+        allowEnrichmentFacts: false,
+        preferConcreteFacts: true,
+        preferHighFrequencyLexicon: true,
+      },
       availableTrackedLexicalEntryIds: ['object.suitcase'],
     });
   });

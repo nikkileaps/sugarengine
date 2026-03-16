@@ -99,6 +99,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
       (
         constraints.learnerBand
         || constraints.supportLanguagePolicy
+        || constraints.deliveryContract
         || constraints.groundingScope
         || constraints.availableTrackedLexicalEntryIds
         || constraints.teachingSubset
@@ -109,7 +110,8 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
             supportLanguagePolicy: constraints.supportLanguagePolicy,
             targetLanguage: constraints.targetLanguage,
             supportLanguage: constraints.supportLanguage,
-            correctionPosture: constraints.hardConstraints['correctionPosture'] as string | undefined,
+            correctionPosture: constraints.hardConstraints?.['correctionPosture'] as string | undefined,
+            deliveryContract: constraints.deliveryContract,
             availableTrackedLexicalEntryIds: constraints.availableTrackedLexicalEntryIds,
             teachingSubset: constraints.teachingSubset,
             ambientHaloAllowance: constraints.ambientHaloAllowance,
@@ -137,6 +139,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
         `[SugarAgentAdapter] pedagogy bridged → band=${pedagogyContext.learnerBand}` +
         ` policy=${pedagogyContext.supportLanguagePolicy}` +
         ` posture=${pedagogyContext.correctionPosture ?? 'none'}` +
+        ` delivery=${pedagogyContext.deliveryContract?.detailLevel ?? 'none'}` +
         ` trackedPool=${pedagogyContext.availableTrackedLexicalEntryIds?.length ?? 0}` +
         ` focus=${pedagogyContext.teachingSubset?.focusLexicalEntryIds.length ?? 0}` +
         ` grounding=${pedagogyContext.groundingScope?.length ?? 0} refs`,

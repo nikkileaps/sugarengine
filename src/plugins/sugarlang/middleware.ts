@@ -36,6 +36,7 @@ import type {
   TurnEvidence,
 } from './types';
 import type { LearnerStateManager } from './learner';
+import { resolveBandPolicyDefaults } from './content/band-policy-defaults';
 
 export interface SugarlangMiddlewareConfig {
   contentBundle: SugarlangContentBundle;
@@ -70,6 +71,7 @@ export function createSugarlangMiddleware(
   config: SugarlangMiddlewareConfig,
 ): ConversationMiddleware {
   const { contentBundle } = config;
+  const emittedWarnings = new Set<string>();
 
   const descriptor: ConversationMiddlewareDescriptor = {
     id: 'sugarlang',
@@ -97,6 +99,17 @@ export function createSugarlangMiddleware(
 
   function findBandPolicy(bandId: LearnerBandId): BandPolicy | undefined {
     return contentBundle.bandPolicies.policies.find((p) => p.bandId === bandId);
+  }
+
+  function resolveBandPolicy(bandId: LearnerBandId): BandPolicy {
+    const resolved = resolveBandPolicyDefaults(findBandPolicy(bandId), bandId);
+    for (const warning of resolved.warnings) {
+      const key = `${bandId}:${warning}`;
+      if (emittedWarnings.has(key)) continue;
+      emittedWarnings.add(key);
+      console.warn(`[Sugarlang] ${warning}`);
+    }
+    return resolved.policy;
   }
 
   function buildAvailableTrackedLexicalEntryIds(
@@ -242,16 +255,14 @@ export function createSugarlangMiddleware(
   ): void {
     const state = getState(session);
     const bandId = resolveBand(session);
-    const policy = findBandPolicy(bandId);
+    const policy = resolveBandPolicy(bandId);
 
     state.resolvedBand = bandId;
     state.bandPolicy = policy;
     setState(session, state);
 
     constraints.learnerBand = bandId;
-    if (policy) {
-      constraints.supportLanguagePolicy = policy.supportLanguagePolicy.mixingLevel;
-    }
+    constraints.supportLanguagePolicy = policy.supportLanguagePolicy.mixingLevel;
 
     // Expose provider policy from the band realization so the adapter and
     // tests can observe whether this band prefers agent-assisted interaction.
@@ -312,17 +323,18 @@ export function createSugarlangMiddleware(
     }
 
     // Apply band-specific constraints.
-    if (state.bandPolicy) {
-      // Set grounding intensity as a hard constraint.
-      constraints.hardConstraints['groundingIntensity'] = state.bandPolicy.groundingIntensity;
-      // Set correction posture as a hard constraint.
-      constraints.hardConstraints['correctionPosture'] = state.bandPolicy.correctionPosture;
-      // Set allowed response modes as an advisory preference.
-      constraints.advisoryPreferences['allowedResponseModes'] = state.bandPolicy.allowedResponseModes;
-      // Set support language visibility.
-      constraints.advisoryPreferences['showSupportStrip'] = state.bandPolicy.supportLanguagePolicy.showSupportStrip;
-      constraints.advisoryPreferences['showGlosses'] = state.bandPolicy.supportLanguagePolicy.showGlosses;
-    }
+    if (!state.bandPolicy) return;
+
+    constraints.deliveryContract = state.bandPolicy.deliveryContract;
+    // Set grounding intensity as a hard constraint.
+    constraints.hardConstraints['groundingIntensity'] = state.bandPolicy.groundingIntensity;
+    // Set correction posture as a hard constraint.
+    constraints.hardConstraints['correctionPosture'] = state.bandPolicy.correctionPosture;
+    // Set allowed response modes as an advisory preference.
+    constraints.advisoryPreferences['allowedResponseModes'] = state.bandPolicy.allowedResponseModes;
+    // Set support language visibility.
+    constraints.advisoryPreferences['showSupportStrip'] = state.bandPolicy.supportLanguagePolicy.showSupportStrip;
+    constraints.advisoryPreferences['showGlosses'] = state.bandPolicy.supportLanguagePolicy.showGlosses;
   }
 
   function postProvider(
@@ -353,6 +365,7 @@ export function createSugarlangMiddleware(
       showGlosses: state.bandPolicy?.supportLanguagePolicy.showGlosses ?? false,
       supportText: providerDiag?.supportText,
       turnId: providerDiag?.turnId,
+      deliveryContract: state.bandPolicy?.deliveryContract,
       availableTrackedLexicalEntryIds: providerDiag?.availableTrackedLexicalEntryIds,
       teachingSubset: providerDiag?.teachingSubset,
       ambientHaloAllowance: providerDiag?.ambientHaloAllowance,

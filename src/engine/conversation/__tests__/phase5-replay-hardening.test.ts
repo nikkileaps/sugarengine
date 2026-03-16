@@ -236,6 +236,11 @@ describe('pedagogyContext on PluginAgentContext', () => {
         targetLanguage: 'es',
         supportLanguage: 'en',
         correctionPosture: 'delayed',
+        deliveryContract: {
+          detailLevel: 'concise',
+          maxKnowledgeClaims: 2,
+          maxKnowledgeParts: 2,
+        },
         responseContract: { mode: 'short_text' },
         groundingScope: [{ lexicalEntryId: 'object.suitcase', targetForm: 'maleta' }],
       },

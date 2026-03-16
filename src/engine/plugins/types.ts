@@ -1,6 +1,7 @@
 import type { ObjectiveType } from '../quests/types';
 import type { NearbyInteractable } from '../systems';
 import type { StateChange } from '../state';
+import type { DeliveryContract } from '../conversation/deliveryContract';
 
 export const PLUGIN_API_VERSION = 1;
 
@@ -63,6 +64,7 @@ export interface PluginPedagogyContext {
   targetLanguage?: string;
   supportLanguage?: string;
   correctionPosture?: string;
+  deliveryContract?: DeliveryContract;
   /** Response contract the provider should aim to satisfy. */
   responseContract?: {
     mode: string;

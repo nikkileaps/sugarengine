@@ -6,7 +6,7 @@
  * SugarAgent and SugarLang cooperate only through host-mediated, optional
  * capability contracts. This module owns:
  * - validation and construction of delivery-language context
- * - learner-band derived bounds for final realization
+ * - delivery-contract derived bounds for final realization
  * - lightweight language estimation for runtime diagnostics
  *
  * It does not own post-hoc translation. Grounded replies are realized directly
@@ -17,6 +17,7 @@ import type {
   LanguageAdaptationContext,
 } from './turn-contracts';
 import type { PluginPedagogyContext } from '../../../../engine/plugins/types';
+import { normalizeDeliveryContract } from './delivery-contract';
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -76,23 +77,15 @@ function deriveCodeSwitchPolicy(
   return 'none';
 }
 
-function deriveBandBounds(
-  learnerBand: string | undefined,
+function deriveDeliveryBounds(
+  pedagogyContext: PluginPedagogyContext,
 ): Pick<LanguageAdaptationContext, 'maxSentenceLength' | 'maxClauseDepth'> {
-  switch (learnerBand) {
-    case 'B0':
-      return { maxSentenceLength: 8, maxClauseDepth: 1 };
-    case 'B1':
-      return { maxSentenceLength: 10, maxClauseDepth: 1 };
-    case 'B2':
-      return { maxSentenceLength: 12, maxClauseDepth: 2 };
-    case 'B3':
-      return { maxSentenceLength: 16, maxClauseDepth: 2 };
-    case 'B4':
-      return { maxSentenceLength: 22, maxClauseDepth: 3 };
-    default:
-      return {};
-  }
+  const deliveryContract = normalizeDeliveryContract(pedagogyContext.deliveryContract);
+  if (!deliveryContract) return {};
+  return {
+    maxSentenceLength: deliveryContract.maxSentenceLength,
+    maxClauseDepth: deliveryContract.maxClauseDepth,
+  };
 }
 
 function deriveFocusVocabulary(
@@ -123,7 +116,7 @@ export function buildSugarlangLanguageAdaptationContext(
     : undefined;
   const supportLanguagePolicy = normalizeSupportPolicy(pedagogyContext.supportLanguagePolicy);
   const focusVocabulary = deriveFocusVocabulary(pedagogyContext);
-  const bandBounds = deriveBandBounds(learnerBand);
+  const deliveryBounds = deriveDeliveryBounds(pedagogyContext);
 
   return {
     schemaVersion: 1,
@@ -143,7 +136,7 @@ export function buildSugarlangLanguageAdaptationContext(
           ? 1
           : 0,
     focusVocabulary,
-    ...bandBounds,
+    ...deliveryBounds,
   };
 }
 

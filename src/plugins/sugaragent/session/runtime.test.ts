@@ -327,6 +327,136 @@ describe('session runtime social fast path', () => {
     expect(result.output.intent).toBe('answer');
   });
 
+  it('applies concise delivery budgets before grounded generation', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.locations.earendale#overview-budget',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Overview',
+        summary: 'Earendale is a small town on a floating chunk of land.',
+        content: 'Earendale is a small town on a floating chunk of land.',
+        tokens: ['earendale', 'small', 'town', 'floating', 'land'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.locations.earendale#resort-budget',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Resort',
+        summary: 'The Wordlark Hollow Resort and Spa is just outside the town.',
+        content: 'The Wordlark Hollow Resort and Spa is just outside the town.',
+        tokens: ['wordlark', 'hollow', 'resort', 'spa', 'outside', 'town'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'resort'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.locations.earendale#season-budget',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Season',
+        summary: 'During peak season, visitor traffic rises sharply.',
+        content: 'During peak season, visitor traffic rises sharply.',
+        tokens: ['season', 'visitor', 'traffic', 'rises'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'season'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.locations.earendale#population-budget',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Population',
+        summary: 'The town has 57 permanent residents.',
+        content: 'The town has 57 permanent residents.',
+        tokens: ['57', 'permanent', 'residents', 'town'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'population'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('delivery-budget-earendale');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('What do you know about Earendale?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick',
+        loreScopes: ['locations.earendale'],
+      },
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B2',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'light_support',
+          deliveryContract: {
+            detailLevel: 'concise',
+            maxKnowledgeClaims: 2,
+            maxKnowledgeParts: 2,
+            maxSentences: 3,
+            maxSentenceLength: 12,
+            maxClauseDepth: 2,
+            allowExactNumbers: false,
+            allowEnrichmentFacts: false,
+            preferConcreteFacts: true,
+            preferHighFrequencyLexicon: true,
+          },
+        },
+      },
+    });
+
+    expect(result.pipeline.generation.replyParts.allowedClaimOrdinals).toHaveLength(2);
+    expect(result.pipeline.generation.replyParts.allowedClaimOrdinals?.[0]).toBe(1);
+  });
+
   it('realizes grounded lore replies directly in the Sugarlang target language', async () => {
     const loreDir = createTempLoreDir([
       {

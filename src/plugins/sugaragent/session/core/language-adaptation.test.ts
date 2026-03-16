@@ -14,6 +14,18 @@ describe('language adaptation context', () => {
       supportLanguage: 'en',
       supportLanguagePolicy: 'full_support',
       correctionPosture: 'immediate',
+      deliveryContract: {
+        detailLevel: 'minimal',
+        maxKnowledgeClaims: 1,
+        maxKnowledgeParts: 1,
+        maxSentences: 1,
+        maxSentenceLength: 8,
+        maxClauseDepth: 1,
+        allowExactNumbers: false,
+        allowEnrichmentFacts: false,
+        preferConcreteFacts: true,
+        preferHighFrequencyLexicon: true,
+      },
       availableTrackedLexicalEntryIds: ['lex.1', 'lex.2'],
       teachingSubset: {
         focusLexicalEntryIds: ['lex.1'],

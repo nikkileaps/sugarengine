@@ -35,6 +35,7 @@ import {
   serializeSceneLanguagePack,
   artifactPaths,
 } from './artifacts';
+import { createDefaultBandPolicyPack } from './band-policy-defaults';
 import { getSharedLexicon } from './lexicons';
 
 // ---------------------------------------------------------------------------
@@ -328,33 +329,7 @@ export function generateDraftScaffold(
   }
 
   // Generate default band policies
-  const bandPolicies: BandPolicyPack = {
-    policies: bands.map((bandId) => ({
-      bandId,
-      supportLanguagePolicy: {
-        mixingLevel: bandId === 'B0' ? 'full_support'
-          : bandId === 'B1' ? 'heavy_support'
-          : bandId === 'B2' ? 'light_support'
-          : bandId === 'B3' ? 'target_dominant'
-          : 'target_only',
-        showSupportStrip: false,
-        showGlosses: bandId === 'B2',
-      },
-      groundingIntensity: bandId === 'B0' ? 'always'
-        : bandId === 'B1' ? 'on_first_encounter'
-        : bandId === 'B4' ? 'none'
-        : 'on_request',
-      allowedResponseModes: bandId === 'B0' ? ['chip_composition', 'object_selection']
-        : bandId === 'B1' ? ['single_blank', 'blank_fill', 'phrase_assembly', 'word_bank', 'object_selection']
-        : bandId === 'B2' ? ['short_text']
-        : bandId === 'B3' ? ['short_text', 'open_text']
-        : ['open_text', 'free_form'],
-      correctionPosture: bandId <= 'B1' ? 'immediate'
-        : bandId === 'B2' ? 'delayed'
-        : bandId === 'B3' ? 'on_request'
-        : 'none',
-    })),
-  };
+  const bandPolicies: BandPolicyPack = createDefaultBandPolicyPack(bands);
   files.set(artifactPaths.bandPolicies(), serializeBandPolicies(bandPolicies, 'draft'));
 
   return files;

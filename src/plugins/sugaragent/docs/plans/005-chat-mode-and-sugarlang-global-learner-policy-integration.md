@@ -169,6 +169,17 @@ Prompted replies may honor target language, but deterministic fallback and uncer
 
 Short Spanish social turns are still too likely to collapse into knowledge routing and retrieval failure instead of remaining in social chat.
 
+Known failing examples from current traces include:
+
+1. `bien y tu`
+2. `me llamo Mim`
+3. `donde estas`
+
+These are the first concrete routing failures observed in testing.
+
+That does not mean Spanish is a special product case.
+It only means Spanish is the first regression corpus we can seed from real evidence.
+
 ## Target Architecture
 
 ### A. Engine-owned engagement model
@@ -198,7 +209,8 @@ Dynamic discovery answers:
 
 1. whether this NPC supports `chat`, `scenario`, or both right now,
 2. which provider is offering that engagement,
-3. what label and priority the engine should use in the chooser.
+3. what label and priority the engine should use in the chooser,
+4. what presentation family and driver model the engine should use after selection.
 
 The plan should treat the following as the target contract shape:
 
@@ -215,6 +227,7 @@ interface ConversationEngagementOption {
   label: string;
   priority?: number;
   presentationKind?: 'chat_panel' | 'dialogue_panel';
+  driverKind?: 'host_turn_driven' | 'dialogue_manager_driven';
 }
 
 interface ConversationProvider {
@@ -235,6 +248,42 @@ listEngagementOptions(
 ```
 
 This is what replaces plugin-name checks for "can this NPC chat?"
+
+### A2. Engine-owned runtime dispatch contract
+
+Provider discovery alone is not enough.
+
+The engine currently uses provider ids to decide:
+
+1. which UI to show,
+2. which submit method to call,
+3. which session start/end events to fire,
+4. whether the conversation is host-turn-driven or delegated to the dialogue manager.
+
+Phase A must explicitly migrate that dispatch layer, not just provider selection.
+
+Target direction:
+
+1. selected engagement options carry engine-owned `presentationKind`,
+2. selected engagement options carry engine-owned `driverKind`,
+3. the session stores those fields,
+4. [Game.ts](/Users/nikki/projects/sugarengine/src/engine/core/Game.ts) and [gameUI.ts](/Users/nikki/projects/sugarengine/src/gameUI.ts) dispatch by those fields instead of plugin provider ids.
+
+That implies a generic engine-owned conversation-control surface such as:
+
+```ts
+submitConversationTurn(input: PlayerInput): Promise<ConversationTurnEnvelope | null>
+closeConversation(): Promise<void>
+getActiveConversationSession(): Readonly<ConversationSession> | null
+```
+
+And generic conversation lifecycle events such as:
+
+1. `onConversationSessionStart`
+2. `onConversationSessionEnd`
+3. `onConversationTurnProduced`
+
+Existing provider-specific helpers such as `submitAgentConversationTurn` and `submitSugarlangTurn` should be treated as migration shims to remove during this phase, not as part of the final contract.
 
 ### B. Provider-neutral learner policy contract
 
@@ -281,8 +330,11 @@ Implement:
 6. Add an engine-owned host method such as `listEngagementOptions(...)` and use that in [Game.ts](/Users/nikki/projects/sugarengine/src/engine/core/Game.ts) before starting a conversation.
 7. Add a new engine-owned chooser UI component under `src/engine/ui/` and invoke it from [Game.ts](/Users/nikki/projects/sugarengine/src/engine/core/Game.ts) when more than one engagement is available.
 8. Pass the chosen `engagementKind` and selected `providerId` into provider selection and middleware execution.
-9. Add session-level engine-owned fields such as `engagementKind` and, if needed, `presentationKind`, so runtime UI routing no longer depends on provider ids.
-10. Replace current engine checks like `hasSugarAgentProvider` and `session.providerId === 'sugaragent'` with engagement-based or presentation-based checks.
+9. Add session-level engine-owned fields such as `engagementKind`, `presentationKind`, and `driverKind`, so runtime UI routing no longer depends on provider ids.
+10. Replace provider-specific conversation-control methods in [Game.ts](/Users/nikki/projects/sugarengine/src/engine/core/Game.ts) with generic engine-owned conversation control methods.
+11. Update [gameUI.ts](/Users/nikki/projects/sugarengine/src/gameUI.ts) to choose between chat overlay, dialogue presenter, and response-contract widgets from session `presentationKind` and response contract, not from provider ids.
+12. Replace current engine checks like `hasSugarAgentProvider`, `session.providerId === 'sugaragent'`, and `session.providerId === 'sugarlang-scripted'` with engagement-based, presentation-based, or driver-based checks.
+13. Replace provider-specific conversation lifecycle events with generic engine-owned conversation events, or make the provider-specific callbacks thin compatibility shims outside core dispatch.
 
 Do not:
 
@@ -299,7 +351,8 @@ Acceptance:
 4. if only one engagement exists, current auto-start behavior remains,
 5. plugins contribute option descriptors, not UI ownership,
 6. the engine can discover `chat` availability without naming SugarAgent,
-7. runtime UI routing no longer depends on `session.providerId === 'sugaragent'`.
+7. runtime UI routing no longer depends on `session.providerId === 'sugaragent'`,
+8. [Game.ts](/Users/nikki/projects/sugarengine/src/engine/core/Game.ts) no longer uses plugin provider ids as the primary dispatch key for chat/scenario UI flow.
 
 ### Phase B: Replace legacy NPC interaction authoring with `interactionCapabilities`
 
@@ -371,22 +424,75 @@ Acceptance:
 3. SugarAgent still works normally when Sugarlang is disabled,
 4. no SugarAgent file imports Sugarlang code or types.
 
-### Phase E: Harden multilingual social routing for chat
+### Phase E: Target-language-driven multilingual social routing hardening for chat
 
 **Goal:** Keep ordinary low-band Spanish chat in the social lane instead of misrouting it into failed knowledge retrieval.
 
+Product requirement:
+
+1. support the target languages enabled for Sugarlang use in the project,
+2. not just Spanish,
+3. without introducing a direct SugarAgent -> Sugarlang dependency.
+
+Architecture direction:
+
+1. SugarAgent should route from the active `targetLanguage` in engine-owned learner policy.
+2. SugarAgent should own its own internal per-language social-routing rules for supported target languages.
+3. Those routing rules are SugarAgent implementation data, not Sugarlang data.
+4. The engine only passes generic language context such as `targetLanguage`.
+5. The routing-rule mechanism must work for every target language the game enables through Sugarlang chat.
+6. Spanish is the first seeded regression corpus because that is where current failures were observed, not because Spanish is a special support boundary.
+
+Target-language cue categories to support explicitly:
+
+1. greetings
+   - examples: `hola`, `buenas`, `buenos dias`
+2. wellbeing / acknowledgement
+   - examples: `bien`, `muy bien`, `todo bien`
+3. reciprocal social follow-up
+   - examples: `y tu`, `¿y tu?`, `como estas`, `¿como estas?`
+4. self-introduction
+   - examples: `me llamo ...`, `soy ...`
+5. thanks / farewell
+   - examples: `gracias`, `adios`, `hasta luego`
+6. lightweight NPC-self location or status prompts
+   - examples: `donde estas`, `¿donde estas?`
+
 Implement:
 
-1. Extend multilingual social cues in [routing.ts](/Users/nikki/projects/sugarengine/src/plugins/sugaragent/session/core/routing.ts) and [query-interpretation.ts](/Users/nikki/projects/sugarengine/src/plugins/sugaragent/session/core/query-interpretation.ts).
-2. Improve detection for greetings, self-introductions, acknowledgements, and reciprocal questions.
-3. Require stronger evidence before short social turns are upgraded into knowledge/location retrieval.
-4. Add tests for common low-band Spanish turns in [runtime.ts](/Users/nikki/projects/sugarengine/src/plugins/sugaragent/session/runtime.ts) coverage and related test files.
+1. Extend multilingual social cues in [routing.ts](/Users/nikki/projects/sugarengine/src/plugins/sugaragent/session/core/routing.ts) and [query-interpretation.ts](/Users/nikki/projects/sugarengine/src/plugins/sugaragent/session/core/query-interpretation.ts) with SugarAgent-owned per-language social-routing rules selected by the active `targetLanguage`.
+2. Seed the first cue pack from Spanish because that is where current observed failures exist, but make the implementation path language-pack-driven from the start.
+3. Protect short target-language utterances of 8 tokens or fewer that match the supported social cue categories from upgrading into world-knowledge retrieval unless an explicit world referent is present.
+4. Define an initial "stronger evidence" gate for `knowledge/world/location` routing:
+   - explicit named world referent or grounded object,
+   - or retrieval candidate count greater than zero,
+   - or semantic confidence at or above `0.70` with margin at or above `0.15` over the social lane,
+   - and the utterance does not match a protected cue-pack social template.
+5. Prefer social/self-location handling for lightweight NPC-directed prompts such as `donde estas` when no explicit world referent or retrieval candidate exists.
+6. Add diagnostics that explain why a turn was upgraded from social to knowledge routing, including target language, cue-pack match/miss, explicit referent presence, retrieval candidate presence, confidence, and margin.
+7. Add a seeded Spanish regression suite covering:
+   - greetings,
+   - wellbeing / acknowledgement,
+   - reciprocal questions,
+   - self-introductions,
+   - thanks / farewells,
+   - lightweight self-location prompts,
+   - explicit factual location questions with named referents as positive knowledge-routing controls.
+8. Add equivalent routing-rule tests for each target language enabled in Sugarlang for the project or shipped demo bundle.
+9. Add tests for the observed failing examples from current traces: `bien y tu`, `me llamo Mim`, and `donde estas`.
+10. Decide and document degraded behavior when a target language is enabled but no cue pack exists:
+   - either block publish / warn loudly,
+   - or fall back to neutral heuristics with degraded diagnostics.
 
 Acceptance:
 
-1. `hola`, `bien y tu`, `me llamo ...`, and similar turns stay in social chat,
-2. self-introductions do not degrade into world-location queries,
-3. low-band social chat stops frequently returning generic uncertainty for normal conversation.
+1. the routing architecture is keyed by active `targetLanguage`, not hard-coded to Spanish,
+2. protected social phrases in each enabled target language do not route to `knowledge/world/location/current` in that language's regression suite,
+3. short self-introductions and reciprocal questions in each enabled target language do not trigger retrieval when no explicit referent exists,
+4. lightweight self-location prompts without an explicit world referent no longer fall through to corrective-fail world-knowledge retrieval,
+5. explicit factual questions with named referents still reach the knowledge path,
+6. each enabled target language regression suite reaches at least `90%` correct lane classification overall,
+7. routing diagnostics record target language and which evidence gate caused a knowledge-route upgrade.
 
 ### Phase F: Regression matrix for removability and composition
 
@@ -420,8 +526,9 @@ Potential additions to [types.ts](/Users/nikki/projects/sugarengine/src/engine/c
 1. `ConversationEngagementKind`
 2. `ConversationEngagementOption`
 3. `ConversationPresentationKind`
-4. `GlobalLearnerPolicy`
-5. `ScenarioAugmentation`
+4. `ConversationDriverKind`
+5. `GlobalLearnerPolicy`
+6. `ScenarioAugmentation`
 
 The important rule is not the exact type shape. The important rule is that shared contracts live in the engine, not in either plugin.
 
@@ -473,12 +580,14 @@ interface ConversationEngagementOption {
   label: string;
   priority?: number;
   presentationKind?: ConversationPresentationKind;
+  driverKind?: ConversationDriverKind;
 }
 
 interface ConversationSession {
   providerId: string;
   engagementKind?: ConversationEngagementKind;
   presentationKind?: ConversationPresentationKind;
+  driverKind?: ConversationDriverKind;
 }
 ```
 
@@ -507,7 +616,8 @@ Planned engine usage:
 3. if one option exists, auto-start it,
 4. if multiple options exist, show the engine-owned chooser,
 5. store the selected `engagementKind` on the session,
-6. route runtime UI by `engagementKind` or `presentationKind`, not by provider id.
+6. store `presentationKind` and `driverKind` on the session,
+7. route runtime UI and session control by `engagementKind`, `presentationKind`, or `driverKind`, not by provider id.
 
 ### Population rules
 
@@ -521,6 +631,70 @@ Planned engine usage:
    - both may be present
 4. If SugarAgent is absent:
    - the scenario lane still works with scripted/Sugarlang behavior
+
+### Global learner policy population rules
+
+`GlobalLearnerPolicy` should be populated from bundle-global Sugarlang data, not from scenario hydration.
+
+Expected sources:
+
+1. `learnerBand`
+   - from learner-state resolution or preview override
+2. `targetLanguage`
+   - from session / engine language context
+3. `supportLanguage`
+   - from session / engine language context
+4. `supportLanguagePolicy`
+   - from bundle-level `bandPolicies` for the resolved band
+5. `correctionPosture`
+   - from bundle-level `bandPolicies` for the resolved band
+6. learner-level advisory constraints such as allowed response modes
+   - from bundle-level `bandPolicies`
+7. cumulative tracked vocabulary availability through the current band
+   - from bundle-level target-language `lexicon`, filtered by `introductionBand <= learnerBand`
+
+This means non-scenario chat should still receive meaningful learner policy whenever Sugarlang is enabled and the bundle contains the relevant target-language defaults.
+
+### Scenario augmentation population rules
+
+`ScenarioAugmentation` should be populated only from scenario-specific Sugarlang data such as:
+
+1. scenario brief
+2. scene semantics
+3. grounding map
+4. scene language pack
+5. quest bindings
+6. active teaching subset
+7. ambient halo allowance
+8. scenario-specific provider policy
+
+### No-scenario chat presence rules
+
+When Sugarlang is enabled but no scenario is active:
+
+Present:
+
+1. learner band
+2. target language
+3. support language
+4. support-language policy
+5. correction posture
+6. bundle-derived cumulative tracked vocabulary availability, when a target-language lexicon exists
+
+Absent:
+
+1. scene semantics
+2. grounding scope
+3. teaching subset
+4. ambient halo allowance
+5. scenario-specific provider policy
+6. scenario evaluation hooks
+
+### Missing data behavior
+
+1. If the target-language lexicon is missing, vocabulary availability should be `undefined`, not fabricated as an empty scenario-like set.
+2. If a band policy is missing, Sugarlang should still provide the resolved learner band and language context, while policy-derived fields remain absent.
+3. If richer low-band style bounds such as sentence-length or code-switch constraints are required for chat, they should be added to bundle-level `BandPolicy`, not derived from scenario data.
 
 ## Risks
 
@@ -581,4 +755,5 @@ This plan is complete when all of the following are true:
 9. Old projects are upgraded from `interactionMode` to `interactionCapabilities` at the project-document boundary.
 10. New NPC authoring uses only `interactionCapabilities`.
 11. The engine discovers engagement availability through engine-owned provider contracts, not plugin-name checks.
-12. No direct plugin-to-plugin dependency is introduced.
+12. Runtime UI and conversation dispatch in the engine use engagement/presentation/driver contracts instead of plugin provider ids.
+13. No direct plugin-to-plugin dependency is introduced.

@@ -73,6 +73,13 @@ import {
   localizeSimpleSocialReply,
 } from './core/language-stock';
 import {
+  buildDeliveryContractPromptLines,
+  normalizeDeliveryContract,
+  selectDeliveryClaims,
+  summarizeDeliveryContractForDiagnostics,
+  validateReplyAgainstDeliveryContract,
+} from './core/delivery-contract';
+import {
   runEvidenceFirstPipeline,
   buildNpcStateSnapshot,
   enrichEvidencePackWithEpistemics,
@@ -162,6 +169,7 @@ function emitReplyLanguageDebugLog(input: {
     supportLanguage,
     learnerBand,
     supportPolicy,
+    deliveryContract: summarizeDeliveryContractForDiagnostics(pedagogyContext?.deliveryContract),
     estimatedLanguage: estimate.estimatedLanguage,
     mismatchSuspected: estimate.mismatchSuspected,
     scoreByLanguage: estimate.scoreByLanguage,
@@ -206,6 +214,7 @@ function emitPlanRealizationStatusLog(input: {
     supportLanguage,
     learnerBand: normalizeOptionalString(pedagogyContext?.learnerBand),
     supportPolicy: normalizeOptionalString(pedagogyContext?.supportLanguagePolicy),
+    deliveryContract: summarizeDeliveryContractForDiagnostics(pedagogyContext?.deliveryContract),
     estimatedLanguage: input.estimatedLanguage,
     mismatchSuspected: input.mismatchSuspected,
     validationMode: input.validationMode,
@@ -265,6 +274,10 @@ interface ValidatedPlanClaimSlot {
   mode: 'grounded' | 'inferred' | 'rumor';
   text: string;
   supportSlotIds: string[];
+}
+
+function getNormalizedDeliveryContract(turnContext: unknown) {
+  return normalizeDeliveryContract(getPedagogyContext(turnContext)?.deliveryContract);
 }
 
 interface SessionOptions {
@@ -571,11 +584,23 @@ function buildValidatedPlanClaimMetadata(input: RecordLike | null | undefined) {
   const claimsByOrdinal = new Map(
     planClaims.map((claim) => [claim.claimOrdinal, claim] as const),
   );
+  const selection = selectDeliveryClaims({
+    claims: planClaims,
+    deliveryContract: getPedagogyContext(input?.turnContext)?.deliveryContract,
+    playerMessage: input?.playerMessage,
+  });
+  const deliveryClaims = selection.selectedClaims;
+  const deliveryClaimsByOrdinal = new Map(
+    deliveryClaims.map((claim) => [claim.claimOrdinal, claim] as const),
+  );
 
   return {
     planClaims,
-    allowedClaimOrdinals: planClaims.map((claim) => claim.claimOrdinal),
+    deliveryClaims,
+    allowedClaimOrdinals: deliveryClaims.map((claim) => claim.claimOrdinal),
     claimsByOrdinal,
+    deliveryClaimsByOrdinal,
+    omittedClaimOrdinals: selection.omittedClaimOrdinals,
   };
 }
 
@@ -583,6 +608,7 @@ function buildValidatedPlanInstructionLines(input: RecordLike | null | undefined
   const safeInput = isRecord(input) ? input : {};
   const plan = isRecord(safeInput.plan) ? safeInput.plan : {};
   const targetLanguage = normalizeLanguageCode(getPedagogyContext(safeInput.turnContext)?.targetLanguage);
+  const deliveryContract = getNormalizedDeliveryContract(safeInput.turnContext);
   const claims = Array.isArray(safeInput.planClaims)
     ? safeInput.planClaims
     : Array.isArray(plan.claims)
@@ -609,6 +635,9 @@ function buildValidatedPlanInstructionLines(input: RecordLike | null | undefined
     });
   }
 
+  if (deliveryContract?.maxKnowledgeClaims) {
+    lines.push(`Only these selected delivery claims are eligible for this reply. Stay within ${deliveryContract.maxKnowledgeClaims} knowledge claim(s).`);
+  }
   lines.push('Use only the factual content listed above. Do not add new facts outside that list.');
   lines.push(
     targetLanguage !== 'default' && targetLanguage !== 'en'
@@ -664,6 +693,7 @@ function buildPlanBoundReplyPartsRepairPrompt(input: RecordLike | null | undefin
     'Retry now with strict JSON only.',
     'Do not include support ids, claim ids, evidence ids, or any internal bookkeeping.',
     'Keep the reply natural and conversational, but use only the allowed factual content.',
+    'If the previous reply was too dense, keep fewer facts, fewer sentences, and simpler wording this time.',
     'If the factual content is not answerable without adding a new fact, return an uncertain part.',
     buildValidatedPlanInstructionLines(safeInput).join('\n'),
   ].filter(Boolean).join('\n');
@@ -733,6 +763,7 @@ function buildGroundedReplyAuditPrompt(input: {
     '- close = a conversational sign-off or wrap-up such as goodbye or "that is all", with no factual claim',
     '- unsupported = factual content that is outside the allowed claim table',
     'Important: close means closing the conversation. It does NOT mean "close enough" or "approximately related."',
+    ...buildDeliveryContractPromptLines(getPedagogyContext(turnContext)?.deliveryContract),
     `The candidate reply has exactly ${candidateParts.length} parts.`,
     `You must return exactly ${candidateParts.length} partAudits, one for each partIndex in [${expectedIndexes.join(', ')}].`,
     'Do not invent extra part indexes. Do not omit any candidate part index.',
@@ -1013,7 +1044,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
     return null;
   }
 
-  const allowedSupportSlots = buildValidatedPlanSupportSlots({
+  const allSupportSlots = buildValidatedPlanSupportSlots({
     plan,
     evidencePack,
     evidenceEntries,
@@ -1024,8 +1055,13 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
   const claimMetadata = buildValidatedPlanClaimMetadata({
     plan,
     evidencePack,
-    supportSlots: allowedSupportSlots,
+    supportSlots: allSupportSlots,
+    playerMessage,
+    turnContext: safeInput.turnContext,
   });
+  const allowedSupportSlots = allSupportSlots.filter((slot) => (
+    claimMetadata.deliveryClaims.some((claim) => claim.supportSlotIds.includes(slot.slotId))
+  ));
 
   await ensureModelLoaded();
   generationDiagnostics.draft.attempted = true;
@@ -1065,7 +1101,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         queryType,
         routeIntent,
         plan,
-        planClaims: claimMetadata.planClaims,
+        planClaims: claimMetadata.deliveryClaims,
         turnContext: safeInput.turnContext,
         supportSlots: allowedSupportSlots,
       })
@@ -1075,7 +1111,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         queryType,
         routeIntent,
         plan,
-        planClaims: claimMetadata.planClaims,
+        planClaims: claimMetadata.deliveryClaims,
         turnContext: safeInput.turnContext,
         supportSlots: allowedSupportSlots,
         failureReason: repairReason,
@@ -1084,13 +1120,13 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
       kind: 'validated-plan-realization',
       prompt,
       schemaText: REPLY_PARTS_JSON_SCHEMA,
-      maxTokens: Math.min(420, 200 + (claimMetadata.planClaims.length * 60)),
+      maxTokens: Math.min(420, 180 + (claimMetadata.deliveryClaims.length * 70)),
       attempt,
       input: {
         npcName,
         playerMessage,
         turnContext: safeInput.turnContext,
-        planClaims: claimMetadata.planClaims,
+        planClaims: claimMetadata.deliveryClaims,
       },
     });
 
@@ -1137,7 +1173,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
       queryType,
       routeIntent,
       generatedTurn: parsedResult.turn,
-      planClaims: claimMetadata.planClaims,
+      planClaims: claimMetadata.deliveryClaims,
     });
     const auditGenerated = await runtime.generateJson({
       kind: 'grounded-reply-audit',
@@ -1151,7 +1187,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         queryType,
         routeIntent,
         generatedTurn: parsedResult.turn,
-        planClaims: claimMetadata.planClaims,
+        planClaims: claimMetadata.deliveryClaims,
         turnContext: safeInput.turnContext,
       },
     });
@@ -1197,7 +1233,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
 
     const auditedTurnResult = materializeAuditedGroundedTurn({
       generatedTurn: parsedResult.turn,
-      planClaims: claimMetadata.planClaims,
+      planClaims: claimMetadata.deliveryClaims,
       unsupportedFacts: parsedAudit.audit.unsupportedFacts,
       partAudits: parsedAudit.audit.partAudits,
     });
@@ -1315,6 +1351,38 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
       generationDiagnostics.replyParts.failureReason = repairReason;
       emitPlanRealizationStatusLog({
         stage: 'language-rejected',
+        strategy: 'generator_auditor',
+        attempt,
+        turnContext: safeInput.turnContext,
+        npcId: normalizeOptionalString(npcId) ?? undefined,
+        routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+        queryType: normalizeOptionalString(queryType) ?? undefined,
+        turnPath: 'grounded',
+        failureReason: repairReason,
+        estimatedLanguage: languageEstimate.estimatedLanguage,
+        mismatchSuspected: languageEstimate.mismatchSuspected,
+        allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+        acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
+        allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        validationMode: 'generator_auditor',
+      });
+      continue;
+    }
+
+    const deliveryContractCheck = validateReplyAgainstDeliveryContract({
+      deliveryContract: getPedagogyContext(safeInput.turnContext)?.deliveryContract,
+      utterance: materialized.utterance,
+      acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
+      knowledgePartCount: realizedKnowledgeParts,
+    });
+    if (!deliveryContractCheck.ok) {
+      repairReason = deliveryContractCheck.failureReason ?? 'delivery_contract_rejected';
+      generationDiagnostics.draft.success = false;
+      generationDiagnostics.draft.failureReason = repairReason;
+      generationDiagnostics.replyParts.success = false;
+      generationDiagnostics.replyParts.failureReason = repairReason;
+      emitPlanRealizationStatusLog({
+        stage: 'delivery-contract-rejected',
         strategy: 'generator_auditor',
         attempt,
         turnContext: safeInput.turnContext,
@@ -1674,8 +1742,8 @@ function buildLanguageInstructionLines(turnContext: unknown): string[] {
   const pedagogyContext = getPedagogyContext(turnContext);
   const targetLanguage = normalizeOptionalString(pedagogyContext?.targetLanguage);
   const supportLanguage = normalizeOptionalString(pedagogyContext?.supportLanguage);
-  const learnerBand = normalizeOptionalString(pedagogyContext?.learnerBand);
   const supportPolicy = normalizeOptionalString(pedagogyContext?.supportLanguagePolicy);
+  const deliveryContract = normalizeDeliveryContract(pedagogyContext?.deliveryContract);
 
   if (!targetLanguage) {
     return [
@@ -1686,11 +1754,18 @@ function buildLanguageInstructionLines(turnContext: unknown): string[] {
 
   const lines = [
     `Sugarlang target language is ${targetLanguage}. Keep the visible reply in ${targetLanguage}.`,
-    learnerBand
-      ? `Match the learner's current Sugarlang band (${learnerBand}). Prefer simple, high-frequency wording for that band.`
+    deliveryContract
+      ? 'Use the delivery contract below to keep factual density and wording at the intended learner level.'
       : 'Prefer simple, learnable target-language wording.',
     'Do not switch back to the player language just because the player wrote in it.',
   ];
+
+  if (deliveryContract?.preferHighFrequencyLexicon) {
+    lines.push('Prefer high-frequency, learnable target-language wording when natural.');
+  }
+  if (deliveryContract?.allowExactNumbers === false) {
+    lines.push('Avoid exact numeric details unless they are essential to answer the question.');
+  }
 
   if (supportPolicy === 'target_only') {
     lines.push('Do not include support-language words or translations in the visible reply.');
@@ -1719,6 +1794,7 @@ function buildPedagogyBlock(turnContext: unknown): string | null {
   const learnerBand = normalizeOptionalString(pedagogyContext.learnerBand);
   const supportPolicy = normalizeOptionalString(pedagogyContext.supportLanguagePolicy);
   const correctionPosture = normalizeOptionalString(pedagogyContext.correctionPosture);
+  const deliveryContractSummary = summarizeDeliveryContractForDiagnostics(pedagogyContext.deliveryContract);
   const trackedPoolSize = Array.isArray(pedagogyContext.availableTrackedLexicalEntryIds)
     ? pedagogyContext.availableTrackedLexicalEntryIds.length
     : 0;
@@ -1729,6 +1805,7 @@ function buildPedagogyBlock(turnContext: unknown): string | null {
   if (learnerBand) lines.push(`- Learner band: ${sanitizePromptText(learnerBand)}`);
   if (supportPolicy) lines.push(`- Support policy: ${sanitizePromptText(supportPolicy)}`);
   if (correctionPosture) lines.push(`- Correction posture: ${sanitizePromptText(correctionPosture)}`);
+  if (deliveryContractSummary) lines.push(`- Delivery contract: ${deliveryContractSummary}`);
   if (trackedPoolSize > 0) lines.push(`- Tracked vocabulary pool: ${trackedPoolSize} items`);
   if (focusVocabulary.length > 0) {
     lines.push(`- Prefer this target-language vocabulary when natural: ${focusVocabulary.join(', ')}`);
@@ -1746,38 +1823,6 @@ function buildPedagogyBlock(turnContext: unknown): string | null {
 
   if (lines.length === 0) return null;
   return ['Sugarlang pedagogy context:', ...lines].join('\n');
-}
-
-function buildLearnerBandStyleLines(turnContext: unknown): string[] {
-  const learnerBand = normalizeOptionalString(getPedagogyContext(turnContext)?.learnerBand)?.toUpperCase();
-  if (!learnerBand) return [];
-
-  if (learnerBand === 'B0') {
-    return [
-      'For factual parts, prefer one very short sentence per part.',
-      'At this learner band, use at most 2 grounded factual parts and only the most important facts.',
-      'Use simple present-tense wording and avoid subordinate clauses.',
-      'Prefer high-frequency everyday words over ornate phrasing.',
-    ];
-  }
-
-  if (learnerBand === 'B1') {
-    return [
-      'Keep factual parts short and easy to parse.',
-      'Prefer at most 2 grounded factual parts unless a second fact is essential.',
-      'Prefer direct wording and only one small hedge when a hedge is required.',
-    ];
-  }
-
-  if (learnerBand === 'B2') {
-    return [
-      'Use clear natural phrasing, but do not get elaborate.',
-    ];
-  }
-
-  return [
-    'Keep the reply natural, but still easy to follow.',
-  ];
 }
 
 function extractProperNameAnchorsFromClaims(planClaims: Array<{ text?: string }>): string[] {
@@ -1812,6 +1857,7 @@ function buildGroundedTargetLanguageAnchorLines(input: {
   const pedagogyContext = getPedagogyContext(input.turnContext);
   const targetLanguage = normalizeOptionalString(pedagogyContext?.targetLanguage);
   if (!targetLanguage || normalizeLanguageCode(targetLanguage) === 'en') return [];
+  const deliveryContract = normalizeDeliveryContract(pedagogyContext?.deliveryContract);
 
   const focusVocabulary = pedagogyContext ? buildPedagogyVocabularyList(pedagogyContext) : [];
   const properNames = extractProperNameAnchorsFromClaims(
@@ -1836,7 +1882,7 @@ function buildGroundedTargetLanguageAnchorLines(input: {
     lines.push(`Prefer these target-language anchor words when natural: ${focusVocabulary.join(', ')}`);
   }
 
-  lines.push(...buildLearnerBandStyleLines(input.turnContext));
+  lines.push(...buildDeliveryContractPromptLines(deliveryContract));
   lines.push('Target-language factual style examples (imitate the language and simplicity, not the facts):');
   lines.push(`{"parts":[{"kind":"grounded","text":"${groundedExample}"}],"emotion":"grounded","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}`);
   lines.push(`{"parts":[{"kind":"inferred","text":"${inferredExample}"}],"emotion":"guarded","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}`);

@@ -1,4 +1,5 @@
 import type { PluginIntent } from '../plugins/types';
+import type { DeliveryContract } from './deliveryContract';
 import type {
   ConversationDriverKind,
   ConversationEngagementKind,
@@ -122,6 +123,9 @@ export interface ProviderConstraintBundle {
 
   /** Response contract the provider should aim to satisfy. */
   responseContract?: ResponseContract;
+
+  /** Generic NPC delivery budget and complexity targets. */
+  deliveryContract?: DeliveryContract;
 
   sceneSemantics?: Record<string, unknown>;
 
