@@ -212,9 +212,11 @@ function parseReplyPart(value: unknown): ReplyPart | null {
     return null;
   }
   const support = normalizeStringArray(value.support);
-  return support.length > 0
-    ? { kind, text, support }
-    : { kind, text };
+  const part: ReplyPart = { kind, text };
+  if (support.length > 0) {
+    part.support = support;
+  }
+  return part;
 }
 
 function parseBeatEvidence(value: unknown): SugarAgentBeatEvidence | undefined {
@@ -374,19 +376,21 @@ export function normalizeReplyPartsForValidation(input: {
       const support = normalizeStringArray(part.support);
       const validSupport = support.filter((slotId) => supportSlots.some((slot) => slot.slotId === slotId));
       if (validSupport.length > 0) {
-        return validSupport.length === support.length
-          ? part
+        const nextPart: ReplyPart = validSupport.length === support.length
+          ? { ...part }
           : {
             ...part,
             support: validSupport,
           };
+        return nextPart;
       }
       const inferredSupport = inferSupportSlots(part.text);
       if (inferredSupport.length === 0) return part;
-      return {
+      const nextPart: ReplyPart = {
         ...part,
         support: inferredSupport,
       };
+      return nextPart;
     }),
   };
 }

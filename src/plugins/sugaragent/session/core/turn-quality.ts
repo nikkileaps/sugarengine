@@ -1,6 +1,10 @@
 import { normalizeInitiativeAction } from './initiative';
 import { hasLikelyQuestionForm } from './routing';
 import {
+  extractDeclaredIdentityName as extractDeclaredIdentityNameForLanguage,
+  isLikelyGreetingOnlyMessage as isLikelyGreetingOnlyMessageForLanguage,
+} from './social-cues';
+import {
   extractSalientFacts,
   MAX_SESSION_FACTS_PER_NPC,
 } from './session-state';
@@ -296,15 +300,8 @@ function isLikelyFirstMeetingFamiliarityClaim(utterance: unknown): boolean {
   return patterns.some((pattern) => pattern.test(normalized));
 }
 
-export function isLikelyGreetingOnlyMessage(playerMessage: unknown): boolean {
-  const normalized = normalizeForEchoCheck(playerMessage);
-  if (!normalized) return false;
-  const patterns = [
-    /^(hi|hello|hey|hola|howdy)$/,
-    /^(hi|hello|hey|hola|howdy)\s+(there|friend|baker|sir|maam|madam)$/,
-    /^(good\s+morning|good\s+afternoon|good\s+evening)$/,
-  ];
-  return patterns.some((pattern) => pattern.test(normalized));
+export function isLikelyGreetingOnlyMessage(playerMessage: unknown, targetLanguage?: unknown): boolean {
+  return isLikelyGreetingOnlyMessageForLanguage(playerMessage, targetLanguage);
 }
 
 function isLikelyUngroundedFirstMeetingGreetingReply(utterance: unknown, playerMessage: unknown): boolean {
@@ -671,34 +668,8 @@ function normalizeIdentityName(text: unknown): string {
     .trim();
 }
 
-export function extractDeclaredIdentityName(message: unknown): string | null {
-  const source = sanitizePromptText(message);
-  if (!source) return null;
-
-  const explicitNameMatch = source.match(/\bmy name is\s+([a-z\u00c0-\u024f' -]{2,40})\b/i);
-  if (explicitNameMatch?.[1]) {
-    const normalized = normalizeIdentityName(explicitNameMatch[1]);
-    return normalized || null;
-  }
-
-  const shortIntroMatch = source.match(/^(?:i am|i'm)\s+([a-z\u00c0-\u024f' -]{2,40})(?:[,.!?;:]|$)/i);
-  if (!shortIntroMatch?.[1]) return null;
-  const normalized = normalizeIdentityName(shortIntroMatch[1]);
-  if (!normalized) return null;
-  const excluded = new Set([
-    'a',
-    'an',
-    'fine',
-    'good',
-    'okay',
-    'ok',
-    'here',
-    'new',
-    'sorry',
-    'ready',
-  ]);
-  if (excluded.has(normalized)) return null;
-  return normalized;
+export function extractDeclaredIdentityName(message: unknown, targetLanguage?: unknown): string | null {
+  return extractDeclaredIdentityNameForLanguage(message, targetLanguage);
 }
 
 function extractPlayerDeclaredIdentityName(playerMessage: unknown, history: unknown): string | null {

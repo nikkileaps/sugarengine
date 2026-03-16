@@ -1,4 +1,8 @@
 import { interpretQuery } from './query-interpretation';
+import {
+  isLikelySmallTalkQuery as isLikelySmallTalkQueryForLanguage,
+  isProtectedShortSocialTurn,
+} from './social-cues';
 import type { EvidencePreview, QueryInterpretation } from './turn-contracts';
 
 export type QueryType = 'conversation' | 'self_query' | 'other_query' | 'world_query' | 'mixed_query';
@@ -284,20 +288,8 @@ export function hasLikelyQuestionForm(playerMessage: unknown): boolean {
   return /^(what|when|where|who|why|how|do|did|can|could|would|will|have|has|is|are)\b/.test(normalized);
 }
 
-function isLikelySmallTalkQuery(playerMessage: unknown): boolean {
-  const source = String(playerMessage ?? '').trim().toLowerCase();
-  if (!source) return false;
-  const normalized = source.replace(/[^a-z0-9\u00c0-\u024f\s'?]/g, ' ').replace(/\s+/g, ' ').trim();
-  const patterns = [
-    /\bhow are you\b/,
-    /\bhow('s| is) it going\b/,
-    /\bhow have you been\b/,
-    /\bwhat('?s| is) up\b/,
-    /\bare you (okay|ok|good)\b/,
-    /\byou good\b/,
-    /\bhows your day\b/,
-  ];
-  return patterns.some((pattern) => pattern.test(normalized));
+function isLikelySmallTalkQuery(playerMessage: unknown, targetLanguage?: unknown): boolean {
+  return isLikelySmallTalkQueryForLanguage(playerMessage, targetLanguage);
 }
 
 export function routeIntentToQueryType(intent: string): QueryType {
@@ -331,6 +323,46 @@ function projectInterpretationIntent(interpretation: QueryInterpretation): Routi
   return 'unclear';
 }
 
+function resolveAmbiguousIntentConsensus(interpretation: QueryInterpretation): RoutingIntent | null {
+  const rawCandidates = interpretation.candidateScores
+    .map((candidate) => ({
+      intent: projectInterpretationIntent({
+        ...interpretation,
+        lane: candidate.lane,
+        target: candidate.target,
+        facet: candidate.facet,
+        timeframe: candidate.timeframe,
+        ambiguous: false,
+        confidence: candidate.score,
+        margin: 0,
+        candidateScores: [],
+      }),
+      score: candidate.score,
+    }))
+    .filter((candidate) => candidate.intent !== 'unclear');
+  const topRaw = rawCandidates[0];
+  const secondRaw = rawCandidates[1];
+  if (
+    topRaw
+    && secondRaw
+    && topRaw.intent === secondRaw.intent
+    && topRaw.score >= 0.5
+  ) {
+    return topRaw.intent;
+  }
+
+  const projectedScores = projectInterpretationCandidateScores(interpretation)
+    .filter((candidate) => candidate.intent !== 'unclear');
+  const top = projectedScores[0];
+  const second = projectedScores[1];
+  if (!top) return null;
+  const margin = second ? Number((top.score - second.score).toFixed(4)) : top.score;
+  if (top.score >= 0.64 && margin >= 0.12) {
+    return top.intent as RoutingIntent;
+  }
+  return null;
+}
+
 function projectInterpretationCandidateScores(interpretation: QueryInterpretation): Array<{ intent: string; score: number }> {
   const scoreByIntent = new Map<string, number>();
   for (const candidate of interpretation.candidateScores) {
@@ -361,6 +393,10 @@ function projectInterpretationCandidateScores(interpretation: QueryInterpretatio
 export function routeTurnIntentFromInterpretation(
   playerMessage: unknown,
   interpretation: QueryInterpretation,
+  options?: {
+    targetLanguage?: string;
+    explicitLoreMatchCount?: number;
+  },
 ): RoutingResult {
   const source = normalizeRoutingSource(playerMessage);
   if (!source) {
@@ -383,9 +419,17 @@ export function routeTurnIntentFromInterpretation(
     };
   }
 
-  const intent = projectInterpretationIntent(interpretation);
+  const intent = interpretation.ambiguous
+    ? (resolveAmbiguousIntentConsensus(interpretation) ?? projectInterpretationIntent(interpretation))
+    : projectInterpretationIntent(interpretation);
   const candidateScores = projectInterpretationCandidateScores(interpretation);
-  const forceSocialChat = isLikelySmallTalkQuery(source)
+  const forceSocialChat = (
+    isLikelySmallTalkQuery(source, options?.targetLanguage)
+    || (
+      isProtectedShortSocialTurn(source, options?.targetLanguage)
+      && (options?.explicitLoreMatchCount ?? 0) === 0
+    )
+  )
     && interpretation.lane === 'social'
     && !interpretation.ambiguous;
 
@@ -408,6 +452,7 @@ export function routeTurnIntent(
   playerMessage: unknown,
   npcName: unknown,
   options?: {
+    targetLanguage?: string;
     history?: Array<{ role?: unknown; text?: unknown }>;
     scene?: {
       regionName?: string;
@@ -423,12 +468,16 @@ export function routeTurnIntent(
   const interpretation = interpretQuery({
     playerMessage: source,
     npcName: typeof npcName === 'string' ? npcName : undefined,
+    targetLanguage: options?.targetLanguage,
     history: options?.history,
     scene: options?.scene,
     loreEntityHints: options?.loreEntityHints,
     evidencePreview: options?.evidencePreview,
   });
-  return routeTurnIntentFromInterpretation(source, interpretation);
+  return routeTurnIntentFromInterpretation(source, interpretation, {
+    targetLanguage: options?.targetLanguage,
+    explicitLoreMatchCount: Array.isArray(options?.loreEntityHints) ? options?.loreEntityHints.length : 0,
+  });
 }
 
 export function classifyTurnQueryType(playerMessage: unknown, npcName: unknown): QueryType {

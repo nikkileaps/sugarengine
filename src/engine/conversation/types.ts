@@ -1,4 +1,10 @@
 import type { PluginIntent } from '../plugins/types';
+import type {
+  ConversationDriverKind,
+  ConversationEngagementKind,
+  ConversationPresentationKind,
+  NPCInteractionCapabilities,
+} from './interactionCapabilities';
 
 // ---------------------------------------------------------------------------
 // Session & Identity
@@ -11,6 +17,9 @@ export interface ConversationSession {
   npcId: string;
   npcName?: string;
   providerId: string;
+  engagementKind: ConversationEngagementKind;
+  presentationKind: ConversationPresentationKind;
+  driverKind: ConversationDriverKind;
   turnIndex: number;
   /** Language context for this session. */
   targetLanguage?: string;
@@ -204,6 +213,17 @@ export interface ConversationProviderDescriptor {
   id: string;
   /** Priority for provider selection. Lower = tried first. */
   priority: number;
+  supportsEngagementKinds?: ConversationEngagementKind[];
+}
+
+export interface ConversationEngagementOption {
+  kind: ConversationEngagementKind;
+  providerId: string;
+  label: string;
+  description?: string;
+  presentationKind: ConversationPresentationKind;
+  driverKind: ConversationDriverKind;
+  priority?: number;
 }
 
 /**
@@ -212,6 +232,15 @@ export interface ConversationProviderDescriptor {
  */
 export interface ConversationProvider {
   readonly descriptor: ConversationProviderDescriptor;
+
+  /**
+   * Optional dynamic engagement discovery. Allows the engine to discover
+   * player-facing choices without hard-coding provider IDs.
+   */
+  getEngagementOptions?(
+    npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationEngagementOption[];
 
   /**
    * Whether this provider can handle a conversation with the given NPC
@@ -245,9 +274,8 @@ export interface ConversationProvider {
 export interface ProviderSelectionContext {
   hasQuestDialogue: boolean;
   hasBehaviorTree: boolean;
-  npcInteractionMode: 'scripted' | 'agent' | 'hybrid';
-  /** Whether the runtime has a concrete agent provider available. */
-  hasAgentProvider?: boolean;
+  npcInteractionCapabilities: NPCInteractionCapabilities;
+  availableEngagementKinds?: ConversationEngagementKind[];
   targetLanguage?: string;
   supportLanguage?: string;
   /** Learner band override, used by providers to pre-resolve band policy. */
@@ -256,6 +284,8 @@ export interface ProviderSelectionContext {
   dialogueId?: string;
   /** NPC display name (for name-based provider matching). */
   npcName?: string;
+  /** Player-selected engagement option or engine-resolved default path. */
+  selectedEngagement?: ConversationEngagementOption;
 }
 
 export interface PlayerInput {

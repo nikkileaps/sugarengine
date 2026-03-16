@@ -1,5 +1,6 @@
 import type { PluginIntent, PluginIntentResult } from '../plugins/types';
 import type {
+  ConversationEngagementOption,
   ConversationSession,
   ConversationProvider,
   ConversationMiddleware,
@@ -153,6 +154,8 @@ export class ConversationHost {
       return null;
     }
 
+    const selectedEngagement = enrichedContext.selectedEngagement;
+
     // Create session
     const session: ConversationSession = {
       sessionId: generateSessionId(),
@@ -160,6 +163,9 @@ export class ConversationHost {
       npcId,
       npcName,
       providerId: provider.descriptor.id,
+      engagementKind: selectedEngagement?.kind ?? 'default',
+      presentationKind: selectedEngagement?.presentationKind ?? 'dialogue_panel',
+      driverKind: selectedEngagement?.driverKind ?? 'host_turn_driven',
       turnIndex: 0,
       targetLanguage: this.languageContext.targetLanguage,
       supportLanguage: this.languageContext.supportLanguage,
@@ -187,6 +193,7 @@ export class ConversationHost {
 
     console.log(
       `[ConversationHost] session started → trace=${session.traceId} provider=${session.providerId}` +
+      ` engagement=${session.engagementKind}/${session.presentationKind}/${session.driverKind}` +
       ` npc=${npcId} lang=${session.targetLanguage ?? '?'}/${session.supportLanguage ?? '?'}` +
       ` band=${session.learnerBandOverride ?? 'auto'}`,
     );
@@ -349,6 +356,44 @@ export class ConversationHost {
     return this.selectProvider(npcId, context) !== null;
   }
 
+  listEngagementOptions(
+    npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationEngagementOption[] {
+    const enrichedContext: ProviderSelectionContext = {
+      ...context,
+      targetLanguage: context.targetLanguage ?? this.languageContext.targetLanguage,
+      supportLanguage: context.supportLanguage ?? this.languageContext.supportLanguage,
+      learnerBandOverride: context.learnerBandOverride ?? this.languageContext.learnerBandOverride,
+    };
+
+    const options: ConversationEngagementOption[] = [];
+    const seen = new Set<string>();
+
+    for (const provider of this.providers) {
+      const advertised = provider.getEngagementOptions?.(npcId, enrichedContext)
+        ?? this.buildFallbackOptions(provider, npcId, enrichedContext);
+
+      for (const option of advertised) {
+        if (option.providerId !== provider.descriptor.id) continue;
+        const key = `${option.kind}:${option.providerId}:${option.presentationKind}:${option.driverKind}`;
+        if (seen.has(key)) continue;
+        if (!provider.canHandle(npcId, { ...enrichedContext, selectedEngagement: option })) continue;
+        seen.add(key);
+        options.push(option);
+      }
+    }
+
+    options.sort((left, right) => {
+      const leftPriority = left.priority ?? this.findProvider(left.providerId)?.descriptor.priority ?? 999;
+      const rightPriority = right.priority ?? this.findProvider(right.providerId)?.descriptor.priority ?? 999;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      return left.label.localeCompare(right.label);
+    });
+
+    return options;
+  }
+
   // -------------------------------------------------------------------------
   // Provider Management
   // -------------------------------------------------------------------------
@@ -357,12 +402,41 @@ export class ConversationHost {
     npcId: string,
     context: ProviderSelectionContext,
   ): ConversationProvider | null {
+    if (context.selectedEngagement) {
+      const provider = this.findProvider(context.selectedEngagement.providerId);
+      if (!provider) return null;
+      return provider.canHandle(npcId, context) ? provider : null;
+    }
+
     for (const provider of this.providers) {
       if (provider.canHandle(npcId, context)) {
         return provider;
       }
     }
     return null;
+  }
+
+  private buildFallbackOptions(
+    provider: ConversationProvider,
+    npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationEngagementOption[] {
+    const supportedKinds = provider.descriptor.supportsEngagementKinds ?? [];
+    if (supportedKinds.length !== 1) return [];
+
+    const kind = supportedKinds[0]!;
+    const option: ConversationEngagementOption = {
+      kind,
+      providerId: provider.descriptor.id,
+      label: kind === 'chat' ? 'Chat' : 'Talk',
+      presentationKind: kind === 'chat' ? 'chat_panel' : 'dialogue_panel',
+      driverKind: kind === 'chat' ? 'host_turn_driven' : 'host_turn_driven',
+      priority: provider.descriptor.priority,
+    };
+
+    return provider.canHandle(npcId, { ...context, selectedEngagement: option })
+      ? [option]
+      : [];
   }
 
   private findProvider(id: string): ConversationProvider | null {

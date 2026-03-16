@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ConversationHost } from '../ConversationHost';
+import { createDefaultNPCInteractionCapabilities } from '../interactionCapabilities';
 import type {
   ConversationProvider,
   ConversationSession,
@@ -50,7 +51,7 @@ function createStubProvider(id: string, priority: number, canHandleFn?: (npcId: 
 const SELECTION_CTX: ProviderSelectionContext = {
   hasQuestDialogue: false,
   hasBehaviorTree: false,
-  npcInteractionMode: 'scripted',
+  npcInteractionCapabilities: createDefaultNPCInteractionCapabilities(),
 };
 
 // ---------------------------------------------------------------------------

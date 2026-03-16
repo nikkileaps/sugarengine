@@ -19,16 +19,13 @@
  */
 
 import type { SupportSlotEntry, ReplyPart } from './reply-parts';
-import { validateHedgeStrength } from '../claim-planning';
 
 type ReplyPartsValidationIssueCode =
   | 'knowledge_part_requires_support'
   | 'invalid_support_slot'
   | 'non_knowledge_part_has_support'
   | 'self_query_ownership'
-  | 'knowledge_turn_requires_knowledge_or_uncertain'
-  | 'inferred_part_missing_hedge'
-  | 'rumor_part_missing_hedge';
+  | 'knowledge_turn_requires_knowledge_or_uncertain';
 
 interface ReplyPartsValidationIssue {
   partIndex: number;
@@ -162,28 +159,6 @@ export function validateReplyPartsContract(input: {
             support,
           });
         }
-      }
-
-      if (kind === 'inferred' && !validateHedgeStrength(text, 'soft')) {
-        issueCodes.push('inferred_part_missing_hedge');
-        issues.push({
-          partIndex,
-          code: 'inferred_part_missing_hedge',
-          message: 'Inferred reply part must preserve soft hedge wording.',
-          text,
-          support,
-        });
-      }
-
-      if (kind === 'rumor' && !validateHedgeStrength(text, 'strong')) {
-        issueCodes.push('rumor_part_missing_hedge');
-        issues.push({
-          partIndex,
-          code: 'rumor_part_missing_hedge',
-          message: 'Rumor reply part must preserve strong hedge wording.',
-          text,
-          support,
-        });
       }
     } else if (support.length > 0) {
       issueCodes.push('non_knowledge_part_has_support');

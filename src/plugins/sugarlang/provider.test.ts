@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createDefaultNPCInteractionCapabilities } from '../../engine/conversation';
 import { createSugarlangScriptedProvider } from './provider';
 import { FIND_THE_LUGGAGE_BUNDLE } from './content/find-the-luggage';
 
@@ -9,49 +10,76 @@ describe('createSugarlangScriptedProvider', () => {
     getDialogueTree: () => undefined,
   });
 
-  it('defers explicit agent-mode NPCs to SugarAgent when that provider is available', () => {
-    expect(provider.canHandle('station-clerk', {
+  it('advertises a scenario engagement when the NPC supports scenario interaction', () => {
+    const options = provider.getEngagementOptions?.('station-clerk', {
       hasQuestDialogue: false,
       hasBehaviorTree: false,
-      npcInteractionMode: 'agent',
-      hasAgentProvider: true,
+      npcInteractionCapabilities: createDefaultNPCInteractionCapabilities(),
       targetLanguage: 'es',
       learnerBandOverride: 'B1',
       npcName: 'Station Clerk',
-    })).toBe(false);
+    });
+
+    expect(options).toEqual([
+      expect.objectContaining({
+        kind: 'scenario',
+        providerId: 'sugarlang-scripted',
+        presentationKind: 'dialogue_panel',
+        driverKind: 'host_turn_driven',
+      }),
+    ]);
   });
 
-  it('falls back to scripted delivery when agent mode is set but SugarAgent is unavailable', () => {
-    expect(provider.canHandle('station-clerk', {
+  it('does not advertise a scenario engagement when scenario capability is disabled', () => {
+    const options = provider.getEngagementOptions?.('station-clerk', {
       hasQuestDialogue: false,
       hasBehaviorTree: false,
-      npcInteractionMode: 'agent',
-      hasAgentProvider: false,
+      npcInteractionCapabilities: {
+        ...createDefaultNPCInteractionCapabilities(),
+        scenario: {
+          enabled: false,
+          agentAssist: 'disallow',
+        },
+      },
       targetLanguage: 'es',
       learnerBandOverride: 'B1',
       npcName: 'Station Clerk',
-    })).toBe(true);
+    });
+
+    expect(options).toEqual([]);
   });
 
-  it('keeps hybrid mode scripted until the active band explicitly prefers agent delivery', () => {
+  it('only handles the selected scenario engagement lane', () => {
     expect(provider.canHandle('station-clerk', {
       hasQuestDialogue: false,
       hasBehaviorTree: false,
-      npcInteractionMode: 'hybrid',
-      hasAgentProvider: true,
+      npcInteractionCapabilities: createDefaultNPCInteractionCapabilities(),
       targetLanguage: 'es',
       learnerBandOverride: 'B1',
       npcName: 'Station Clerk',
+      selectedEngagement: {
+        kind: 'scenario',
+        providerId: 'sugarlang-scripted',
+        label: 'Scenario',
+        presentationKind: 'dialogue_panel',
+        driverKind: 'host_turn_driven',
+      },
     })).toBe(true);
 
     expect(provider.canHandle('station-clerk', {
       hasQuestDialogue: false,
       hasBehaviorTree: false,
-      npcInteractionMode: 'hybrid',
-      hasAgentProvider: true,
+      npcInteractionCapabilities: createDefaultNPCInteractionCapabilities(),
       targetLanguage: 'es',
-      learnerBandOverride: 'B4',
+      learnerBandOverride: 'B1',
       npcName: 'Station Clerk',
+      selectedEngagement: {
+        kind: 'chat',
+        providerId: 'sugaragent',
+        label: 'Chat',
+        presentationKind: 'chat_panel',
+        driverKind: 'host_turn_driven',
+      },
     })).toBe(false);
   });
 });

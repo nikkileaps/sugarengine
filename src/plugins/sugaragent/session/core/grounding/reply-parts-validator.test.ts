@@ -115,29 +115,7 @@ describe('reply-parts-validator', () => {
     expect(buildReplyPartsValidationRepairReason(result)).toContain('self_query_ownership');
   });
 
-  it('accepts inferred and rumor parts when support and hedge strength are valid', () => {
-    const result = validateReplyPartsContract({
-      parts: [
-        {
-          kind: 'inferred',
-          text: 'I think the resort is just outside Earendale.',
-          support: ['E1'],
-        },
-        {
-          kind: 'rumor',
-          text: 'I heard that the old tunnel is used by smugglers.',
-          support: ['E1'],
-        },
-      ],
-      supportSlots,
-      queryType: 'other_query',
-      intent: 'answer',
-    });
-
-    expect(result.valid).toBe(true);
-  });
-
-  it('rejects inferred and rumor parts when required hedges are missing', () => {
+  it('accepts inferred and rumor parts when support slots are valid', () => {
     const result = validateReplyPartsContract({
       parts: [
         {
@@ -156,8 +134,6 @@ describe('reply-parts-validator', () => {
       intent: 'answer',
     });
 
-    expect(result.valid).toBe(false);
-    expect(buildReplyPartsValidationRepairReason(result)).toContain('inferred_part_missing_hedge');
-    expect(buildReplyPartsValidationRepairReason(result)).toContain('rumor_part_missing_hedge');
+    expect(result.valid).toBe(true);
   });
 });

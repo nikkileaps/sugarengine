@@ -4,9 +4,11 @@
  * Implements: ADR-SA-025 (canonical live path)
  *
  * Pipeline: route → retrieve → build evidence pack → resolve initiative →
- * plan → validate plan → realize → semantic verify → persist
+ * plan → validate plan → deterministic baseline realization → semantic verify → persist
  *
- * This is the only correctness path for knowledge-bearing turns.
+ * Final player-facing multilingual delivery is handled by the runtime
+ * plan-realization layer, which realizes validated claims directly in the
+ * target language when a delivery-language context is present.
  */
 
 import type { SugarAgentBeatEvidence, SugarAgentTurnOutput } from '../../contracts/turn';
@@ -32,9 +34,12 @@ import {
   isLikelyGreetingOnlyMessage,
 } from './turn-quality';
 import { detectSocialAcknowledgement } from './social-cues';
+import {
+  localizeGroundedUncertaintyReply,
+  localizeSimpleSocialReply,
+} from './language-stock';
 import { verifyRealizationAgainstPlan } from './semantic/verification';
 import { extractExplicitPlayerFacts, filterMemoryWrites, extractNpcCommitments } from './memory-provenance';
-import { applyLanguageAdaptation, resolveLanguageAdaptationContext } from './language-adaptation';
 import type {
   TurnPath,
   TurnPlan,
@@ -176,7 +181,7 @@ export function buildNpcStateSnapshot(input: BuildNpcStateSnapshotInput): NpcSta
     currentActivity: typeof input.currentActivity === 'string' ? input.currentActivity : undefined,
     currentGoal: typeof input.currentGoal === 'string' ? input.currentGoal : undefined,
     activeBeatId: typeof input.activeBeatId === 'string' ? input.activeBeatId : undefined,
-    languageAdaptation: null,
+    deliveryLanguageContext: null,
   };
 }
 
@@ -368,14 +373,16 @@ function formatNpcSelfKnowledgeClaimText(
 function buildDeterministicSocialReply(
   playerMessage: string,
   snapshot: NpcStateSnapshot,
+  adaptationContext?: LanguageAdaptationContext | null,
 ): SugarAgentTurnOutput {
   const message = String(playerMessage ?? '').trim();
   const npcName = normalizeClaimText(snapshot?.npcName || '') || 'friend';
-  const declaredName = extractDeclaredIdentityName(message);
+  const targetLanguage = adaptationContext?.targetLanguage;
+  const declaredName = extractDeclaredIdentityName(message, targetLanguage);
   const safeDeclaredName = declaredName ? capitalizeName(declaredName) : '';
   const asksIdentity = shouldAnswerWithNpcName(message);
   const frustration = /\b(i was pretty clear|i was clear|that was clear|pretty clear|be serious|come on)\b/i.test(message);
-  const acknowledgement = detectSocialAcknowledgement(message);
+  const acknowledgement = detectSocialAcknowledgement(message, targetLanguage);
 
   if (frustration) {
     return {
@@ -389,7 +396,10 @@ function buildDeterministicSocialReply(
   }
   if (safeDeclaredName && asksIdentity) {
     return {
-      utterance: `Nice to meet you, ${safeDeclaredName}. I'm ${npcName}.`,
+      utterance: localizeSimpleSocialReply('nice_to_meet_you', targetLanguage, {
+        npcName,
+        playerName: safeDeclaredName,
+      }),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -399,7 +409,7 @@ function buildDeterministicSocialReply(
   }
   if (asksIdentity) {
     return {
-      utterance: `I'm ${npcName}.`,
+      utterance: localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName }),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -409,7 +419,10 @@ function buildDeterministicSocialReply(
   }
   if (safeDeclaredName) {
     return {
-      utterance: `Nice to meet you, ${safeDeclaredName}. I'm ${npcName}.`,
+      utterance: localizeSimpleSocialReply('nice_to_meet_you', targetLanguage, {
+        npcName,
+        playerName: safeDeclaredName,
+      }),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -417,9 +430,9 @@ function buildDeterministicSocialReply(
       beatEvidence: EMPTY_BEAT_EVIDENCE,
     };
   }
-  if (isLikelyGreetingOnlyMessage(message)) {
+  if (isLikelyGreetingOnlyMessage(message, targetLanguage)) {
     return {
-      utterance: `Hi. I'm ${npcName}.`,
+      utterance: localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName }),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -429,7 +442,7 @@ function buildDeterministicSocialReply(
   }
   if (acknowledgement === 'gratitude') {
     return {
-      utterance: 'Any time.',
+      utterance: localizeSimpleSocialReply('any_time', targetLanguage),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -439,7 +452,9 @@ function buildDeterministicSocialReply(
   }
   if (acknowledgement === 'shared_preference') {
     return {
-      utterance: /\bcheese\b/i.test(message) ? 'You and me both. Cheese is hard to beat.' : 'You and me both.',
+      utterance: /\bcheese\b/i.test(message)
+        ? localizeSimpleSocialReply('shared_preference_cheese', targetLanguage)
+        : localizeSimpleSocialReply('shared_preference', targetLanguage),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -449,7 +464,7 @@ function buildDeterministicSocialReply(
   }
   if (acknowledgement) {
     return {
-      utterance: 'Yeah, I hear you.',
+      utterance: localizeSimpleSocialReply('agreement', targetLanguage),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -458,7 +473,7 @@ function buildDeterministicSocialReply(
     };
   }
   return {
-    utterance: "I'm listening.",
+    utterance: localizeSimpleSocialReply('listening', targetLanguage),
     emotion: 'neutral',
     intent: 'conversation',
     proposedIntents: [],
@@ -921,6 +936,7 @@ export function realizeDeterministicPlan(
   plan: TurnPlan,
   snapshot: NpcStateSnapshot,
   evidencePack?: EvidencePackLike | null,
+  adaptationContext?: LanguageAdaptationContext | null,
 ): SugarAgentTurnOutput {
   const claims = plan.claims ?? [];
   const speechAct = plan.speechAct ?? 'chat';
@@ -941,9 +957,10 @@ export function realizeDeterministicPlan(
   }
 
   if (speechAct === 'uncertain') {
-    const utterance = plan.queryType === 'self_query'
-      ? "I don't know. I don't want to guess about my own background."
-      : "I don't know.";
+    const utterance = localizeGroundedUncertaintyReply(
+      plan.queryType,
+      adaptationContext?.targetLanguage,
+    );
     return {
       utterance,
       emotion: 'uncertain',
@@ -956,7 +973,7 @@ export function realizeDeterministicPlan(
 
   if (speechAct === 'ask') {
     return {
-      utterance: plan.questionBack ?? 'Could you clarify what you want to know?',
+      utterance: plan.questionBack ?? localizeSimpleSocialReply('clarify_simple', adaptationContext?.targetLanguage),
       emotion: 'curious',
       intent: 'question',
       proposedIntents: [],
@@ -967,7 +984,7 @@ export function realizeDeterministicPlan(
 
   if (speechAct === 'close') {
     return {
-      utterance: plan.questionBack ?? 'I think that is enough for now. Goodbye.',
+      utterance: plan.questionBack ?? localizeSimpleSocialReply('close_for_now', adaptationContext?.targetLanguage),
       emotion: 'warm',
       intent: 'close',
       proposedIntents: [],
@@ -979,7 +996,7 @@ export function realizeDeterministicPlan(
   if (speechAct === 'recall') {
     if (claims.length === 0) {
       return {
-        utterance: "I don't remember any specific details yet.",
+        utterance: localizeSimpleSocialReply('remember_none', adaptationContext?.targetLanguage),
         emotion: 'warm',
         intent: 'recall',
         proposedIntents: [],
@@ -1004,7 +1021,7 @@ export function realizeDeterministicPlan(
   if (speechAct === 'answer' || speechAct === 'chat') {
     if (claims.length === 0) {
       return {
-        utterance: "Got it. Tell me a little more and I'll help where I can.",
+        utterance: localizeSimpleSocialReply('tell_me_more', adaptationContext?.targetLanguage),
         emotion: 'neutral',
         intent: 'conversation',
         proposedIntents: [],
@@ -1036,7 +1053,7 @@ export function realizeDeterministicPlan(
 
   // Fallback social chat
   return {
-    utterance: "Got it. Tell me a little more and I'll help where I can.",
+    utterance: localizeSimpleSocialReply('tell_me_more', adaptationContext?.targetLanguage),
     emotion: 'neutral',
     intent: 'conversation',
     proposedIntents: [],
@@ -1086,7 +1103,7 @@ export function runEvidenceFirstPipeline(
       hasFactualClausePattern: turnRouting.factualRiskSignals.includes('factual_clause_pattern'),
       hasRouteConflict: turnRouting.factualRiskSignals.includes('route_conflict'),
     },
-    adaptationApplied: false,
+    deliveryLanguageContextApplied: false,
     deterministicFallbackUsed: false,
   };
 
@@ -1107,9 +1124,7 @@ export function runEvidenceFirstPipeline(
       abstention: null,
     };
 
-    const socialTurn = buildDeterministicSocialReply(playerMessage, snapshot);
-    diagnostics.adaptationApplied = (adaptationContext ?? null) != null;
-
+    const socialTurn = buildDeterministicSocialReply(playerMessage, snapshot, adaptationContext ?? null);
     // Verify social response doesn't leak facts
     if (checkSocialResponseForFactualLeakage(socialTurn.utterance)) {
       // Reroute to grounded — fall through to grounded path below
@@ -1163,15 +1178,11 @@ export function runEvidenceFirstPipeline(
   };
 
   // Step 6: Realize the plan deterministically
-  const realized = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack);
+  const realized = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack, adaptationContext ?? null);
 
-  // Step 7: Apply language adaptation (currently passthrough)
-  const adapted = applyLanguageAdaptation(realized, adaptationContext ?? null);
-  diagnostics.adaptationApplied = (adaptationContext ?? null) != null;
-
-  // Step 8: Semantic verification
+  // Step 7: Semantic verification on the source-language realization.
   const verification = verifyRealizationAgainstPlan(
-    adapted.utterance,
+    realized.utterance,
     validated.plan,
     enrichedPack,
     snapshot,
@@ -1179,14 +1190,14 @@ export function runEvidenceFirstPipeline(
 
   diagnostics.semanticVerification = verification;
 
-  // Step 9: If verification fails, fall back to deterministic realization
-  let finalOutput: SugarAgentTurnOutput = adapted;
+  // Step 8: If verification fails, fall back to deterministic realization
+  let finalOutput: SugarAgentTurnOutput = realized;
   if (!verification.ok) {
     diagnostics.deterministicFallbackUsed = true;
-    finalOutput = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack);
+    finalOutput = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack, adaptationContext ?? null);
   }
 
-  // Step 10: Build filtered memory writes
+  // Step 9: Build filtered memory writes
   const memoryWrites = filterMemoryWrites({ plan: validated.plan });
   const npcCommitments = extractNpcCommitments(finalOutput.utterance, validated.plan);
   const allWrites = [...memoryWrites, ...npcCommitments];

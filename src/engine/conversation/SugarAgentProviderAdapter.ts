@@ -1,6 +1,7 @@
 import type { PluginManager } from '../plugins/PluginManager';
 import type { PluginPedagogyContext } from '../plugins/types';
 import type {
+  ConversationEngagementOption,
   ConversationProvider,
   ConversationProviderDescriptor,
   ConversationSession,
@@ -9,6 +10,10 @@ import type {
   ProviderTurnOutput,
   PlayerInput,
 } from './types';
+import {
+  deriveLegacySugarAgentInteraction,
+  type NPCInteractionCapabilities,
+} from './interactionCapabilities';
 
 /**
  * Context builder for constructing the legacy PluginAgentTurnRequest
@@ -19,8 +24,7 @@ export interface SugarAgentAdapterContext {
   getCurrentRegion(): string | undefined;
   getCurrentRegionInfo?(): { path: string; name?: string } | null;
   getCurrentEpisode(): string | undefined;
-  getNpcInteractionMode(npcId: string): 'scripted' | 'agent' | 'hybrid';
-  getNpcInteractionPolicy(npcId: string): 'scripted-first' | 'agent-first' | 'fallback';
+  getNpcInteractionCapabilities(npcId: string): NPCInteractionCapabilities;
   buildQuestSnapshot(): Array<{
     questId: string;
     currentStageId: string;
@@ -41,6 +45,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
     id: 'sugaragent',
     // Agent provider has lower priority (higher number) than scripted
     priority: 100,
+    supportsEngagementKinds: ['chat'],
   };
 
   constructor(
@@ -48,13 +53,32 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
     private adapterContext: SugarAgentAdapterContext,
   ) {}
 
+  getEngagementOptions(
+    _npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationEngagementOption[] {
+    if (context.hasQuestDialogue) return [];
+    if (!context.npcInteractionCapabilities.chat.enabled) return [];
+    return [
+      {
+        kind: 'chat',
+        providerId: this.descriptor.id,
+        label: 'Chat',
+        description: 'Free conversation with this character.',
+        presentationKind: 'chat_panel',
+        driverKind: 'host_turn_driven',
+        priority: this.descriptor.priority,
+      },
+    ];
+  }
+
   canHandle(_npcId: string, context: ProviderSelectionContext): boolean {
     // SugarAgent handles conversations when:
-    // 1. The NPC is in agent or hybrid mode
+    // 1. The NPC has chat capability enabled
     // 2. There's no quest dialogue (quest dialogue is handled by scripted provider)
-    // 3. A plugin exists that can handle agent turns
     if (context.hasQuestDialogue) return false;
-    return context.npcInteractionMode === 'agent' || context.npcInteractionMode === 'hybrid';
+    if (context.selectedEngagement && context.selectedEngagement.kind !== 'chat') return false;
+    return context.npcInteractionCapabilities.chat.enabled;
   }
 
   async startSession(_session: ConversationSession, _context: ProviderSelectionContext): Promise<void> {
@@ -128,8 +152,10 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
         regionPath: regionInfo?.path ?? this.adapterContext.getCurrentRegion(),
         regionName: regionInfo?.name,
         episodeId: this.adapterContext.getCurrentEpisode(),
-        interactionMode: this.adapterContext.getNpcInteractionMode(session.npcId),
-        interactionPolicy: this.adapterContext.getNpcInteractionPolicy(session.npcId),
+        ...deriveLegacySugarAgentInteraction(
+          this.adapterContext.getNpcInteractionCapabilities(session.npcId),
+          session.engagementKind,
+        ),
         questSnapshot: this.adapterContext.buildQuestSnapshot(),
         flagSnapshot: this.adapterContext.serializeFlags(),
         pedagogyContext,

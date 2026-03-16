@@ -252,17 +252,35 @@ export interface PluginAgentTurnDiagnostics {
     replyParts?: {
       attempted?: boolean;
       success?: boolean;
+      attemptCount?: number;
+      repairAttempted?: boolean;
       partCount?: number;
       groundedPartCount?: number;
       failureReason?: string;
       skippedReason?: string;
       rawResponsePreview?: string;
       rawPartsPreview?: Array<{
-        kind: 'social' | 'grounded' | 'uncertain' | 'close';
+        kind: 'social' | 'grounded' | 'inferred' | 'rumor' | 'uncertain' | 'close';
         text: string;
         support?: string[];
       }>;
+      auditAttempted?: boolean;
+      auditSuccess?: boolean;
+      auditFailureReason?: string;
+      auditRawResponsePreview?: string;
+      auditPartsPreview?: Array<{
+        partIndex: number;
+        role: 'social' | 'knowledge' | 'uncertain' | 'close' | 'unsupported';
+        claimOrdinals: number[];
+        hedgeSufficient?: boolean;
+        notes?: string;
+      }>;
       allowedSupportSlots?: string[];
+      allowedClaimOrdinals?: number[];
+      acceptedClaimOrdinals?: number[];
+      verificationMode?: 'generator_auditor';
+      estimatedLanguage?: string;
+      mismatchSuspected?: boolean;
     };
   };
   beatEvaluator?: {

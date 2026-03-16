@@ -123,12 +123,70 @@ describe('query interpretation', () => {
     expect(interpretation.ambiguous).toBe(false);
   });
 
+  it('treats epistemic lore prompts as world knowledge instead of npc self-questions', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'What do you know about the resort near here?',
+      npcName: 'Baker',
+    });
+
+    expect(interpretation.lane).toBe('knowledge');
+    expect(interpretation.target).toBe('world');
+  });
+
   it('keeps acknowledgement-only turns in the social lane instead of forcing ambiguity', () => {
     const interpretation = interpretQuery({
       playerMessage: 'Yay! I love cheese!',
       npcName: 'Rick Cheese Roll',
       evidencePreview: buildEvidencePreview({
         selfEntityId: 'npc.rick-roll',
+      }),
+    });
+
+    expect(interpretation.lane).toBe('social');
+    expect(interpretation.ambiguous).toBe(false);
+  });
+
+  it('keeps short Spanish reciprocal turns in the social lane', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'Bien! Y tu?',
+      npcName: 'Rick Cheese Roll',
+      targetLanguage: 'es',
+      evidencePreview: buildEvidencePreview({
+        selfEntityId: 'npc.rick-roll',
+      }),
+    });
+
+    expect(interpretation.lane).toBe('social');
+    expect(interpretation.ambiguous).toBe(false);
+  });
+
+  it('recognizes Spanish self-introductions as social turns', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'Me llamo Mim. Y tu?',
+      npcName: 'Rick Cheese Roll',
+      targetLanguage: 'es',
+      evidencePreview: buildEvidencePreview({
+        selfEntityId: 'npc.rick-roll',
+      }),
+    });
+
+    expect(interpretation.lane).toBe('social');
+    expect(interpretation.ambiguous).toBe(false);
+  });
+
+  it('protects lightweight Spanish location prompts from world-lore routing', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'Donde estas?',
+      npcName: 'Rick Cheese Roll',
+      targetLanguage: 'es',
+      scene: {
+        regionName: 'Station',
+        regionPath: 'regions.station',
+      },
+      evidencePreview: buildEvidencePreview({
+        selfEntityId: 'npc.rick-roll',
+        regionName: 'Station',
+        regionPath: 'regions.station',
       }),
     });
 

@@ -21,6 +21,17 @@ describe('routing core', () => {
     expect(routed.policyPath).toBe('lore_knowledge');
   });
 
+  it('keeps strong world-knowledge consensus even when facet-level interpretation stays ambiguous', () => {
+    const routed = routeTurnIntent('What do you know about the resort near here?', 'baker');
+
+    expect(routed.intent).toBe('lore_world');
+    expect(routed.policyPath).toBe('lore_knowledge');
+    expect(routed.interpretation).toMatchObject({
+      lane: 'knowledge',
+      target: 'world',
+    });
+  });
+
   it('classifies self-identity queries as self_query', () => {
     expect(classifyTurnQueryType('Tell me about your background', 'baker')).toBe('self_query');
     expect(classifyTurnQueryType('What do you do for a job?', 'rick')).toBe('self_query');
@@ -66,9 +77,10 @@ describe('routing core', () => {
     expect(routeIntentToQueryType('lore_other')).toBe('other_query');
   });
 
-  it('detects lore entity mentions and upgrades place queries to lore_world', () => {
+  it('detects lore entity mentions and adds retrieval filters for place queries', () => {
     const baseRoute = routeTurnIntent('Do you know anything about Earendale?', 'rick');
-    expect(baseRoute.policyPath).toBe('safe_chat');
+    expect(baseRoute.intent).toBe('lore_world');
+    expect(baseRoute.policyPath).toBe('lore_knowledge');
 
     const loreArtifacts = {
       chunks: [

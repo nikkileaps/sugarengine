@@ -53,7 +53,14 @@ import {
   materializeTurnOutputFromReplyParts,
   normalizeReplyPartsForValidation,
   parseReplyPartsResponseDetailed,
+  type ParsedReplyPartsTurn,
+  type ReplyPart,
+  type ReplyPartKind,
 } from './core/grounding/reply-parts';
+import {
+  GROUNDED_REPLY_AUDIT_JSON_SCHEMA,
+  parseGroundedReplyAuditDetailed,
+} from './core/grounding/reply-audit';
 import {
   buildReplyPartsValidationRepairReason,
   validateReplyPartsContract,
@@ -61,6 +68,10 @@ import {
 import {
   createGroundedUncertaintyReply,
 } from './core/turn-realization';
+import {
+  localizeGroundedReplyExemplar,
+  localizeSimpleSocialReply,
+} from './core/language-stock';
 import {
   runEvidenceFirstPipeline,
   buildNpcStateSnapshot,
@@ -70,6 +81,8 @@ import {
 } from './core/evidence-first-pipeline';
 import {
   buildSugarlangLanguageAdaptationContext,
+  estimateTextLanguage,
+  normalizeLanguageCode,
   resolveLanguageAdaptationContext,
 } from './core/language-adaptation';
 import {
@@ -97,23 +110,113 @@ import {
   filterMemoryWrites,
 } from './core/memory-provenance';
 import {
-  verifyRealizationAgainstPlan,
-} from './core/semantic/verification';
-import {
   extractDeclaredIdentityName,
   isLikelyGreetingOnlyMessage,
   validateTurnQuality,
 } from './core/turn-quality';
-import { detectSocialAcknowledgement } from './core/social-cues';
+import {
+  detectSocialAcknowledgement,
+  isLikelyLightweightLocationPrompt,
+} from './core/social-cues';
 import {
   checkSocialResponseForFactualLeakage,
 } from './core/turn-path-routing';
 import type { SugarAgentTurnOutput } from '../contracts/turn';
 import type { QueryType, RoutingResult } from './core/routing';
-import type { EvidenceFirstPipelineDiagnostics, QueryInterpretation, ReferentPreviewCandidate } from './core/turn-contracts';
+import type {
+  EvidenceFirstPipelineDiagnostics,
+  LanguageAdaptationContext,
+  QueryInterpretation,
+  ReferentPreviewCandidate,
+} from './core/turn-contracts';
 import type { PluginPedagogyContext } from '../../../engine/plugins/types';
 
 type RecordLike = Record<string, any>;
+
+function emitReplyLanguageDebugLog(input: {
+  stage: string;
+  turnContext: unknown;
+  replyText: string;
+  partKinds?: string[];
+  npcId?: string;
+  routeIntent?: string;
+  queryType?: string;
+  turnPath?: string;
+}) {
+  const pedagogyContext = getPedagogyContext(input.turnContext);
+  const targetLanguage = normalizeLanguageCode(pedagogyContext?.targetLanguage);
+  const supportLanguage = normalizeLanguageCode(pedagogyContext?.supportLanguage);
+  if (!targetLanguage && !supportLanguage) return;
+
+  const learnerBand = normalizeOptionalString(pedagogyContext?.learnerBand);
+  const supportPolicy = normalizeOptionalString(pedagogyContext?.supportLanguagePolicy);
+  const estimate = estimateTextLanguage(input.replyText, targetLanguage);
+
+  console.debug('[sugaragent][language]', {
+    stage: input.stage,
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    turnPath: input.turnPath,
+    targetLanguage,
+    supportLanguage,
+    learnerBand,
+    supportPolicy,
+    estimatedLanguage: estimate.estimatedLanguage,
+    mismatchSuspected: estimate.mismatchSuspected,
+    scoreByLanguage: estimate.scoreByLanguage,
+    partKinds: input.partKinds ?? [],
+    preview: sanitizePromptText(input.replyText).slice(0, 200),
+  });
+}
+
+function emitPlanRealizationStatusLog(input: {
+  stage: string;
+  turnContext: unknown;
+  npcId?: string;
+  routeIntent?: string;
+  queryType?: string;
+  turnPath?: string;
+  strategy?: string;
+  attempt?: number;
+  failureReason?: string;
+  rawPreview?: string;
+  estimatedLanguage?: string;
+  mismatchSuspected?: boolean;
+  allowedClaimOrdinals?: number[];
+  acceptedClaimOrdinals?: number[];
+  allowedSupportSlots?: string[];
+  validationMode?: string;
+  auditRawPreview?: string;
+}) {
+  const pedagogyContext = getPedagogyContext(input.turnContext);
+  const targetLanguage = normalizeLanguageCode(pedagogyContext?.targetLanguage);
+  const supportLanguage = normalizeLanguageCode(pedagogyContext?.supportLanguage);
+  if (!targetLanguage && !supportLanguage) return;
+
+  console.debug('[sugaragent][realization]', {
+    stage: input.stage,
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    turnPath: input.turnPath,
+    strategy: input.strategy,
+    attempt: input.attempt,
+    targetLanguage,
+    supportLanguage,
+    learnerBand: normalizeOptionalString(pedagogyContext?.learnerBand),
+    supportPolicy: normalizeOptionalString(pedagogyContext?.supportLanguagePolicy),
+    estimatedLanguage: input.estimatedLanguage,
+    mismatchSuspected: input.mismatchSuspected,
+    validationMode: input.validationMode,
+    allowedClaimOrdinals: input.allowedClaimOrdinals,
+    acceptedClaimOrdinals: input.acceptedClaimOrdinals,
+    allowedSupportSlots: input.allowedSupportSlots,
+    failureReason: input.failureReason,
+    rawPreview: input.rawPreview ? sanitizePromptText(input.rawPreview).slice(0, 240) : undefined,
+    auditRawPreview: input.auditRawPreview ? sanitizePromptText(input.auditRawPreview).slice(0, 240) : undefined,
+  });
+}
 
 interface SessionRuntime {
   name: 'mock' | 'llama';
@@ -134,14 +237,34 @@ interface GenerationDiagnostics {
   replyParts: {
     attempted: boolean;
     success: boolean;
+    attemptCount: number;
+    repairAttempted: boolean;
     partCount: number;
     groundedPartCount: number;
     failureReason?: string;
     skippedReason?: string;
     rawResponsePreview?: string;
     rawPartsPreview?: Array<Record<string, unknown>>;
+    auditAttempted?: boolean;
+    auditSuccess?: boolean;
+    auditFailureReason?: string;
+    auditRawResponsePreview?: string;
+    auditPartsPreview?: Array<Record<string, unknown>>;
     allowedSupportSlots?: string[];
+    allowedClaimOrdinals?: number[];
+    acceptedClaimOrdinals?: number[];
+    verificationMode?: 'generator_auditor';
+    estimatedLanguage?: string;
+    mismatchSuspected?: boolean;
   };
+}
+
+interface ValidatedPlanClaimSlot {
+  claimOrdinal: number;
+  claimId: string;
+  mode: 'grounded' | 'inferred' | 'rumor';
+  text: string;
+  supportSlotIds: string[];
 }
 
 interface SessionOptions {
@@ -268,6 +391,7 @@ function sanitizeRuntimeOutput(text: unknown): string {
 
 function buildTurnReferentCandidates(input: {
   playerMessage: string;
+  targetLanguage?: string;
   npcName?: string;
   activeTopic?: string | null;
   sceneRegionName?: string;
@@ -323,7 +447,7 @@ function buildTurnReferentCandidates(input: {
     });
   }
 
-  if (/\b(where are we|where am i|where are you|this place|here|there)\b/i.test(input.playerMessage)) {
+  if (isLikelyLightweightLocationPrompt(input.playerMessage, input.targetLanguage)) {
     const sceneLocation = normalizeOptionalString(input.sceneRegionName) ?? normalizeOptionalString(input.sceneRegionPath);
     if (sceneLocation) {
       candidates.push({
@@ -400,50 +524,413 @@ function buildValidatedPlanSupportSlots(input: RecordLike | null | undefined) {
   });
 }
 
-function buildPlanBoundReplyPartsPrompt(input: RecordLike | null | undefined): string {
-  const safeInput = isRecord(input) ? input : {};
-  const turnContext = isRecord(safeInput.turnContext) ? safeInput.turnContext : null;
-  const basePrompt = buildReplyPartsPrompt({
-    npcName: safeInput.npcName,
-    playerMessage: safeInput.playerMessage,
-    queryType: safeInput.queryType,
-    routeIntent: safeInput.routeIntent,
-    supportSlots: safeInput.supportSlots,
-  });
-  const plan = isRecord(safeInput.plan) ? safeInput.plan : {};
+function buildValidatedPlanClaimMetadata(input: RecordLike | null | undefined) {
+  const plan = isRecord(input?.plan) ? input.plan : {};
   const claims = Array.isArray(plan.claims) ? plan.claims : [];
-  const planLines = [
+  const evidenceIdToItem = input?.evidencePack?.evidenceIdToItem instanceof Map
+    ? input.evidencePack.evidenceIdToItem
+    : new Map();
+  const supportSlots = Array.isArray(input?.supportSlots) ? input.supportSlots : [];
+  const slotIdsBySourceId = new Map<string, string[]>();
+  for (const slot of supportSlots) {
+    const sourceId = normalizeOptionalString(slot?.sourceId);
+    const slotId = normalizeOptionalString(slot?.slotId);
+    if (!sourceId || !slotId) continue;
+    const existing = slotIdsBySourceId.get(sourceId) ?? [];
+    if (!existing.includes(slotId)) existing.push(slotId);
+    slotIdsBySourceId.set(sourceId, existing);
+  }
+
+  const planClaims = claims
+    .map((claim, index) => {
+      const claimId = normalizeOptionalString(claim?.claimId);
+      const mode = normalizeOptionalString(claim?.mode);
+      if (!claimId || (mode !== 'grounded' && mode !== 'inferred' && mode !== 'rumor')) {
+        return null;
+      }
+      const supportSlotIds = Array.isArray(claim?.evidenceIds)
+        ? Array.from(new Set(
+          claim.evidenceIds.flatMap((evidenceId: unknown) => {
+            const evidence = evidenceIdToItem.get(evidenceId);
+            const sourceId = normalizeOptionalString(evidence?.sourceId);
+            if (!sourceId) return [];
+            return slotIdsBySourceId.get(sourceId) ?? [];
+          }),
+        ))
+        : [];
+      return {
+        claimOrdinal: index + 1,
+        claimId,
+        mode,
+        text: sanitizePromptText(claim?.text ?? ''),
+        supportSlotIds,
+      };
+    })
+    .filter((entry): entry is ValidatedPlanClaimSlot => entry !== null);
+
+  const claimsByOrdinal = new Map(
+    planClaims.map((claim) => [claim.claimOrdinal, claim] as const),
+  );
+
+  return {
+    planClaims,
+    allowedClaimOrdinals: planClaims.map((claim) => claim.claimOrdinal),
+    claimsByOrdinal,
+  };
+}
+
+function buildValidatedPlanInstructionLines(input: RecordLike | null | undefined): string[] {
+  const safeInput = isRecord(input) ? input : {};
+  const plan = isRecord(safeInput.plan) ? safeInput.plan : {};
+  const targetLanguage = normalizeLanguageCode(getPedagogyContext(safeInput.turnContext)?.targetLanguage);
+  const claims = Array.isArray(safeInput.planClaims)
+    ? safeInput.planClaims
+    : Array.isArray(plan.claims)
+      ? plan.claims
+      : [];
+  const lines = [
     'Validated plan:',
     `- Speech act: ${sanitizePromptText(plan.speechAct || 'chat')}`,
     `- Route intent: ${sanitizePromptText(plan.routeIntent || safeInput.routeIntent || 'unknown')}`,
   ];
 
   if (claims.length === 0) {
-    planLines.push('- No factual claims are allowed in this reply.');
+    lines.push('- No factual claims are allowed in this reply.');
   } else {
-    planLines.push('- Allowed factual claims:');
-    claims.slice(0, 4).forEach((claim, index) => {
-      const evidenceIds = Array.isArray(claim?.evidenceIds) ? claim.evidenceIds.join(', ') : '';
+    lines.push(
+      targetLanguage !== 'default' && targetLanguage !== 'en'
+        ? '- Source meaning notes (not canonical surface wording):'
+        : '- Allowed factual claims:',
+    );
+    claims.slice(0, 6).forEach((claim, index) => {
       const mode = sanitizePromptText(claim?.mode || 'grounded');
-      const requiredHedge = sanitizePromptText(claim?.requiredHedge || 'none');
       const text = sanitizePromptText(claim?.text || '');
-      planLines.push(`  ${index + 1}. [mode=${mode}; hedge=${requiredHedge}] ${text}${evidenceIds ? ` [evidence=${evidenceIds}]` : ''}`);
+      lines.push(`  ${index + 1}. [kind=${mode}] ${text}`);
     });
   }
 
-  planLines.push('You may paraphrase or combine the allowed claims, but you must not add new facts.');
-  planLines.push('Preserve certainty level exactly:');
-  planLines.push('- grounded: no hedge required');
-  planLines.push('- inferred: use a soft hedge such as "I think" or "it seems"');
-  planLines.push('- rumor: use a strong hedge such as "I heard" or "people say"');
-  planLines.push('If the validated plan is uncertain, return an uncertain part instead of guessing.');
+  lines.push('Use only the factual content listed above. Do not add new facts outside that list.');
+  lines.push(
+    targetLanguage !== 'default' && targetLanguage !== 'en'
+      ? 'Translate the factual relationship into the target language instead of mirroring the source wording.'
+      : 'You may paraphrase the allowed claims, but you must not mention internal numbering.',
+  );
+  lines.push('Only include the claims that are actually relevant to the player message. You do not need to cover every allowed claim.');
+  lines.push('Preserve certainty level exactly:');
+  lines.push('- grounded claims must stay grounded');
+  lines.push('- inferred claims must keep a soft hedge such as "I think" or "it seems"');
+  lines.push('- rumor claims must keep a strong hedge such as "I heard" or "people say"');
+  lines.push('If the validated plan is uncertain, return an uncertain part instead of guessing.');
+  return lines;
+}
+
+function buildPlanBoundReplyPartsPrompt(input: RecordLike | null | undefined): string {
+  const safeInput = isRecord(input) ? input : {};
+  const turnContext = isRecord(safeInput.turnContext) ? safeInput.turnContext : null;
 
   return [
     ...buildLanguageInstructionLines(turnContext),
     buildPedagogyBlock(turnContext),
-    basePrompt,
-    planLines.join('\n'),
+    ...buildGroundedTargetLanguageAnchorLines({
+      turnContext,
+      planClaims: Array.isArray(safeInput.planClaims) ? safeInput.planClaims : [],
+    }),
+    `Return a short NPC reply for ${sanitizePromptText(safeInput.npcName || 'NPC')} as ordered reply parts.`,
+    'Return ONLY one JSON object. No markdown. No explanation.',
+    'Use 1 to 3 parts total.',
+    'Allowed part kinds: social, grounded, inferred, rumor, uncertain, close.',
+    'For grounded turns, use social parts only for brief framing. Put factual content in grounded, inferred, or rumor parts.',
+    'Do not include support ids, claim ids, evidence ids, or any internal bookkeeping in the JSON.',
+    'Do not mention internal numbering in the visible text.',
+    'Answer only what is relevant to the player message. Do not volunteer extra lore just because it is available.',
+    `Query type: ${sanitizePromptText(safeInput.queryType || 'conversation')}`,
+    `Route intent: ${sanitizePromptText(safeInput.routeIntent || 'unknown')}`,
+    `Player message: ${sanitizePromptText(safeInput.playerMessage || '(none)')}`,
+    buildValidatedPlanInstructionLines(safeInput).join('\n'),
   ].filter(Boolean).join('\n');
+}
+
+function buildPlanBoundReplyPartsRepairPrompt(input: RecordLike | null | undefined): string {
+  const safeInput = isRecord(input) ? input : {};
+  const turnContext = isRecord(safeInput.turnContext) ? safeInput.turnContext : null;
+  return [
+    ...buildLanguageInstructionLines(turnContext),
+    buildPedagogyBlock(turnContext),
+    ...buildGroundedTargetLanguageAnchorLines({
+      turnContext,
+      planClaims: Array.isArray(safeInput.planClaims) ? safeInput.planClaims : [],
+    }),
+    `Previous grounded realization failed: ${sanitizePromptText(safeInput.failureReason || 'invalid previous response')}.`,
+    'Retry now with strict JSON only.',
+    'Do not include support ids, claim ids, evidence ids, or any internal bookkeeping.',
+    'Keep the reply natural and conversational, but use only the allowed factual content.',
+    'If the factual content is not answerable without adding a new fact, return an uncertain part.',
+    buildValidatedPlanInstructionLines(safeInput).join('\n'),
+  ].filter(Boolean).join('\n');
+}
+
+function buildGroundedReplyAuditPrompt(input: {
+  turnContext?: unknown;
+  playerMessage?: unknown;
+  queryType?: unknown;
+  routeIntent?: unknown;
+  generatedTurn: ParsedReplyPartsTurn;
+  planClaims: ValidatedPlanClaimSlot[];
+}): string {
+  const safeInput = isRecord(input) ? input : {};
+  const turnContext = safeInput.turnContext;
+  const generatedTurn = safeInput.generatedTurn;
+  const planClaims = Array.isArray(safeInput.planClaims) ? safeInput.planClaims : [];
+  const candidateParts = Array.isArray(generatedTurn.parts) ? generatedTurn.parts : [];
+  const expectedIndexes = candidateParts.map((_, index) => index);
+
+  const claimLines = planClaims.length === 0
+    ? ['- No factual claims are allowed in this reply.']
+    : planClaims.map((claim) => `- Claim ${claim.claimOrdinal} [kind=${claim.mode}]: ${claim.text}`);
+
+  const candidateReply = JSON.stringify({
+    parts: generatedTurn.parts.map((part) => ({
+      kind: part.kind,
+      text: part.text,
+    })),
+    emotion: generatedTurn.emotion,
+    intent: generatedTurn.intent,
+  });
+
+  const examplePartAudits = candidateParts.map((part, index) => {
+    const kind = normalizeOptionalString(part?.kind);
+    if (kind === 'social' || kind === 'close' || kind === 'uncertain') {
+      return {
+        partIndex: index,
+        role: kind,
+        claimOrdinals: [],
+        hedgeSufficient: true,
+        notes: `${kind} part`,
+      };
+    }
+    return {
+      partIndex: index,
+      role: 'knowledge',
+      claimOrdinals: planClaims.length > 0 ? [1] : [],
+      hedgeSufficient: true,
+      notes: 'states only the supported claim(s) in this part',
+    };
+  });
+  const exampleOutput = JSON.stringify({
+    partAudits: examplePartAudits,
+    unsupportedFacts: [],
+  });
+
+  return [
+    'You are auditing an NPC reply for supported factual coverage.',
+    'Return ONLY one JSON object. No markdown. No explanation.',
+    'Your job is classification, not rewriting.',
+    'For each reply part, choose exactly one role: social, knowledge, uncertain, close, unsupported.',
+    'Role meanings:',
+    '- social = brief greeting, acknowledgement, or small-talk with no factual claim',
+    '- knowledge = a factual statement that expresses one or more allowed claims',
+    '- uncertain = an explicit statement of not knowing or being unsure',
+    '- close = a conversational sign-off or wrap-up such as goodbye or "that is all", with no factual claim',
+    '- unsupported = factual content that is outside the allowed claim table',
+    'Important: close means closing the conversation. It does NOT mean "close enough" or "approximately related."',
+    `The candidate reply has exactly ${candidateParts.length} parts.`,
+    `You must return exactly ${candidateParts.length} partAudits, one for each partIndex in [${expectedIndexes.join(', ')}].`,
+    'Do not invent extra part indexes. Do not omit any candidate part index.',
+    'Use role=knowledge only when the part clearly states one or more allowed claims from the claim table.',
+    'claimOrdinals must contain only the claim numbers actually stated by that part.',
+    'If a part adds any factual content outside the allowed claim table, mark that part unsupported and leave claimOrdinals empty.',
+    'Set hedgeSufficient=true only when the part preserves the required certainty for every matched claim.',
+    'For grounded claims, hedgeSufficient should be true unless the part sounds weaker than the claim.',
+    'For social, uncertain, close, or unsupported parts, claimOrdinals must be empty.',
+    'Role constraints by generated part kind:',
+    '- generated kind grounded/inferred/rumor -> audit role must be knowledge or unsupported',
+    '- generated kind social -> audit role must be social or unsupported',
+    '- generated kind uncertain -> audit role must be uncertain or unsupported',
+    '- generated kind close -> audit role must be close or unsupported',
+    'The allowed claim table may be written as source-language meaning notes, while the candidate reply may be written in the target language.',
+    'Judge semantic meaning, not surface wording. A correct Spanish, French, German, Italian, or Portuguese rendering of an allowed English claim still counts as that claim.',
+    'Do not downgrade a factual translated answer to close, social, or unsupported just because it is not in the same language as the claim table.',
+    'Proper names may remain unchanged across languages. Translated surrounding grammar still matches the same claim.',
+    'A generated grounded/inferred/rumor part that clearly expresses an allowed claim in another language should almost always audit as knowledge.',
+    'Do not copy a generic example. Use only the actual candidate reply parts shown below.',
+    `Query type: ${sanitizePromptText(input.queryType || 'conversation')}`,
+    `Route intent: ${sanitizePromptText(input.routeIntent || 'unknown')}`,
+    `Player message: ${sanitizePromptText(input.playerMessage || '(none)')}`,
+    'Allowed claims:',
+    ...claimLines,
+    'Candidate reply JSON:',
+    candidateReply,
+    'Cross-language example:',
+    '{"allowedClaim":"Earendale is a small town on a floating chunk of land.","candidatePart":{"kind":"grounded","text":"Earendale es un pueblo pequeno en un pedazo de tierra flotante."},"correctAudit":{"partIndex":0,"role":"knowledge","claimOrdinals":[1],"hedgeSufficient":true,"notes":"same claim in Spanish"}}',
+    'Output shape:',
+    exampleOutput,
+  ].join('\n');
+}
+
+function materializeAuditedGroundedTurn(input: {
+  generatedTurn: ParsedReplyPartsTurn;
+  planClaims: ValidatedPlanClaimSlot[];
+  unsupportedFacts?: string[];
+  partAudits?: Array<{
+    partIndex: number;
+    role: 'social' | 'knowledge' | 'uncertain' | 'close' | 'unsupported';
+    claimOrdinals: number[];
+    hedgeSufficient?: boolean;
+    notes?: string;
+  }>;
+}) {
+  const generatedTurn = input.generatedTurn;
+  const partAudits = Array.isArray(input.partAudits) ? input.partAudits : [];
+  const normalizedPartAudits = partAudits
+    .filter((entry) => Number.isFinite(entry?.partIndex))
+    .filter((entry) => entry.partIndex >= 0 && entry.partIndex < generatedTurn.parts.length)
+    .sort((left, right) => left.partIndex - right.partIndex);
+  const auditByIndex = new Map<number, typeof normalizedPartAudits[number]>();
+  for (const entry of normalizedPartAudits) {
+    if (!auditByIndex.has(entry.partIndex)) {
+      auditByIndex.set(entry.partIndex, entry);
+    }
+  }
+  const claimsByOrdinal = new Map(input.planClaims.map((claim) => [claim.claimOrdinal, claim] as const));
+  const unsupportedFacts = normalizeStringArray(input.unsupportedFacts);
+  if (unsupportedFacts.length > 0) {
+    return {
+      failureReason: `audit_unsupported_facts:${unsupportedFacts.join(' | ')}`,
+      auditedTurn: null,
+      acceptedClaimOrdinals: [] as number[],
+    };
+  }
+  if (auditByIndex.size !== generatedTurn.parts.length) {
+    return {
+      failureReason: `audit_part_count_mismatch:${auditByIndex.size}/${generatedTurn.parts.length}`,
+      auditedTurn: null,
+      acceptedClaimOrdinals: [] as number[],
+    };
+  }
+
+  const acceptedClaimOrdinals = new Set<number>();
+  const finalParts: ReplyPart[] = [];
+
+  for (let index = 0; index < generatedTurn.parts.length; index += 1) {
+    const part = generatedTurn.parts[index];
+    const generatedKind = part?.kind;
+    const generatedKnowledgeKind = generatedKind === 'grounded' || generatedKind === 'inferred' || generatedKind === 'rumor';
+    const audit = auditByIndex.get(index);
+    if (!audit) {
+      return {
+        failureReason: `audit_missing_part:${index}`,
+        auditedTurn: null,
+        acceptedClaimOrdinals: [] as number[],
+      };
+    }
+
+    if (generatedKnowledgeKind && audit.role !== 'knowledge' && audit.role !== 'unsupported') {
+      return {
+        failureReason: `audit_invalid_role_transition:${index}:${generatedKind}->${audit.role}`,
+        auditedTurn: null,
+        acceptedClaimOrdinals: [] as number[],
+      };
+    }
+    if (!generatedKnowledgeKind && generatedKind && audit.role !== generatedKind && audit.role !== 'unsupported') {
+      return {
+        failureReason: `audit_invalid_role_transition:${index}:${generatedKind}->${audit.role}`,
+        auditedTurn: null,
+        acceptedClaimOrdinals: [] as number[],
+      };
+    }
+
+    if (audit.role === 'unsupported') {
+      return {
+        failureReason: `audit_unsupported_part:${index}`,
+        auditedTurn: null,
+        acceptedClaimOrdinals: [] as number[],
+      };
+    }
+
+    if (audit.role === 'knowledge') {
+      if (audit.claimOrdinals.length === 0) {
+        return {
+          failureReason: `audit_missing_claim_match:${index}`,
+          auditedTurn: null,
+          acceptedClaimOrdinals: [] as number[],
+        };
+      }
+      const matchedClaims = audit.claimOrdinals
+        .map((ordinal) => claimsByOrdinal.get(ordinal))
+        .filter((claim): claim is ValidatedPlanClaimSlot => claim != null);
+      if (matchedClaims.length !== audit.claimOrdinals.length) {
+        return {
+          failureReason: `audit_unknown_claim_ordinal:${index}`,
+          auditedTurn: null,
+          acceptedClaimOrdinals: [] as number[],
+        };
+      }
+      const distinctModes = Array.from(new Set(matchedClaims.map((claim) => claim.mode)));
+      if (distinctModes.length !== 1) {
+        return {
+          failureReason: `audit_mixed_claim_modes:${index}`,
+          auditedTurn: null,
+          acceptedClaimOrdinals: [] as number[],
+        };
+      }
+      const resolvedKind = distinctModes[0] as ReplyPartKind;
+      if (audit.hedgeSufficient === false || (resolvedKind !== 'grounded' && audit.hedgeSufficient !== true)) {
+        return {
+          failureReason: `audit_insufficient_hedge:${index}`,
+          auditedTurn: null,
+          acceptedClaimOrdinals: [] as number[],
+        };
+      }
+      const support = Array.from(new Set(
+        matchedClaims.flatMap((claim) => claim.supportSlotIds),
+      ));
+      if (support.length === 0) {
+        return {
+          failureReason: `audit_missing_support:${index}`,
+          auditedTurn: null,
+          acceptedClaimOrdinals: [] as number[],
+        };
+      }
+      matchedClaims.forEach((claim) => acceptedClaimOrdinals.add(claim.claimOrdinal));
+      finalParts.push({
+        kind: resolvedKind,
+        text: part.text,
+        support,
+      });
+      continue;
+    }
+
+    if (audit.claimOrdinals.length > 0) {
+      return {
+        failureReason: `audit_nonknowledge_claim_match:${index}`,
+        auditedTurn: null,
+        acceptedClaimOrdinals: [] as number[],
+      };
+    }
+
+    if (audit.role === 'social' || audit.role === 'uncertain' || audit.role === 'close') {
+      finalParts.push({
+        kind: audit.role,
+        text: part.text,
+      });
+      continue;
+    }
+
+    return {
+      failureReason: `audit_invalid_role:${index}`,
+      auditedTurn: null,
+      acceptedClaimOrdinals: [] as number[],
+    };
+  }
+
+  return {
+    failureReason: undefined,
+    auditedTurn: {
+      ...generatedTurn,
+      parts: finalParts,
+    },
+    acceptedClaimOrdinals: [...acceptedClaimOrdinals].sort((left, right) => left - right),
+  };
 }
 
 function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): string {
@@ -534,131 +1021,382 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
     npcId,
     queryType,
   });
+  const claimMetadata = buildValidatedPlanClaimMetadata({
+    plan,
+    evidencePack,
+    supportSlots: allowedSupportSlots,
+  });
 
   await ensureModelLoaded();
   generationDiagnostics.draft.attempted = true;
   generationDiagnostics.replyParts.attempted = true;
+  generationDiagnostics.replyParts.attemptCount = 0;
+  generationDiagnostics.replyParts.repairAttempted = false;
+  generationDiagnostics.replyParts.auditAttempted = false;
+  generationDiagnostics.replyParts.auditSuccess = false;
+  generationDiagnostics.replyParts.auditFailureReason = undefined;
+  generationDiagnostics.replyParts.auditRawResponsePreview = undefined;
+  generationDiagnostics.replyParts.auditPartsPreview = undefined;
   generationDiagnostics.replyParts.allowedSupportSlots = allowedSupportSlots.map((slot) => slot.slotId);
+  generationDiagnostics.replyParts.allowedClaimOrdinals = claimMetadata.allowedClaimOrdinals;
+  generationDiagnostics.replyParts.verificationMode = 'generator_auditor';
 
-  const prompt = buildPlanBoundReplyPartsPrompt({
-    npcName,
-    playerMessage,
-    queryType,
-    routeIntent,
-    plan,
-    turnContext: safeInput.turnContext,
-    supportSlots: allowedSupportSlots,
-  });
-  const generated = await runtime.generateJson({
-    kind: 'validated-plan-realization',
-    prompt,
-    schemaText: REPLY_PARTS_JSON_SCHEMA,
-    maxTokens: 180,
-    attempt: 1,
-    input: {
-      npcName,
-      playerMessage,
-      supportSlots: allowedSupportSlots,
-      turnContext: {
+  let repairReason: string | undefined;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    generationDiagnostics.replyParts.attemptCount = attempt;
+    generationDiagnostics.replyParts.repairAttempted = attempt > 1;
+    generationDiagnostics.replyParts.failureReason = undefined;
+    generationDiagnostics.replyParts.rawResponsePreview = undefined;
+    generationDiagnostics.replyParts.rawPartsPreview = undefined;
+    generationDiagnostics.replyParts.partCount = 0;
+    generationDiagnostics.replyParts.groundedPartCount = 0;
+    generationDiagnostics.replyParts.acceptedClaimOrdinals = undefined;
+    generationDiagnostics.replyParts.auditAttempted = false;
+    generationDiagnostics.replyParts.auditSuccess = false;
+    generationDiagnostics.replyParts.auditFailureReason = undefined;
+    generationDiagnostics.replyParts.auditRawResponsePreview = undefined;
+    generationDiagnostics.replyParts.auditPartsPreview = undefined;
+
+    const prompt = attempt === 1
+      ? buildPlanBoundReplyPartsPrompt({
+        npcName,
+        playerMessage,
         queryType,
         routeIntent,
+        plan,
+        planClaims: claimMetadata.planClaims,
+        turnContext: safeInput.turnContext,
+        supportSlots: allowedSupportSlots,
+      })
+      : buildPlanBoundReplyPartsRepairPrompt({
+        npcName,
+        playerMessage,
+        queryType,
+        routeIntent,
+        plan,
+        planClaims: claimMetadata.planClaims,
+        turnContext: safeInput.turnContext,
+        supportSlots: allowedSupportSlots,
+        failureReason: repairReason,
+      });
+    const generated = await runtime.generateJson({
+      kind: 'validated-plan-realization',
+      prompt,
+      schemaText: REPLY_PARTS_JSON_SCHEMA,
+      maxTokens: Math.min(420, 200 + (claimMetadata.planClaims.length * 60)),
+      attempt,
+      input: {
+        npcName,
+        playerMessage,
+        turnContext: safeInput.turnContext,
+        planClaims: claimMetadata.planClaims,
       },
-    },
-  });
+    });
 
-  const replyPartsSourceText = typeof generated.rawText === 'string' && generated.rawText.trim().length > 0
-    ? generated.rawText
-    : generated.jsonText;
-  generationDiagnostics.replyParts.rawResponsePreview = sanitizePromptText(replyPartsSourceText).slice(0, 320);
+    const replyPartsSourceText = typeof generated.rawText === 'string' && generated.rawText.trim().length > 0
+      ? generated.rawText
+      : generated.jsonText;
+    generationDiagnostics.replyParts.rawResponsePreview = sanitizePromptText(replyPartsSourceText).slice(0, 320);
 
-  const parsed = parseReplyPartsTurnFromText(replyPartsSourceText);
-  if (!parsed) {
-    generationDiagnostics.draft.success = false;
-    generationDiagnostics.draft.failureReason = 'reply-parts-invalid-json';
-    generationDiagnostics.replyParts.success = false;
-    generationDiagnostics.replyParts.failureReason = 'invalid_json';
-    return null;
+    const parsedResult = parseReplyPartsResponseDetailed(replyPartsSourceText);
+    if (!parsedResult.turn) {
+      repairReason = parsedResult.failureReason ?? 'invalid_json';
+      generationDiagnostics.draft.success = false;
+      generationDiagnostics.draft.failureReason = `reply-parts-${repairReason}`;
+      generationDiagnostics.replyParts.success = false;
+      generationDiagnostics.replyParts.failureReason = repairReason;
+      emitPlanRealizationStatusLog({
+        stage: 'parse-failed',
+        strategy: 'generator_auditor',
+        attempt,
+        turnContext: safeInput.turnContext,
+        npcId: normalizeOptionalString(npcId) ?? undefined,
+        routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+        queryType: normalizeOptionalString(queryType) ?? undefined,
+        turnPath: 'grounded',
+        failureReason: repairReason,
+        rawPreview: replyPartsSourceText,
+        allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+        allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        validationMode: 'generator_auditor',
+      });
+      continue;
+    }
+
+    generationDiagnostics.replyParts.rawPartsPreview = parsedResult.turn.parts.map((part) => ({
+      kind: part.kind,
+      text: part.text,
+      support: Array.isArray(part.support) ? part.support : undefined,
+    }));
+
+    generationDiagnostics.replyParts.auditAttempted = true;
+    const auditPrompt = buildGroundedReplyAuditPrompt({
+      turnContext: safeInput.turnContext,
+      playerMessage,
+      queryType,
+      routeIntent,
+      generatedTurn: parsedResult.turn,
+      planClaims: claimMetadata.planClaims,
+    });
+    const auditGenerated = await runtime.generateJson({
+      kind: 'grounded-reply-audit',
+      prompt: auditPrompt,
+      schemaText: GROUNDED_REPLY_AUDIT_JSON_SCHEMA,
+      maxTokens: Math.min(320, 180 + (parsedResult.turn.parts.length * 40)),
+      attempt: 1,
+      temperature: '0.15',
+      input: {
+        playerMessage,
+        queryType,
+        routeIntent,
+        generatedTurn: parsedResult.turn,
+        planClaims: claimMetadata.planClaims,
+        turnContext: safeInput.turnContext,
+      },
+    });
+    const auditSourceText = typeof auditGenerated.rawText === 'string' && auditGenerated.rawText.trim().length > 0
+      ? auditGenerated.rawText
+      : auditGenerated.jsonText;
+    generationDiagnostics.replyParts.auditRawResponsePreview = sanitizePromptText(auditSourceText).slice(0, 320);
+    const parsedAudit = parseGroundedReplyAuditDetailed(auditSourceText);
+    if (!parsedAudit.audit) {
+      repairReason = `audit_${parsedAudit.failureReason ?? 'invalid_json'}`;
+      generationDiagnostics.draft.success = false;
+      generationDiagnostics.draft.failureReason = repairReason;
+      generationDiagnostics.replyParts.success = false;
+      generationDiagnostics.replyParts.failureReason = repairReason;
+      generationDiagnostics.replyParts.auditSuccess = false;
+      generationDiagnostics.replyParts.auditFailureReason = repairReason;
+      emitPlanRealizationStatusLog({
+        stage: 'audit-parse-failed',
+        strategy: 'generator_auditor',
+        attempt,
+        turnContext: safeInput.turnContext,
+        npcId: normalizeOptionalString(npcId) ?? undefined,
+        routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+        queryType: normalizeOptionalString(queryType) ?? undefined,
+        turnPath: 'grounded',
+        failureReason: repairReason,
+        rawPreview: replyPartsSourceText,
+        auditRawPreview: auditSourceText,
+        allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+        allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        validationMode: 'generator_auditor',
+      });
+      continue;
+    }
+
+    generationDiagnostics.replyParts.auditPartsPreview = parsedAudit.audit.partAudits.map((part) => ({
+      partIndex: part.partIndex,
+      role: part.role,
+      claimOrdinals: part.claimOrdinals,
+      hedgeSufficient: part.hedgeSufficient,
+      notes: part.notes,
+    }));
+
+    const auditedTurnResult = materializeAuditedGroundedTurn({
+      generatedTurn: parsedResult.turn,
+      planClaims: claimMetadata.planClaims,
+      unsupportedFacts: parsedAudit.audit.unsupportedFacts,
+      partAudits: parsedAudit.audit.partAudits,
+    });
+    generationDiagnostics.replyParts.acceptedClaimOrdinals = auditedTurnResult.acceptedClaimOrdinals;
+    if (!auditedTurnResult.auditedTurn) {
+      repairReason = auditedTurnResult.failureReason ?? 'audit_rejected';
+      generationDiagnostics.draft.success = false;
+      generationDiagnostics.draft.failureReason = repairReason;
+      generationDiagnostics.replyParts.success = false;
+      generationDiagnostics.replyParts.failureReason = repairReason;
+      generationDiagnostics.replyParts.auditSuccess = false;
+      generationDiagnostics.replyParts.auditFailureReason = repairReason;
+      emitPlanRealizationStatusLog({
+        stage: 'audit-rejected',
+        strategy: 'generator_auditor',
+        attempt,
+        turnContext: safeInput.turnContext,
+        npcId: normalizeOptionalString(npcId) ?? undefined,
+        routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+        queryType: normalizeOptionalString(queryType) ?? undefined,
+        turnPath: 'grounded',
+        failureReason: repairReason,
+        rawPreview: replyPartsSourceText,
+        auditRawPreview: auditSourceText,
+        allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+        acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
+        allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        validationMode: 'generator_auditor',
+      });
+      continue;
+    }
+
+    const normalized = normalizeReplyPartsForValidation({
+      turn: auditedTurnResult.auditedTurn,
+      supportSlots: allowedSupportSlots,
+      queryType,
+    }) ?? auditedTurnResult.auditedTurn;
+    const validation = validateReplyPartsContract({
+      parts: normalized.parts,
+      supportSlots: allowedSupportSlots,
+      queryType,
+      intent: normalized.intent,
+    });
+    const realizedKnowledgeParts = normalized.parts.filter((part) => (
+      part.kind === 'grounded' || part.kind === 'inferred' || part.kind === 'rumor'
+    )).length;
+    generationDiagnostics.replyParts.partCount = normalized.parts.length;
+    generationDiagnostics.replyParts.groundedPartCount = realizedKnowledgeParts;
+    generationDiagnostics.replyParts.auditSuccess = true;
+    generationDiagnostics.replyParts.auditFailureReason = undefined;
+
+    if (!validation.valid) {
+      repairReason = buildReplyPartsValidationRepairReason(validation);
+      generationDiagnostics.draft.success = false;
+      generationDiagnostics.draft.failureReason = 'reply-parts-validation-failed';
+      generationDiagnostics.replyParts.success = false;
+      generationDiagnostics.replyParts.failureReason = repairReason;
+      emitPlanRealizationStatusLog({
+        stage: 'contract-rejected',
+        strategy: 'generator_auditor',
+        attempt,
+        turnContext: safeInput.turnContext,
+        npcId: normalizeOptionalString(npcId) ?? undefined,
+        routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+        queryType: normalizeOptionalString(queryType) ?? undefined,
+        turnPath: 'grounded',
+        failureReason: repairReason,
+        rawPreview: replyPartsSourceText,
+        auditRawPreview: auditSourceText,
+        allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+        acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
+        allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        validationMode: 'generator_auditor',
+      });
+      continue;
+    }
+
+    const materialized = materializeTurnOutputFromReplyParts({
+      turn: {
+        ...normalized,
+        beatEvidence: isRecord(normalized.beatEvidence)
+          ? normalized.beatEvidence
+          : {
+            coveredFacts: [],
+            uncoveredFacts: [],
+            completionSignal: 'none',
+            confidence: 0,
+          },
+      },
+      supportSlots: allowedSupportSlots,
+    });
+
+    emitReplyLanguageDebugLog({
+      stage: 'validated-plan-realization-candidate',
+      turnContext: safeInput.turnContext,
+      npcId: normalizeOptionalString(npcId) ?? undefined,
+      routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+      queryType: normalizeOptionalString(queryType) ?? undefined,
+      turnPath: 'grounded',
+      replyText: materialized.utterance,
+      partKinds: normalized.parts.map((part) => part.kind),
+    });
+
+    const languageEstimate = estimateTextLanguage(
+      materialized.utterance,
+      getPedagogyContext(safeInput.turnContext)?.targetLanguage,
+    );
+    generationDiagnostics.replyParts.estimatedLanguage = languageEstimate.estimatedLanguage;
+    generationDiagnostics.replyParts.mismatchSuspected = languageEstimate.mismatchSuspected;
+    if (languageEstimate.mismatchSuspected) {
+      repairReason = `language_mismatch:${languageEstimate.estimatedLanguage}`;
+      generationDiagnostics.draft.success = false;
+      generationDiagnostics.draft.failureReason = repairReason;
+      generationDiagnostics.replyParts.success = false;
+      generationDiagnostics.replyParts.failureReason = repairReason;
+      emitPlanRealizationStatusLog({
+        stage: 'language-rejected',
+        strategy: 'generator_auditor',
+        attempt,
+        turnContext: safeInput.turnContext,
+        npcId: normalizeOptionalString(npcId) ?? undefined,
+        routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+        queryType: normalizeOptionalString(queryType) ?? undefined,
+        turnPath: 'grounded',
+        failureReason: repairReason,
+        estimatedLanguage: languageEstimate.estimatedLanguage,
+        mismatchSuspected: languageEstimate.mismatchSuspected,
+        allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+        acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
+        allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        validationMode: 'generator_auditor',
+      });
+      continue;
+    }
+
+    generationDiagnostics.draft.success = true;
+    generationDiagnostics.replyParts.success = true;
+    generationDiagnostics.replyParts.failureReason = undefined;
+    emitPlanRealizationStatusLog({
+      stage: 'accepted',
+      strategy: 'generator_auditor',
+      attempt,
+      turnContext: safeInput.turnContext,
+      npcId: normalizeOptionalString(npcId) ?? undefined,
+      routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+      queryType: normalizeOptionalString(queryType) ?? undefined,
+      turnPath: 'grounded',
+      estimatedLanguage: languageEstimate.estimatedLanguage,
+      mismatchSuspected: languageEstimate.mismatchSuspected,
+      allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+      acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
+      allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+      validationMode: 'generator_auditor',
+    });
+    return materialized;
   }
 
-  const normalized = normalizeReplyPartsForValidation({
-    turn: parsed,
-    supportSlots: allowedSupportSlots,
-    queryType,
-  }) ?? parsed;
-  generationDiagnostics.replyParts.rawPartsPreview = normalized.parts.map((part) => ({
-    kind: part.kind,
-    text: part.text,
-    support: Array.isArray(part.support) ? part.support : undefined,
-  }));
-
-  const validation = validateReplyPartsContract({
-    parts: normalized.parts,
-    supportSlots: allowedSupportSlots,
-    queryType,
-    intent: normalized.intent,
+  emitPlanRealizationStatusLog({
+    stage: 'exhausted',
+    strategy: 'generator_auditor',
+    attempt: generationDiagnostics.replyParts.attemptCount,
+    turnContext: safeInput.turnContext,
+    npcId: normalizeOptionalString(npcId) ?? undefined,
+    routeIntent: normalizeOptionalString(routeIntent) ?? undefined,
+    queryType: normalizeOptionalString(queryType) ?? undefined,
+    turnPath: 'grounded',
+    failureReason: generationDiagnostics.replyParts.failureReason,
+    allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
+    allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+    validationMode: 'generator_auditor',
   });
-  const realizedKnowledgeParts = normalized.parts.filter((part) => (
-    part.kind === 'grounded' || part.kind === 'inferred' || part.kind === 'rumor'
-  )).length;
-  generationDiagnostics.replyParts.partCount = normalized.parts.length;
-  generationDiagnostics.replyParts.groundedPartCount = realizedKnowledgeParts;
-
-  if (!validation.valid) {
-    generationDiagnostics.draft.success = false;
-    generationDiagnostics.draft.failureReason = 'reply-parts-validation-failed';
-    generationDiagnostics.replyParts.success = false;
-    generationDiagnostics.replyParts.failureReason = buildReplyPartsValidationRepairReason(validation);
-    return null;
-  }
-
-  const mustCarryKnowledge = planClaims.length > 0 && (speechAct === 'answer' || speechAct === 'recall');
-  if (mustCarryKnowledge && realizedKnowledgeParts === 0) {
-    generationDiagnostics.draft.success = false;
-    generationDiagnostics.draft.failureReason = 'reply-parts-missing-knowledge-carry';
-    generationDiagnostics.replyParts.success = false;
-    generationDiagnostics.replyParts.failureReason = 'reply-parts-missing-knowledge-carry';
-    return null;
-  }
-
-  generationDiagnostics.draft.success = true;
-  generationDiagnostics.replyParts.success = true;
-  generationDiagnostics.replyParts.failureReason = undefined;
-
-  return materializeTurnOutputFromReplyParts({
-    turn: {
-      ...normalized,
-      beatEvidence: isRecord(normalized.beatEvidence)
-        ? normalized.beatEvidence
-        : {
-          coveredFacts: [],
-          uncoveredFacts: [],
-          completionSignal: 'none',
-          confidence: 0,
-        },
-    },
-    supportSlots: allowedSupportSlots,
-  });
+  return null;
 }
 
 function buildMockSocialReplyParts(requestInput: unknown) {
   const input = isRecord(requestInput) ? requestInput : {};
   const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
   const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
-  const declaredName = extractDeclaredIdentityName(playerMessage);
-  const acknowledgement = detectSocialAcknowledgement(playerMessage);
+  const targetLanguage = normalizeOptionalString(getPedagogyContext(input.turnContext)?.targetLanguage);
+  const declaredName = extractDeclaredIdentityName(playerMessage, targetLanguage);
+  const acknowledgement = detectSocialAcknowledgement(playerMessage, targetLanguage);
 
-  let text = `Hi. I'm ${npcName}.`;
+  let text = localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName });
   if (declaredName) {
     const safeName = declaredName.charAt(0).toUpperCase() + declaredName.slice(1);
-    text = `Nice to meet you, ${safeName}. I'm ${npcName}.`;
+    text = localizeSimpleSocialReply('nice_to_meet_you', targetLanguage, {
+      npcName,
+      playerName: safeName,
+    });
   } else if (acknowledgement === 'gratitude') {
-    text = 'Any time.';
+    text = localizeSimpleSocialReply('any_time', targetLanguage);
   } else if (acknowledgement === 'shared_preference') {
-    text = /\bcheese\b/i.test(playerMessage) ? 'You and me both. Cheese is hard to beat.' : 'You and me both.';
+    text = /\bcheese\b/i.test(playerMessage)
+      ? localizeSimpleSocialReply('shared_preference_cheese', targetLanguage)
+      : localizeSimpleSocialReply('shared_preference', targetLanguage);
   } else if (acknowledgement) {
-    text = 'Yeah, I hear you.';
-  } else if (!isLikelyGreetingOnlyMessage(playerMessage) && playerMessage) {
-    text = 'That makes sense.';
+    text = localizeSimpleSocialReply('agreement', targetLanguage);
+  } else if (!isLikelyGreetingOnlyMessage(playerMessage, targetLanguage) && playerMessage) {
+    text = localizeSimpleSocialReply('agreement', targetLanguage);
   }
 
   return {
@@ -699,6 +1437,8 @@ async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null
   await ensureModelLoaded();
   generationDiagnostics.draft.attempted = true;
   generationDiagnostics.replyParts.attempted = true;
+  generationDiagnostics.replyParts.attemptCount = 1;
+  generationDiagnostics.replyParts.repairAttempted = false;
   generationDiagnostics.replyParts.allowedSupportSlots = [];
 
   const prompt = buildSocialFastReplyPartsPrompt({
@@ -721,10 +1461,7 @@ async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null
     input: {
       npcName,
       playerMessage,
-      turnContext: {
-        queryType: 'conversation',
-        routingIntent: 'social_chat',
-      },
+      turnContext,
       supportSlots: [],
     },
   });
@@ -792,6 +1529,32 @@ async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null
     },
     supportSlots: [],
   });
+  const languageEstimate = estimateTextLanguage(
+    materialized.utterance,
+    getPedagogyContext(turnContext)?.targetLanguage,
+  );
+  generationDiagnostics.replyParts.estimatedLanguage = languageEstimate.estimatedLanguage;
+  generationDiagnostics.replyParts.mismatchSuspected = languageEstimate.mismatchSuspected;
+  if (languageEstimate.mismatchSuspected) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = 'social-fast-language-mismatch';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = 'social_fast_language_mismatch';
+    emitPlanRealizationStatusLog({
+      stage: 'language-rejected',
+      strategy: 'social_fast_reply_parts',
+      attempt: 1,
+      turnContext,
+      routeIntent: 'social_chat',
+      queryType: 'conversation',
+      turnPath: 'social_fast',
+      estimatedLanguage: languageEstimate.estimatedLanguage,
+      mismatchSuspected: languageEstimate.mismatchSuspected,
+      failureReason: 'social_fast_language_mismatch',
+      validationMode: 'social_reply_parts',
+    });
+    return null;
+  }
 
   const quality = validateTurnQuality(
     materialized,
@@ -827,6 +1590,13 @@ async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null
   generationDiagnostics.draft.success = true;
   generationDiagnostics.replyParts.success = true;
   generationDiagnostics.replyParts.failureReason = undefined;
+  emitReplyLanguageDebugLog({
+    stage: 'social-fast-realization-candidate',
+    turnContext,
+    turnPath: 'social_fast',
+    replyText: normalized.parts.map((part) => part.text).join(' '),
+    partKinds: normalized.parts.map((part) => part.kind),
+  });
   return materialized;
 }
 
@@ -976,6 +1746,103 @@ function buildPedagogyBlock(turnContext: unknown): string | null {
 
   if (lines.length === 0) return null;
   return ['Sugarlang pedagogy context:', ...lines].join('\n');
+}
+
+function buildLearnerBandStyleLines(turnContext: unknown): string[] {
+  const learnerBand = normalizeOptionalString(getPedagogyContext(turnContext)?.learnerBand)?.toUpperCase();
+  if (!learnerBand) return [];
+
+  if (learnerBand === 'B0') {
+    return [
+      'For factual parts, prefer one very short sentence per part.',
+      'At this learner band, use at most 2 grounded factual parts and only the most important facts.',
+      'Use simple present-tense wording and avoid subordinate clauses.',
+      'Prefer high-frequency everyday words over ornate phrasing.',
+    ];
+  }
+
+  if (learnerBand === 'B1') {
+    return [
+      'Keep factual parts short and easy to parse.',
+      'Prefer at most 2 grounded factual parts unless a second fact is essential.',
+      'Prefer direct wording and only one small hedge when a hedge is required.',
+    ];
+  }
+
+  if (learnerBand === 'B2') {
+    return [
+      'Use clear natural phrasing, but do not get elaborate.',
+    ];
+  }
+
+  return [
+    'Keep the reply natural, but still easy to follow.',
+  ];
+}
+
+function extractProperNameAnchorsFromClaims(planClaims: Array<{ text?: string }>): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const claim of planClaims) {
+    const text = sanitizePromptText(claim?.text ?? '');
+    if (!text) continue;
+    const matches = text.match(/\b[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3}\b/g) ?? [];
+    for (const match of matches) {
+      const normalized = match.trim();
+      if (
+        normalized.length < 3
+        || normalized === 'I'
+        || normalized === 'The'
+        || seen.has(normalized)
+      ) {
+        continue;
+      }
+      seen.add(normalized);
+      output.push(normalized);
+      if (output.length >= 8) return output;
+    }
+  }
+  return output;
+}
+
+function buildGroundedTargetLanguageAnchorLines(input: {
+  turnContext?: unknown;
+  planClaims?: Array<{ text?: string }>;
+}): string[] {
+  const pedagogyContext = getPedagogyContext(input.turnContext);
+  const targetLanguage = normalizeOptionalString(pedagogyContext?.targetLanguage);
+  if (!targetLanguage || normalizeLanguageCode(targetLanguage) === 'en') return [];
+
+  const focusVocabulary = pedagogyContext ? buildPedagogyVocabularyList(pedagogyContext) : [];
+  const properNames = extractProperNameAnchorsFromClaims(
+    Array.isArray(input.planClaims) ? input.planClaims : [],
+  );
+
+  const groundedExample = localizeGroundedReplyExemplar('grounded', targetLanguage);
+  const inferredExample = localizeGroundedReplyExemplar('inferred', targetLanguage);
+  const rumorExample = localizeGroundedReplyExemplar('rumor', targetLanguage);
+  const uncertainExample = localizeGroundedReplyExemplar('uncertain', targetLanguage);
+
+  const lines = [
+    `Important: when the target language is ${targetLanguage}, the factual claim notes below are source-language meaning notes only.`,
+    `Write the visible factual reply directly in ${targetLanguage}. Do not mirror English relation words from the source notes.`,
+    'Proper names may stay as names, but the surrounding grammar and relation words must be in the target language.',
+  ];
+
+  if (properNames.length > 0) {
+    lines.push(`Proper names you may keep as-is: ${properNames.join(', ')}`);
+  }
+  if (focusVocabulary.length > 0) {
+    lines.push(`Prefer these target-language anchor words when natural: ${focusVocabulary.join(', ')}`);
+  }
+
+  lines.push(...buildLearnerBandStyleLines(input.turnContext));
+  lines.push('Target-language factual style examples (imitate the language and simplicity, not the facts):');
+  lines.push(`{"parts":[{"kind":"grounded","text":"${groundedExample}"}],"emotion":"grounded","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}`);
+  lines.push(`{"parts":[{"kind":"inferred","text":"${inferredExample}"}],"emotion":"guarded","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}`);
+  lines.push(`{"parts":[{"kind":"rumor","text":"${rumorExample}"}],"emotion":"uncertain","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}`);
+  lines.push(`{"parts":[{"kind":"uncertain","text":"${uncertainExample}"}],"emotion":"uncertain","intent":"uncertain","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}`);
+  return lines;
 }
 
 function tokenizeSnippetText(text: unknown): string[] {
@@ -1221,13 +2088,25 @@ function createGenerationDiagnostics(): GenerationDiagnostics {
     replyParts: {
       attempted: false,
       success: false,
+      attemptCount: 0,
+      repairAttempted: false,
       partCount: 0,
       groundedPartCount: 0,
       failureReason: undefined,
       skippedReason: undefined,
       rawResponsePreview: undefined,
       rawPartsPreview: undefined,
+      auditAttempted: undefined,
+      auditSuccess: undefined,
+      auditFailureReason: undefined,
+      auditRawResponsePreview: undefined,
+      auditPartsPreview: undefined,
       allowedSupportSlots: undefined,
+      allowedClaimOrdinals: undefined,
+      acceptedClaimOrdinals: undefined,
+      verificationMode: undefined,
+      estimatedLanguage: undefined,
+      mismatchSuspected: undefined,
     },
   };
 }
@@ -1240,13 +2119,25 @@ function resetGenerationDiagnosticsForAttempt(generationDiagnostics: GenerationD
 
   generationDiagnostics.replyParts.attempted = false;
   generationDiagnostics.replyParts.success = false;
+  generationDiagnostics.replyParts.attemptCount = 0;
+  generationDiagnostics.replyParts.repairAttempted = false;
   generationDiagnostics.replyParts.partCount = 0;
   generationDiagnostics.replyParts.groundedPartCount = 0;
   generationDiagnostics.replyParts.failureReason = undefined;
   generationDiagnostics.replyParts.skippedReason = undefined;
   generationDiagnostics.replyParts.rawResponsePreview = undefined;
   generationDiagnostics.replyParts.rawPartsPreview = undefined;
+  generationDiagnostics.replyParts.auditAttempted = undefined;
+  generationDiagnostics.replyParts.auditSuccess = undefined;
+  generationDiagnostics.replyParts.auditFailureReason = undefined;
+  generationDiagnostics.replyParts.auditRawResponsePreview = undefined;
+  generationDiagnostics.replyParts.auditPartsPreview = undefined;
   generationDiagnostics.replyParts.allowedSupportSlots = undefined;
+  generationDiagnostics.replyParts.allowedClaimOrdinals = undefined;
+  generationDiagnostics.replyParts.acceptedClaimOrdinals = undefined;
+  generationDiagnostics.replyParts.verificationMode = undefined;
+  generationDiagnostics.replyParts.estimatedLanguage = undefined;
+  generationDiagnostics.replyParts.mismatchSuspected = undefined;
 }
 
 function normalizeRuntimeMode(runtime: unknown): 'llama' | 'mock' | 'auto' {
@@ -1281,6 +2172,62 @@ function resolveConfiguredLlamaBin(args: SessionOptions): string | null {
   return resolveBundledLlamaBin();
 }
 
+function dedupeMockLocalizedSentences(text: string): string {
+  const parts = text.match(/[^.!?]+[.!?]?/g) ?? [text];
+  const deduped: string[] = [];
+  for (const part of parts.map((entry) => entry.trim()).filter(Boolean)) {
+    const normalized = part.toLowerCase();
+    if (normalized === deduped[deduped.length - 1]?.toLowerCase()) continue;
+    deduped.push(part);
+  }
+  return deduped.join(' ').trim();
+}
+
+function localizeMockKnowledgeText(
+  originalText: string,
+  targetLanguage: string | null,
+): string {
+  if (!originalText || !targetLanguage) return originalText;
+
+  if (targetLanguage === 'es') {
+    return dedupeMockLocalizedSentences(
+      originalText
+        .replace(/(^|[.!?]\s+)The\s+(?=[A-Z])/g, '$1')
+        .replace(/\bWe are at\s+(.+?)\s+right now\.?$/i, 'Estamos en $1 ahora.')
+        .replace(/\bI remember that\b/gi, 'Recuerdo que')
+        .replace(/\bCould you clarify what you want to know\??/gi, 'Puedes decirlo de forma mas simple?')
+        .replace(/\bI think that is enough for now\. Goodbye\./gi, 'Creo que ya basta por ahora. Adios.')
+        .replace(/\bGot it\. Tell me a little more and I'?ll help where I can\./gi, 'Entiendo. Dime un poco mas y ayudo si puedo.')
+        .replace(/\bA town\b/gi, 'Un pueblo')
+        .replace(/\blocated on\b/gi, 'ubicado en')
+        .replace(/\bfloating chunk of land\b/gi, 'trozo flotante de tierra')
+        .replace(/\bthat broke off from\b/gi, 'que se desprendio de')
+        .replace(/\bthe ear of the Great Head\b/gi, 'la oreja de la Gran Cabeza')
+        .replace(/\bis located just outside of\b/gi, 'esta justo fuera de')
+        .replace(/\bis located just outside\b/gi, 'esta justo fuera de')
+        .replace(/\blocated just outside of\b/gi, 'justo fuera de')
+        .replace(/\blocated just outside\b/gi, 'justo fuera de')
+        .replace(/\bthe town\b/gi, 'el pueblo')
+        .replace(/\bde el\b/gi, 'del'),
+    );
+  }
+
+  if (targetLanguage === 'fr') {
+    return originalText.replace(/\bWe are at\s+(.+?)\s+right now\.?$/i, 'Nous sommes a $1 maintenant.');
+  }
+  if (targetLanguage === 'de') {
+    return originalText.replace(/\bWe are at\s+(.+?)\s+right now\.?$/i, 'Wir sind jetzt in $1.');
+  }
+  if (targetLanguage === 'it') {
+    return originalText.replace(/\bWe are at\s+(.+?)\s+right now\.?$/i, 'Siamo a $1 adesso.');
+  }
+  if (targetLanguage === 'pt') {
+    return originalText.replace(/\bWe are at\s+(.+?)\s+right now\.?$/i, 'Estamos em $1 agora.');
+  }
+
+  return originalText;
+}
+
 function createMockRuntime(): SessionRuntime {
   let loaded = false;
 
@@ -1289,18 +2236,22 @@ function createMockRuntime(): SessionRuntime {
     const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
     const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
     const queryType = normalizeOptionalString(input.turnContext?.queryType) ?? 'conversation';
-  const supportSlots = Array.isArray(input.supportSlots)
-    ? input.supportSlots.filter((entry: unknown) => isRecord(entry) && typeof entry.slotId === 'string' && typeof entry.snippet === 'string')
-    : [];
+    const targetLanguage = normalizeOptionalString(getPedagogyContext(input.turnContext)?.targetLanguage);
+    const planClaims = Array.isArray(input.planClaims)
+      ? input.planClaims.filter((entry: unknown) => isRecord(entry) && typeof entry.claimOrdinal === 'number')
+      : [];
 
-    if (supportSlots.length > 0) {
-      const selectedSupport = supportSlots[0];
+    if (planClaims.length > 0) {
+      const selectedClaim = isRecord(planClaims[0]) ? planClaims[0] : null;
+      const claimMode = normalizeOptionalString(selectedClaim?.mode);
+      const knowledgeKind = claimMode === 'inferred' || claimMode === 'rumor' ? claimMode : 'grounded';
+      const baseText = normalizeOptionalString(selectedClaim?.text)
+        ?? `${npcName} knows about that.`;
       return {
         parts: [
           {
-            kind: 'grounded',
-            text: sanitizePromptText(selectedSupport.snippet),
-            support: [selectedSupport.slotId],
+            kind: knowledgeKind,
+            text: localizeMockKnowledgeText(baseText, targetLanguage),
           },
         ],
         emotion: queryType === 'self_query' ? 'warm' : 'grounded',
@@ -1320,7 +2271,10 @@ function createMockRuntime(): SessionRuntime {
         parts: [
           {
             kind: 'uncertain',
-            text: createGroundedUncertaintyReply(queryType).utterance,
+            text: createGroundedUncertaintyReply(
+              queryType,
+              normalizeOptionalString(getPedagogyContext(input?.turnContext)?.targetLanguage),
+            ).utterance,
           },
         ],
         emotion: 'uncertain',
@@ -1356,6 +2310,41 @@ function createMockRuntime(): SessionRuntime {
     };
   }
 
+  function buildMockReplyAudit(requestInput: unknown) {
+    const input = isRecord(requestInput) ? requestInput : {};
+    const generatedTurn = isRecord(input.generatedTurn) ? input.generatedTurn : {};
+    const parts = Array.isArray(generatedTurn.parts) ? generatedTurn.parts : [];
+    const planClaims = Array.isArray(input.planClaims)
+      ? input.planClaims.filter((entry: unknown) => isRecord(entry) && typeof entry.claimOrdinal === 'number')
+      : [];
+    const firstClaimOrdinal = Number.isFinite(planClaims[0]?.claimOrdinal)
+      ? Math.max(1, Math.floor(Number(planClaims[0].claimOrdinal)))
+      : 1;
+    const partAudits = parts.map((part, index) => {
+      const kind = normalizeOptionalString(part?.kind);
+      if (kind === 'social' || kind === 'close' || kind === 'uncertain') {
+        return {
+          partIndex: index,
+          role: kind,
+          claimOrdinals: [],
+          hedgeSufficient: true,
+          notes: 'mock non-knowledge part',
+        };
+      }
+      return {
+        partIndex: index,
+        role: 'knowledge',
+        claimOrdinals: planClaims.length > 0 ? [firstClaimOrdinal] : [],
+        hedgeSufficient: true,
+        notes: 'mock matched first claim',
+      };
+    });
+    return {
+      partAudits,
+      unsupportedFacts: [],
+    };
+  }
+
   async function generateJson(request: any) {
     if (!loaded) {
       throw new Error('Model must be loaded before generateStructured');
@@ -1363,6 +2352,11 @@ function createMockRuntime(): SessionRuntime {
     if (request?.kind === 'social-fast-realization') {
       return {
         jsonText: JSON.stringify(buildMockSocialReplyParts(request?.input ?? request)),
+      };
+    }
+    if (request?.kind === 'grounded-reply-audit') {
+      return {
+        jsonText: JSON.stringify(buildMockReplyAudit(request?.input ?? request)),
       };
     }
     return {
@@ -1793,6 +2787,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         mergeTurnContext(baseTurnContext, turnOptionsRecord.context),
         derivedContext,
       );
+      const targetLanguage = normalizeOptionalString(getPedagogyContext(turnContext)?.targetLanguage);
 
       const loreEntityHints = collectLoreEntityRouteMatches(message, loreArtifacts);
       let semanticDiagnostics = {
@@ -1821,6 +2816,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         tagHints: loreEntityHints.map((entry) => entry.matchedText),
       });
       const baseRouting = routeTurnIntent(message, npcName, {
+        targetLanguage,
         history,
         scene: {
           regionName: normalizeOptionalString(turnContext?.regionName),
@@ -1846,6 +2842,10 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
               interpretation: baseRouting.interpretation,
               embedTexts: (texts) => runtime.embed(texts),
             }),
+            {
+              targetLanguage,
+              explicitLoreMatchCount: loreEntityHints.length,
+            },
           );
           semanticDiagnostics.exemplarChanged = didSemanticInterpretationChange(baseRouting, enhancedRouting);
           interpretedRouting = enhancedRouting;
@@ -1882,6 +2882,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         applyTurnToSession(session, args.npc, message, output.utterance, {
           referentCandidates: buildTurnReferentCandidates({
             playerMessage: message,
+            targetLanguage,
             npcName,
             activeTopic: topicCoverageContext?.activeTopic ?? null,
             sceneRegionName: normalizeOptionalString(turnContext?.regionName),
@@ -2065,11 +3066,11 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         isFirstMeeting: derivedContext.isFirstMeeting,
       });
 
-      // Resolve language adaptation context from Sugarlang pedagogy first,
+      // Resolve delivery-language context from Sugarlang pedagogy first,
       // then fall back to any SugarAgent-local language model if present.
       const adaptationContext = buildSugarlangLanguageAdaptationContext(getPedagogyContext(turnContext))
         ?? await resolveLanguageAdaptationContext(null, null);
-      snapshot.languageAdaptation = adaptationContext;
+      snapshot.deliveryLanguageContext = adaptationContext;
 
       // Run the evidence-first pipeline
       const efResult = await runEvidenceFirstPipeline({
@@ -2118,20 +3119,9 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         });
 
         if (realized) {
-          const verification = verifyRealizationAgainstPlan(
-            realized.utterance,
-            validatedPlan,
-            enrichedEvidencePack,
-            snapshot,
-          );
-          efResult.diagnostics.semanticVerification = verification;
-          if (verification.ok) {
-            efOutput = realized;
-            efResult.diagnostics.deterministicFallbackUsed = false;
-          } else {
-            efResult.diagnostics.deterministicFallbackUsed = true;
-            validationErrors.push(...verification.errors);
-          }
+          efOutput = realized;
+          efResult.diagnostics.semanticVerification = undefined;
+          efResult.diagnostics.deterministicFallbackUsed = false;
         } else {
           efResult.diagnostics.deterministicFallbackUsed = true;
           const replyPartsFailureReason = normalizeOptionalString(generationDiagnostics.replyParts.failureReason);
@@ -2166,6 +3156,39 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
       } else {
         generationDiagnostics.replyParts.skippedReason = generationDiagnostics.replyParts.skippedReason ?? 'deterministic-plan';
       }
+      const enforcedTargetLanguage = normalizeLanguageCode(adaptationContext?.targetLanguage);
+      if (
+        groundedTurn
+        && enforcedTargetLanguage
+        && enforcedTargetLanguage !== 'en'
+      ) {
+        const deliveryEstimate = estimateTextLanguage(efOutput.utterance, enforcedTargetLanguage);
+        if (deliveryEstimate.mismatchSuspected) {
+          const mismatchReason = `delivery-language-mismatch:${deliveryEstimate.estimatedLanguage}`;
+          validationErrors.push(mismatchReason);
+          generationDiagnostics.replyParts.failureReason = generationDiagnostics.replyParts.failureReason ?? mismatchReason;
+          efOutput = createGroundedUncertaintyReply(queryType, adaptationContext?.targetLanguage);
+          efResult.diagnostics.deterministicFallbackUsed = true;
+          emitPlanRealizationStatusLog({
+            stage: 'fallback-enforced',
+            strategy: 'target_language_guardrail',
+            attempt: generationDiagnostics.replyParts.attemptCount,
+            turnContext,
+            npcId: args.npc,
+            routeIntent: resolvedRouting.intent,
+            queryType,
+            turnPath: efResult.turnRouting?.path,
+            estimatedLanguage: deliveryEstimate.estimatedLanguage,
+            mismatchSuspected: deliveryEstimate.mismatchSuspected,
+            failureReason: mismatchReason,
+            allowedClaimOrdinals: generationDiagnostics.replyParts.allowedClaimOrdinals,
+            acceptedClaimOrdinals: generationDiagnostics.replyParts.acceptedClaimOrdinals,
+            allowedSupportSlots: generationDiagnostics.replyParts.allowedSupportSlots,
+            validationMode: generationDiagnostics.replyParts.verificationMode,
+          });
+        }
+      }
+      efResult.diagnostics.deliveryLanguageContextApplied = (adaptationContext ?? null) != null;
 
       const acceptedPlan = validatedPlan ?? {
         claims: [],
@@ -2175,8 +3198,18 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         ...filterMemoryWrites({ plan: acceptedPlan }),
         ...extractNpcCommitments(efOutput.utterance, acceptedPlan),
       ];
+      emitReplyLanguageDebugLog({
+        stage: 'delivered-turn',
+        turnContext,
+        npcId: args.npc,
+        routeIntent: resolvedRouting.intent,
+        queryType,
+        turnPath: efResult.turnRouting?.path,
+        replyText: efOutput.utterance,
+      });
       const persistedReferentCandidates = buildTurnReferentCandidates({
         playerMessage: message,
+        targetLanguage,
         npcName,
         activeTopic: topicCoverageContext?.activeTopic ?? null,
         sceneRegionName: normalizeOptionalString(turnContext?.regionName),
@@ -2234,7 +3267,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
 
       return {
         output: efOutput,
-        attempts: generationDiagnostics.replyParts.attempted ? 1 : 0,
+        attempts: generationDiagnostics.replyParts.attemptCount,
         usedFallback,
         fallbackKind: usedFallback ? 'deterministic_runtime' : undefined,
         validationErrors: dedupedValidationErrors,

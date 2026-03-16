@@ -16,6 +16,7 @@ export { ResonanceGameUI } from './ResonanceGameUI';
 export { FadeOverlay } from './FadeOverlay';
 export { ControlsHint } from './ControlsHint';
 export { AgentConversationUI } from './AgentConversationUI';
+export { NPCInteractionChooserUI } from './NPCInteractionChooserUI';
 export { ResponseModeUI } from './ResponseModeUI';
 export type { ResponseModeResult } from './ResponseModeUI';
 export { SupportStrip } from './SupportStrip';

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SugarAgentProviderAdapter } from './SugarAgentProviderAdapter';
+import { createDefaultNPCInteractionCapabilities } from './interactionCapabilities';
 
 describe('SugarAgentProviderAdapter', () => {
   it('forwards authoritative region name and path into the SugarAgent context', async () => {
@@ -16,14 +17,20 @@ describe('SugarAgentProviderAdapter', () => {
       getCurrentRegion: () => 'regions.station',
       getCurrentRegionInfo: () => ({ path: 'regions.station', name: 'Station' }),
       getCurrentEpisode: () => 'ep1',
-      getNpcInteractionMode: () => 'agent',
-      getNpcInteractionPolicy: () => 'agent-first',
+      getNpcInteractionCapabilities: () => ({
+        ...createDefaultNPCInteractionCapabilities(),
+        chat: { enabled: true },
+      }),
       buildQuestSnapshot: () => [],
       serializeFlags: () => ({}),
     });
 
     await adapter.produceTurn(
-      { npcId: 'npc.rick', npcName: 'Rick Cheese Roll' } as any,
+      {
+        npcId: 'npc.rick',
+        npcName: 'Rick Cheese Roll',
+        engagementKind: 'chat',
+      } as any,
       {} as any,
       { text: 'hello' } as any,
     );

@@ -110,7 +110,7 @@ describe('session runtime social fast path', () => {
     expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
   });
 
-  it('recognizes Sugarlang pedagogy context as language adaptation input', async () => {
+  it('recognizes Sugarlang pedagogy context as delivery-language input', async () => {
     const sessionId = makeSessionId('pedagogy');
     createdSessionIds.add(sessionId);
     const session = await createSugarAgentSession({
@@ -147,7 +147,7 @@ describe('session runtime social fast path', () => {
       },
     });
 
-    expect(result.pipeline.evidenceFirst.adaptationApplied).toBe(true);
+    expect(result.pipeline.evidenceFirst.deliveryLanguageContextApplied).toBe(true);
     expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
   });
 
@@ -173,6 +173,89 @@ describe('session runtime social fast path', () => {
     expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
     expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
     expect(result.routing.intent).toBe('social_chat');
+  });
+
+  it('keeps short Spanish reciprocal turns on the social fast path', async () => {
+    const sessionId = makeSessionId('spanish-reciprocal');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'station-clerk',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('Bien! Y tu?', {
+      npcName: 'Station Clerk',
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'light_support',
+        },
+      },
+    });
+
+    expect(result.output.utterance.toLowerCase()).not.toContain("i don't know");
+    expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+    expect(result.routing.intent).toBe('social_chat');
+  });
+
+  it('recognizes Spanish self-introductions on the social fast path', async () => {
+    const sessionId = makeSessionId('spanish-intro');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'station-clerk',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('Me llamo Mim. Y tu?', {
+      npcName: 'Station Clerk',
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'light_support',
+        },
+      },
+    });
+
+    expect(result.output.utterance).toContain('Mim');
+    expect(result.output.utterance.toLowerCase()).not.toContain("i don't know");
+    expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+    expect(result.routing.intent).toBe('social_chat');
+  });
+
+  it('localizes grounded uncertainty replies for Spanish knowledge misses', async () => {
+    const sessionId = makeSessionId('spanish-uncertainty');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'station-clerk',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('Que sabes sobre Earendale?', {
+      npcName: 'Station Clerk',
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'light_support',
+        },
+      },
+    });
+
+    expect(result.output.utterance.toLowerCase()).toContain('no lo se');
   });
 
   it('routes named places as lore_world and retrieves world lore even when npc profile only has self scopes', async () => {
@@ -242,6 +325,125 @@ describe('session runtime social fast path', () => {
     expect(result.routing.intent).toBe('lore_world');
     expect(result.output.utterance).toContain('Earendale');
     expect(result.output.intent).toBe('answer');
+  });
+
+  it('realizes grounded lore replies directly in the Sugarlang target language', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.locations.earendale#resort',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Resort',
+        summary: 'The Wordlark Hollow Resort and Spa is located just outside the town.',
+        content: 'The Wordlark Hollow Resort and Spa is located just outside the town.',
+        tokens: ['wordlark', 'hollow', 'resort', 'spa', 'outside', 'town'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'resort'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('language-rewrite-grounded');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('Do you know anything about the resort near here?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick',
+        loreScopes: ['locations.earendale'],
+      },
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'full_support',
+        },
+      },
+    });
+
+    expect(result.output.utterance.toLowerCase()).toContain('esta justo fuera del pueblo');
+    expect(result.output.utterance.toLowerCase()).not.toContain('is located just outside the town');
+    expect(result.usedFallback).toBe(false);
+    expect(result.pipeline.generation.replyParts.success).toBe(true);
+    expect(result.pipeline.generation.replyParts.auditAttempted).toBe(true);
+    expect(result.pipeline.generation.replyParts.auditSuccess).toBe(true);
+    expect(result.pipeline.generation.replyParts.failureReason).toBeUndefined();
+    expect(result.pipeline.generation.replyParts.acceptedClaimOrdinals?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('blocks grounded language leaks when the realization candidate stays in the wrong language', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.locations.earendale#resort-fr-guard',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Resort',
+        summary: 'The Wordlark Hollow Resort and Spa is located just outside the town.',
+        content: 'The Wordlark Hollow Resort and Spa is located just outside the town.',
+        tokens: ['wordlark', 'hollow', 'resort', 'spa', 'outside', 'town'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'resort'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('language-guardrail-grounded');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('Do you know anything about the resort near here?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick',
+        loreScopes: ['locations.earendale'],
+      },
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'fr',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'full_support',
+        },
+      },
+    });
+
+    expect(result.output.utterance.toLowerCase()).toContain("je ne sais");
+    expect(result.output.utterance.toLowerCase()).not.toContain('is located just outside the town');
+    expect(result.usedFallback).toBe(true);
+    expect(result.validationErrors).toContain('delivery-language-mismatch:en');
+    expect(result.pipeline.generation.replyParts.auditAttempted).toBe(true);
   });
 
   it('uses vector retrieval artifacts for semantically similar place questions', async () => {

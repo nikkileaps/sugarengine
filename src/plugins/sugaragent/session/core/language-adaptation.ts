@@ -1,20 +1,21 @@
 /**
- * @fileoverview Cross-plugin language adaptation boundary.
+ * @fileoverview Cross-plugin delivery-language context and diagnostics.
  *
  * Implements: ADR-SA-031
  *
- * Language adaptation occurs after factual planning and before final semantic verification.
- * SugarAgent and SugarLang cooperate only through host-mediated, optional capability contracts.
+ * SugarAgent and SugarLang cooperate only through host-mediated, optional
+ * capability contracts. This module owns:
+ * - validation and construction of delivery-language context
+ * - learner-band derived bounds for final realization
+ * - lightweight language estimation for runtime diagnostics
  *
- * Ordering rule:
- * 1. route → 2. retrieve → 3. plan → 4. validate plan →
- * 5. realize → 6. apply language adaptation → 7. semantic verify → 8. persist
+ * It does not own post-hoc translation. Grounded replies are realized directly
+ * in the target language by the runtime plan-realization path.
  */
 
 import type {
   LanguageAdaptationContext,
 } from './turn-contracts';
-import type { SugarAgentTurnOutput } from '../../contracts/turn';
 import type { PluginPedagogyContext } from '../../../../engine/plugins/types';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,9 @@ export function isValidLanguageAdaptationContext(
   if (typeof record.targetLanguage !== 'string' || record.targetLanguage.trim().length === 0) return false;
   if (typeof record.source !== 'string') return false;
   if (record.source !== 'sugaragent' && record.source !== 'sugarlang' && record.source !== 'engine') return false;
+  if (record.supportLanguage !== undefined && typeof record.supportLanguage !== 'string') return false;
+  if (record.supportLanguagePolicy !== undefined && typeof record.supportLanguagePolicy !== 'string') return false;
+  if (record.correctionPosture !== undefined && typeof record.correctionPosture !== 'string') return false;
   return true;
 }
 
@@ -125,6 +129,9 @@ export function buildSugarlangLanguageAdaptationContext(
     schemaVersion: 1,
     source: 'sugarlang',
     targetLanguage: pedagogyContext.targetLanguage,
+    supportLanguage: normalizeOptionalString(pedagogyContext.supportLanguage),
+    supportLanguagePolicy,
+    correctionPosture: normalizeOptionalString(pedagogyContext.correctionPosture),
     learnerLevel: learnerBand,
     cefrBand: learnerBand,
     codeSwitchPolicy: deriveCodeSwitchPolicy(supportLanguagePolicy),
@@ -144,7 +151,7 @@ export async function resolveLanguageAdaptationContext(
   hostContext: PluginHostContext | null,
   sugarAgentPlayerModel: SugarAgentPlayerModel | null,
 ): Promise<LanguageAdaptationContext | null> {
-  // Try host-mediated provider first (SugarLang if present)
+  // Try host-mediated provider first (SugarLang if present).
   if (hostContext?.findCapabilityProvider) {
     const provider = hostContext.findCapabilityProvider('language_adaptation_context');
     if (provider) {
@@ -152,12 +159,12 @@ export async function resolveLanguageAdaptationContext(
         const provided = await provider.getCapabilityPayload('language_adaptation_context');
         if (isValidLanguageAdaptationContext(provided)) return provided;
       } catch {
-        // Fall through to local adaptation
+        // Fall through to SugarAgent-local delivery language context.
       }
     }
   }
 
-  // Fall back to SugarAgent-local adaptation from player model
+  // Fall back to SugarAgent-local delivery language context from player model.
   if (sugarAgentPlayerModel?.targetLanguage) {
     return buildLocalLanguageAdaptationContext(sugarAgentPlayerModel);
   }
@@ -183,27 +190,86 @@ function buildLocalLanguageAdaptationContext(
 // Adaptation application
 // ---------------------------------------------------------------------------
 
-/**
- * Applies language adaptation to a realized turn output.
- * This is a post-plan, pre-verification step.
- *
- * For the initial rollout, adaptation is lightweight:
- * - No LLM call (that's reserved for future online helper)
- * - Just metadata attachment so downstream verification knows adaptation was applied
- *
- * Full adaptation with wording changes would require an LLM call and is deferred
- * to Plan 002 (online advanced LLM follow-up).
- */
-export function applyLanguageAdaptation(
-  turnOutput: SugarAgentTurnOutput,
-  adaptationContext: LanguageAdaptationContext | null,
-): SugarAgentTurnOutput {
-  if (!adaptationContext) return turnOutput;
+const LANGUAGE_ESTIMATE_STOPWORDS: Record<string, string[]> = {
+  en: ['the', 'and', 'are', 'is', 'we', 'you', 'do', 'about', 'right', 'now', 'where', 'anything'],
+  es: ['el', 'la', 'los', 'las', 'y', 'de', 'del', 'en', 'que', 'no', 'lo', 'se', 'como', 'bien', 'mucho', 'gusto', 'estoy', 'estas', 'esta', 'estamos', 'justo', 'fuera', 'pueblo', 'hola', 'soy', 'tu', 'claro', 'entiendo'],
+  fr: ['le', 'la', 'les', 'et', 'de', 'des', 'est', 'bonjour', 'je', 'tu', 'nous', 'ou'],
+  de: ['der', 'die', 'das', 'und', 'ist', 'ich', 'du', 'wir', 'wo', 'hallo'],
+  it: ['il', 'lo', 'la', 'e', 'di', 'che', 'sono', 'sei', 'ciao', 'noi', 'dove'],
+  pt: ['o', 'a', 'os', 'as', 'e', 'de', 'que', 'ola', 'eu', 'voce', 'onde', 'estamos'],
+};
 
-  // For the initial rollout, adaptation context is gathered but not actively
-  // applied to wording. The context is available for:
-  // 1. Diagnostic reporting
-  // 2. Future realization integration
-  // 3. Post-turn learning analysis by SugarLang (if present)
-  return turnOutput;
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function normalizeLanguageCode(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  return value.trim().toLowerCase().split(/[-_]/)[0] ?? null;
+}
+
+function tokenizeForLanguageEstimate(text: unknown): string[] {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00c0-\u024f\s]+/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+export interface LanguageEstimate {
+  estimatedLanguage: string;
+  scoreByLanguage: Record<string, number>;
+  mismatchSuspected: boolean;
+}
+
+export function estimateTextLanguage(
+  text: unknown,
+  targetLanguage?: unknown,
+): LanguageEstimate {
+  const target = normalizeLanguageCode(targetLanguage);
+  const tokens = tokenizeForLanguageEstimate(text);
+  if (tokens.length === 0) {
+    return {
+      estimatedLanguage: 'unknown',
+      scoreByLanguage: {},
+      mismatchSuspected: false,
+    };
+  }
+
+  const scoreByLanguage: Record<string, number> = {};
+  for (const [language, stopwords] of Object.entries(LANGUAGE_ESTIMATE_STOPWORDS)) {
+    const stopwordSet = new Set(stopwords);
+    scoreByLanguage[language] = tokens.reduce((score, token) => (
+      stopwordSet.has(token) ? score + 1 : score
+    ), 0);
+  }
+
+  const ranked = Object.entries(scoreByLanguage).sort((a, b) => b[1] - a[1]);
+  const top = ranked[0];
+  if (!top || top[1] <= 0) {
+    return {
+      estimatedLanguage: 'unknown',
+      scoreByLanguage,
+      mismatchSuspected: false,
+    };
+  }
+
+  const second = ranked[1];
+  const estimatedLanguage = second && second[1] === top[1]
+    ? `ambiguous:${top[0]}|${second[0]}`
+    : top[0];
+
+  return {
+    estimatedLanguage,
+    scoreByLanguage,
+    mismatchSuspected: Boolean(
+      target
+      && estimatedLanguage !== 'unknown'
+      && !estimatedLanguage.startsWith('ambiguous:')
+      && estimatedLanguage !== target
+    ),
+  };
 }

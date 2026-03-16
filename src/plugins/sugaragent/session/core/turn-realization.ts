@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { localizeGroundedUncertaintyReply } from './language-stock';
 export function realizePlanTurn({
   plan,
   npcName,
@@ -299,10 +300,8 @@ export function createSocialChatReply({ playerMessage, npcName }, deps) {
   };
 }
 
-export function createGroundedUncertaintyReply(queryType) {
-  const utterance = queryType === 'self_query'
-    ? "I don't know. I don't want to guess about my own background."
-    : "I don't know.";
+export function createGroundedUncertaintyReply(queryType, targetLanguage = undefined) {
+  const utterance = localizeGroundedUncertaintyReply(queryType, targetLanguage);
   return {
     utterance,
     emotion: 'uncertain',

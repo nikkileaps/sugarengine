@@ -1000,6 +1000,7 @@ export function Editor() {
                 dialogues={dialogues}
                 quests={quests}
                 items={itemList}
+                plugins={plugins}
               >
                 {(npcPanel) => (
                   <ItemPanel

@@ -245,7 +245,12 @@ function emitFallbackLog(input: {
   correctiveAttempted?: boolean;
   replyPartsAttempted?: boolean;
   replyPartsSuccess?: boolean;
+  replyPartsAttemptCount?: number;
+  replyPartsRepairAttempted?: boolean;
   replyPartsFailureReason?: string;
+  replyPartsVerificationMode?: string;
+  replyPartsEstimatedLanguage?: string;
+  replyPartsMismatchSuspected?: boolean;
   returnedCitations?: number;
   detail?: string;
 }): void {
@@ -277,7 +282,12 @@ function emitFallbackLog(input: {
     retrievalCorrectiveAttempted: input.correctiveAttempted ?? false,
     replyPartsAttempted: input.replyPartsAttempted ?? false,
     replyPartsSuccess: input.replyPartsSuccess ?? false,
+    replyPartsAttemptCount: input.replyPartsAttemptCount ?? 0,
+    replyPartsRepairAttempted: input.replyPartsRepairAttempted ?? false,
     replyPartsFailureReason: input.replyPartsFailureReason,
+    replyPartsVerificationMode: input.replyPartsVerificationMode,
+    replyPartsEstimatedLanguage: input.replyPartsEstimatedLanguage,
+    replyPartsMismatchSuspected: input.replyPartsMismatchSuspected ?? false,
     returnedCitations: input.returnedCitations ?? 0,
     detail: input.detail,
   };
@@ -1918,13 +1928,25 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
             retrievalVectorModelId: diagnostics.retrieval?.vectorModelId,
             replyPartsAttempted: diagnostics.generation?.replyParts?.attempted ?? false,
             replyPartsSuccess: diagnostics.generation?.replyParts?.success ?? false,
+            replyPartsAttemptCount: diagnostics.generation?.replyParts?.attemptCount ?? 0,
+            replyPartsRepairAttempted: diagnostics.generation?.replyParts?.repairAttempted ?? false,
             replyPartCount: diagnostics.generation?.replyParts?.partCount ?? 0,
             groundedPartCount: diagnostics.generation?.replyParts?.groundedPartCount ?? 0,
             replyPartsFailureReason: diagnostics.generation?.replyParts?.failureReason,
             replyPartsSkippedReason: diagnostics.generation?.replyParts?.skippedReason,
             replyPartsRawResponsePreview: diagnostics.generation?.replyParts?.rawResponsePreview,
             replyPartsRawPartsPreview: diagnostics.generation?.replyParts?.rawPartsPreview,
+            replyPartsAuditAttempted: diagnostics.generation?.replyParts?.auditAttempted ?? false,
+            replyPartsAuditSuccess: diagnostics.generation?.replyParts?.auditSuccess ?? false,
+            replyPartsAuditFailureReason: diagnostics.generation?.replyParts?.auditFailureReason,
+            replyPartsAuditRawResponsePreview: diagnostics.generation?.replyParts?.auditRawResponsePreview,
+            replyPartsAuditPartsPreview: diagnostics.generation?.replyParts?.auditPartsPreview,
             allowedSupportSlots: diagnostics.generation?.replyParts?.allowedSupportSlots ?? [],
+            allowedClaimOrdinals: diagnostics.generation?.replyParts?.allowedClaimOrdinals ?? [],
+            acceptedClaimOrdinals: diagnostics.generation?.replyParts?.acceptedClaimOrdinals ?? [],
+            replyPartsVerificationMode: diagnostics.generation?.replyParts?.verificationMode,
+            replyPartsEstimatedLanguage: diagnostics.generation?.replyParts?.estimatedLanguage,
+            replyPartsMismatchSuspected: diagnostics.generation?.replyParts?.mismatchSuspected ?? false,
             returnedCitations: Array.isArray(generated.output.citations) ? generated.output.citations.length : 0,
           });
         }
@@ -1966,7 +1988,12 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
             correctiveAttempted: diagnostics.retrieval?.correctiveAttempted ?? false,
             replyPartsAttempted: diagnostics.generation?.replyParts?.attempted ?? false,
             replyPartsSuccess: diagnostics.generation?.replyParts?.success ?? false,
+            replyPartsAttemptCount: diagnostics.generation?.replyParts?.attemptCount ?? 0,
+            replyPartsRepairAttempted: diagnostics.generation?.replyParts?.repairAttempted ?? false,
             replyPartsFailureReason: diagnostics.generation?.replyParts?.failureReason,
+            replyPartsVerificationMode: diagnostics.generation?.replyParts?.verificationMode,
+            replyPartsEstimatedLanguage: diagnostics.generation?.replyParts?.estimatedLanguage,
+            replyPartsMismatchSuspected: diagnostics.generation?.replyParts?.mismatchSuspected ?? false,
             returnedCitations: Array.isArray(generated.output.citations) ? generated.output.citations.length : 0,
             detail: fallbackReasonLabel(loggedFallbackKind),
           });

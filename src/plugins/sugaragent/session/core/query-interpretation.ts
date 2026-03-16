@@ -1,5 +1,16 @@
 import { tokenizeForPlan } from './retrieval-text';
-import { detectSocialAcknowledgement, isLikelyAcknowledgementOnlyMessage } from './social-cues';
+import {
+  detectSocialAcknowledgement,
+  extractDeclaredIdentityName,
+  isLikelyAcknowledgementOnlyMessage,
+  isLikelyGreetingOnlyMessage,
+  isLikelyLightweightLocationPrompt,
+  isLikelyNpcDirectedLocationPrompt,
+  isLikelyReciprocalSocialQuestion,
+  isLikelySceneLocationPrompt,
+  isLikelySmallTalkQuery,
+  isProtectedShortSocialTurn,
+} from './social-cues';
 import { FACET_EXEMPLARS } from './query-exemplars';
 import { maxCosineSimilarity } from './semantic-vectors';
 import type {
@@ -30,6 +41,7 @@ interface ConversationTurnLike {
 interface InterpretQueryInput {
   playerMessage: string;
   npcName?: string;
+  targetLanguage?: string;
   history?: ConversationTurnLike[];
   scene?: {
     regionName?: string;
@@ -550,8 +562,9 @@ function resolveReferents(
   const lower = focusText.toLowerCase();
   const npcName = normalizeOptionalString(input.npcName);
   const loreHints = Array.isArray(input.loreEntityHints) ? input.loreEntityHints : [];
+  const selfCue = hasDirectNpcSelfCue(focusText, input.targetLanguage);
 
-  if ((/\b(you|your)\b/i.test(focusText) || (npcName && lower.includes(npcName.toLowerCase()))) && npcName) {
+  if ((selfCue || (npcName && lower.includes(npcName.toLowerCase()))) && npcName) {
     referents.push({
       kind: 'npc',
       text: npcName,
@@ -560,7 +573,10 @@ function resolveReferents(
     });
   }
 
-  if (/\b(where are we|where am i|where are you|where is this|this place|here)\b/i.test(focusText)) {
+  if (
+    /\b(where are we|where am i|where are you|where is this|this place|here)\b/i.test(focusText)
+    || isLikelyLightweightLocationPrompt(focusText, input.targetLanguage)
+  ) {
     const regionName = preview.sceneSummary.regionName ?? preview.sceneSummary.regionPath;
     if (regionName) {
       referents.push({
@@ -606,12 +622,31 @@ function resolveReferents(
   return [...deduped.values()].sort((a, b) => b.confidence - a.confidence);
 }
 
-function scoreLane(candidate: InterpretationArchetype, focusText: string): number {
+function hasDirectNpcSelfCue(
+  focusText: string,
+  targetLanguage?: string,
+): boolean {
+  const source = focusText.toLowerCase();
+  if (isLikelyReciprocalSocialQuestion(focusText, targetLanguage)) return true;
+  if (isLikelyNpcDirectedLocationPrompt(focusText, targetLanguage)) return true;
+  if (/\b(your|yourself)\b/.test(source)) return true;
+  return /\b(who are you|what(?:'s| is) your name|your name|what do you do|what(?:'s| is) your job|where do you work|what are you doing|what are you up to|where are you|where are you from|tell me about yourself|about yourself|your background|your past|your family|your favorite|your preference|do you remember me|have we met|did we meet)\b/.test(source);
+}
+
+function scoreLane(
+  candidate: InterpretationArchetype,
+  focusText: string,
+  targetLanguage?: string,
+): number {
   const source = focusText.toLowerCase();
   const hasRecallCue = /\b(remember me|have we met|did we meet|what do you remember|met before|last time|before)\b/.test(source);
-  const hasGreetingCue = /\b(hello|hi|hey|what'?s up|how are you)\b/.test(source);
-  const hasIntroductionCue = /\b(i(?:'m| am)\s+[a-z][a-z'-]*|my name is\s+[a-z][a-z'-]*)\b/i.test(focusText);
-  const hasAcknowledgementCue = isLikelyAcknowledgementOnlyMessage(focusText);
+  const hasGreetingCue = isLikelyGreetingOnlyMessage(focusText, targetLanguage);
+  const hasIntroductionCue = extractDeclaredIdentityName(focusText, targetLanguage) !== null;
+  const hasAcknowledgementCue = isLikelyAcknowledgementOnlyMessage(focusText, targetLanguage);
+  const hasReciprocalCue = isLikelyReciprocalSocialQuestion(focusText, targetLanguage)
+    || isLikelySmallTalkQuery(focusText, targetLanguage);
+  const hasNpcDirectedLocationCue = isLikelyNpcDirectedLocationPrompt(focusText, targetLanguage);
+  const protectedShortSocial = isProtectedShortSocialTurn(focusText, targetLanguage);
   const hasQuestion = hasLikelyQuestionForm(focusText);
   const hasKnowledgeCue = /\b(who|what|when|where|why|how|tell me about|know about|know anything about)\b/.test(source);
 
@@ -619,27 +654,47 @@ function scoreLane(candidate: InterpretationArchetype, focusText: string): numbe
     return hasRecallCue ? 0.72 : 0.06;
   }
   if (candidate.lane === 'social') {
-    if ((hasGreetingCue || hasIntroductionCue) && !hasKnowledgeCue && !hasRecallCue) return 0.74;
+    if (protectedShortSocial && !hasRecallCue) return hasNpcDirectedLocationCue ? 0.72 : 0.76;
+    if ((hasGreetingCue || hasIntroductionCue || hasReciprocalCue) && !hasKnowledgeCue && !hasRecallCue) return 0.74;
     if (hasAcknowledgementCue && !hasKnowledgeCue && !hasRecallCue) return 0.68;
     return hasQuestion ? 0.08 : 0.2;
   }
   if (candidate.lane === 'knowledge') {
+    if (protectedShortSocial && !hasRecallCue) {
+      return hasNpcDirectedLocationCue ? 0.24 : 0.08;
+    }
     return hasKnowledgeCue || hasQuestion ? 0.52 : 0.1;
   }
   return 0;
 }
 
-function scoreTarget(candidate: InterpretationArchetype, focusText: string, referents: ResolvedReferent[]): number {
+function scoreTarget(
+  candidate: InterpretationArchetype,
+  focusText: string,
+  referents: ResolvedReferent[],
+  targetLanguage?: string,
+): number {
   const source = focusText.toLowerCase();
-  const hasSelfCue = /\b(you|your)\b/.test(source);
+  const hasSelfCue = hasDirectNpcSelfCue(focusText, targetLanguage);
   const hasGenericLoreCue = /\b(tell me about|know about|know anything about|what do you know about)\b/.test(source);
+  const hasReciprocalCue = isLikelyReciprocalSocialQuestion(focusText, targetLanguage)
+    || isLikelySmallTalkQuery(focusText, targetLanguage);
+  const hasNpcDirectedLocationCue = isLikelyNpcDirectedLocationPrompt(focusText, targetLanguage);
+  const hasSceneLocationCue = isLikelySceneLocationPrompt(focusText, targetLanguage);
+  const protectedShortSocial = isProtectedShortSocialTurn(focusText, targetLanguage);
   const worldReferents = referents.filter((entry) => entry.kind === 'location' || entry.kind === 'faction');
   const otherReferents = referents.filter((entry) => entry.kind === 'entity');
 
   if (candidate.target === 'self') {
-    return hasSelfCue || referents.some((entry) => entry.kind === 'npc') ? 0.28 : 0.04;
+    return hasSelfCue || hasReciprocalCue || hasNpcDirectedLocationCue || referents.some((entry) => entry.kind === 'npc')
+      ? 0.28
+      : 0.04;
   }
   if (candidate.target === 'world') {
+    if (hasSceneLocationCue) return 0.28;
+    if (protectedShortSocial && worldReferents.length <= 1 && otherReferents.length === 0) {
+      return 0.08;
+    }
     return worldReferents.length > 0
       || /\b(city|town|place|world|region|station|history|where|resort|area|location|here|there)\b/.test(source)
       || (hasGenericLoreCue && !hasSelfCue && otherReferents.length === 0)
@@ -657,7 +712,11 @@ function scoreTarget(candidate: InterpretationArchetype, focusText: string, refe
   return candidate.target === 'unknown' ? 0.12 : 0;
 }
 
-function scoreFacet(candidate: InterpretationArchetype, focusText: string): number {
+function scoreFacet(
+  candidate: InterpretationArchetype,
+  focusText: string,
+  targetLanguage?: string,
+): number {
   const source = focusText.toLowerCase();
   switch (candidate.facet) {
     case 'identity':
@@ -667,7 +726,12 @@ function scoreFacet(candidate: InterpretationArchetype, focusText: string): numb
     case 'current_activity':
       return /\b(what are you doing|what are you up to|doing right now|up to right now)\b/.test(source) ? 0.54 : 0.04;
     case 'location':
-      return /\b(where are we|where am i|where are you|where is this|this place|what place)\b/.test(source) ? 0.54 : 0.04;
+      return (
+        /\b(where are we|where am i|where are you|where is this|this place|what place)\b/.test(source)
+        || isLikelyLightweightLocationPrompt(focusText, targetLanguage)
+      )
+        ? 0.54
+        : 0.04;
     case 'background':
       return /\b(background|past|family|where are you from|about yourself)\b/.test(source) ? 0.48 : 0.04;
     case 'preference':
@@ -683,8 +747,12 @@ function scoreFacet(candidate: InterpretationArchetype, focusText: string): numb
   }
 }
 
-function scoreArchetype(candidate: InterpretationArchetype, focusText: string): number {
-  const acknowledgement = detectSocialAcknowledgement(focusText);
+function scoreArchetype(
+  candidate: InterpretationArchetype,
+  focusText: string,
+  targetLanguage?: string,
+): number {
+  const acknowledgement = detectSocialAcknowledgement(focusText, targetLanguage);
   if (candidate.id === 'social_acknowledgement') {
     if (!acknowledgement) return 0;
     return acknowledgement === 'shared_preference' ? 0.28 : 0.22;
@@ -695,11 +763,20 @@ function scoreArchetype(candidate: InterpretationArchetype, focusText: string): 
   return 0;
 }
 
-function scoreTimeframe(candidate: InterpretationArchetype, focusText: string): number {
+function scoreTimeframe(
+  candidate: InterpretationArchetype,
+  focusText: string,
+  targetLanguage?: string,
+): number {
   const source = focusText.toLowerCase();
   switch (candidate.timeframe) {
     case 'current':
-      return /\b(now|right now|currently|are you doing|where are we|where am i|where are you)\b/.test(source) ? 0.18 : 0.04;
+      return (
+        /\b(now|right now|currently|are you doing|where are we|where am i|where are you)\b/.test(source)
+        || isLikelyLightweightLocationPrompt(focusText, targetLanguage)
+      )
+        ? 0.18
+        : 0.04;
     case 'habitual':
       return /\b(do you do|job|work|occupation|usually|for a living)\b/.test(source) ? 0.18 : 0.04;
     case 'past':
@@ -755,6 +832,7 @@ function finalizeInterpretation(input: {
   referents: ResolvedReferent[];
   discourse: DiscourseMarkers;
   candidateScores: QueryInterpretationCandidate[];
+  targetLanguage?: string;
 }): QueryInterpretation {
   const scoredCandidates = [...input.candidateScores]
     .sort((a, b) => (
@@ -772,29 +850,49 @@ function finalizeInterpretation(input: {
     score: 0,
   };
   const second = scoredCandidates[1] ?? { ...top, score: 0 };
-  const confidence = top.score;
-  const rawMargin = Number(Math.max(0, Math.min(1, top.score - second.score)).toFixed(4));
-  const socialConsensus = top.lane === 'social'
+  const forceNpcDirectedLocationSocial = isLikelyNpcDirectedLocationPrompt(
+    input.focusText,
+    input.targetLanguage,
+  );
+  const resolvedTop = forceNpcDirectedLocationSocial
+    ? {
+        lane: 'social' as QueryLane,
+        target: 'unknown' as QueryTarget,
+        facet: 'unknown' as QueryFacet,
+        timeframe: 'current' as QueryTimeframe,
+        score: Math.max(top.score, 0.62),
+      }
+    : top;
+  const confidence = resolvedTop.score;
+  const rawMargin = Number(Math.max(0, Math.min(1, resolvedTop.score - second.score)).toFixed(4));
+  const socialConsensus = resolvedTop.lane === 'social'
     && second.lane === 'social'
     && !hasLikelyQuestionForm(input.normalizedText);
   const margin = socialConsensus ? Math.max(rawMargin, 0.24) : rawMargin;
-  const ambiguous = socialConsensus
+  const protectedShortSocial = isProtectedShortSocialTurn(input.focusText, input.targetLanguage);
+  const ambiguous = (protectedShortSocial || forceNpcDirectedLocationSocial) && resolvedTop.lane === 'social'
+    ? false
+    : socialConsensus
     ? confidence < 0.42
     : (confidence < 0.48 || margin < 0.12);
 
   return {
     schemaVersion: 1,
-    lane: top.lane,
-    target: top.target,
-    facet: top.facet,
-    timeframe: top.timeframe,
+    lane: resolvedTop.lane,
+    target: resolvedTop.target,
+    facet: resolvedTop.facet,
+    timeframe: resolvedTop.timeframe,
     focusText: input.focusText,
     normalizedText: input.normalizedText,
     referents: input.referents,
     discourse: input.discourse,
     candidateScores: scoredCandidates.slice(0, 6),
-    confidence,
-    margin,
+    confidence: (protectedShortSocial || forceNpcDirectedLocationSocial) && resolvedTop.lane === 'social'
+      ? Math.max(confidence, 0.62)
+      : confidence,
+    margin: (protectedShortSocial || forceNpcDirectedLocationSocial) && resolvedTop.lane === 'social'
+      ? Math.max(margin, 0.22)
+      : margin,
     ambiguous,
   };
 }
@@ -807,13 +905,13 @@ export function interpretQuery(input: InterpretQueryInput): QueryInterpretation 
   const scoredCandidates: QueryInterpretationCandidate[] = INTERPRETATION_ARCHETYPES
     .map((candidate) => {
       const score = normalizeCandidateScore(
-        scoreLane(candidate, focusText)
-        + scoreTarget(candidate, focusText, referents)
-        + scoreFacet(candidate, focusText)
-        + scoreTimeframe(candidate, focusText)
+        scoreLane(candidate, focusText, input.targetLanguage)
+        + scoreTarget(candidate, focusText, referents, input.targetLanguage)
+        + scoreFacet(candidate, focusText, input.targetLanguage)
+        + scoreTimeframe(candidate, focusText, input.targetLanguage)
         + scoreEvidenceAffinity(candidate, preview)
         + scoreContext(candidate, preview)
-        + scoreArchetype(candidate, focusText),
+        + scoreArchetype(candidate, focusText, input.targetLanguage),
       );
       return {
         lane: candidate.lane,
@@ -830,6 +928,7 @@ export function interpretQuery(input: InterpretQueryInput): QueryInterpretation 
     referents,
     discourse: normalized.markers,
     candidateScores: scoredCandidates,
+    targetLanguage: input.targetLanguage,
   });
 }
 

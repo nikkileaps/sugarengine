@@ -9,7 +9,7 @@
  * - turn planning (claim planning with epistemic metadata)
  * - semantic verification (post-realization verification)
  * - memory provenance (filtered memory writes)
- * - language adaptation (post-plan wording adjustment)
+ * - delivery-language context and diagnostics
  */
 
 // ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ export interface NpcStateSnapshot {
   mood?: string;
   activeBeatId?: string;
   relationshipState?: Record<string, number>;
-  languageAdaptation?: LanguageAdaptationContext | null;
+  deliveryLanguageContext?: LanguageAdaptationContext | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,13 +300,16 @@ export interface MemoryWrite {
 }
 
 // ---------------------------------------------------------------------------
-// Language adaptation (ADR-SA-031)
+// Delivery-language context (ADR-SA-031)
 // ---------------------------------------------------------------------------
 
 export interface LanguageAdaptationContext {
   schemaVersion: 1;
   source: 'sugaragent' | 'sugarlang' | 'engine';
   targetLanguage: string;
+  supportLanguage?: string;
+  supportLanguagePolicy?: string;
+  correctionPosture?: string;
   learnerLevel?: string;
   cefrBand?: string;
   allowedRegisters?: string[];
@@ -360,6 +363,6 @@ export interface EvidenceFirstPipelineDiagnostics {
     errors: string[];
   };
   semanticVerification?: SemanticVerificationResult;
-  adaptationApplied: boolean;
+  deliveryLanguageContextApplied: boolean;
   deterministicFallbackUsed: boolean;
 }
