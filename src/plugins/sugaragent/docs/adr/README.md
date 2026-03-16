@@ -54,4 +54,4 @@ SugarAgent is responsible for free-form conversational delivery and structured e
 ADR-023 remains historical context for the rejected exact quote claim-tag contract.
 ADR-024 is the active grounded-turn contract: runtime-owned reply parts with turn-local support slots and deterministic validation.
 ADR-025..031 define the intended cutover from model-first factual generation to a fully live evidence-first pipeline, plus the epistemology, memory, and optional SugarLang interoperability contracts required to support it cleanly.
-ADR-032..033 define the next stabilization layer after that cutover: shared semantic interpretation and real local embedding/vector support.
+ADR-032..033 are now the active contracts for the shared semantic interpretation layer and real local embedding/vector support that replaced the old stubbed semantic path.

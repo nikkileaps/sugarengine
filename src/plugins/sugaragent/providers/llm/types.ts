@@ -1,5 +1,8 @@
 import type { SugarAgentTurnOutput } from '../../contracts/turn';
-import type { PluginAgentTurnDiagnostics } from '../../../../engine/plugins/types';
+import type {
+  PluginAgentTurnDiagnostics,
+  PluginPedagogyContext,
+} from '../../../../engine/plugins/types';
 
 export interface LLMGenerateRequest {
   npcId: string;
@@ -32,6 +35,7 @@ export interface LLMGenerateRequest {
       trackedTopicCount?: number;
       exhausted?: boolean;
     };
+    pedagogyContext?: PluginPedagogyContext;
   };
 }
 

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { embedTexts as embedTextsWithLocalRuntime, LOCAL_EMBEDDING_MODEL_ID } from '../runtime/local-embedding-runtime';
 import { createSugarAgentSession } from './runtime';
 import { resetSessionState } from './core/session-state';
 
@@ -23,7 +24,12 @@ afterEach(() => {
   tempLoreDirs.clear();
 });
 
-function createTempLoreDir(chunks: unknown[]): string {
+function createTempLoreDir(
+  chunks: unknown[],
+  options: {
+    chunkVectors?: Array<{ chunkId: string; vector: number[] }>;
+  } = {},
+): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sugaragent-runtime-lore-'));
   tempLoreDirs.add(tempDir);
   fs.writeFileSync(path.join(tempDir, 'manifest.json'), JSON.stringify({
@@ -31,9 +37,27 @@ function createTempLoreDir(chunks: unknown[]): string {
     loreArtifactVersion: 'test-artifact',
     toolVersion: 'test',
     source: { commit: 'test-commit' },
+    embeddings: options.chunkVectors
+      ? {
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: options.chunkVectors[0]?.vector.length ?? 0,
+          artifact: 'chunk-vectors.json',
+        }
+      : undefined,
   }), 'utf8');
   fs.writeFileSync(path.join(tempDir, 'chunks.json'), JSON.stringify(chunks), 'utf8');
   fs.writeFileSync(path.join(tempDir, 'facts.json'), '[]', 'utf8');
+  if (options.chunkVectors) {
+    fs.writeFileSync(path.join(tempDir, 'chunk-vectors.json'), JSON.stringify({
+      manifest: {
+        schemaVersion: 1,
+        embeddingModelId: LOCAL_EMBEDDING_MODEL_ID,
+        embeddingDimension: options.chunkVectors[0]?.vector.length ?? 0,
+        artifactVersion: 'test-artifact',
+      },
+      vectors: options.chunkVectors,
+    }), 'utf8');
+  }
   return tempDir;
 }
 
@@ -83,6 +107,47 @@ describe('session runtime social fast path', () => {
     expect(result.output.utterance).toBe("Nice to meet you, Mim. I'm Rick Cheese Roll.");
     expect(result.usedFallback).toBe(false);
     expect(result.pipeline.generation.replyParts.attempted).toBe(true);
+    expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+  });
+
+  it('recognizes Sugarlang pedagogy context as language adaptation input', async () => {
+    const sessionId = makeSessionId('pedagogy');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'station-clerk',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('hello', {
+      npcName: 'Station Clerk',
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B1',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'light_support',
+          availableTrackedLexicalEntryIds: ['object.suitcase'],
+          teachingSubset: {
+            focusLexicalEntryIds: ['object.suitcase'],
+            reinforcementLexicalEntryIds: [],
+            ambientLexicalEntryIds: [],
+            protectedLexicalEntryIds: ['object.suitcase'],
+          },
+          groundingScope: [
+            {
+              lexicalEntryId: 'object.suitcase',
+              targetForm: 'maleta',
+              worldObjectId: 'suitcase-blue',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.pipeline.evidenceFirst.adaptationApplied).toBe(true);
     expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
   });
 
@@ -177,6 +242,65 @@ describe('session runtime social fast path', () => {
     expect(result.routing.intent).toBe('lore_world');
     expect(result.output.utterance).toContain('Earendale');
     expect(result.output.intent).toBe('answer');
+  });
+
+  it('uses vector retrieval artifacts for semantically similar place questions', async () => {
+    const chunks = [
+      {
+        chunkId: 'lore.locations.skyharbor#overview',
+        pageId: 'lore.locations.skyharbor',
+        title: 'Skyharbor',
+        sectionHeading: 'Overview',
+        summary: 'Skyharbor is a floating town reached by train.',
+        content: 'Skyharbor is a floating town reached by train and known for its suspended walkways.',
+        tokens: ['skyharbor', 'floating', 'town', 'reached', 'train', 'suspended', 'walkways'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.skyharbor',
+          title: 'Skyharbor',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.skyharbor'],
+          faction_ids: [],
+          tags: ['skyharbor', 'town'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ];
+    const [vector] = await embedTextsWithLocalRuntime([
+      'Skyharbor floating town reached by train suspended walkways',
+    ]);
+    const loreDir = createTempLoreDir(chunks, {
+      chunkVectors: [
+        {
+          chunkId: 'lore.locations.skyharbor#overview',
+          vector,
+        },
+      ],
+    });
+    const sessionId = makeSessionId('vector-skyharbor');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('Do you know the floating town reached by train?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['locations.skyharbor'],
+      },
+    });
+
+    expect(result.pipeline.retrieval.vectorCandidateCount).toBeGreaterThan(0);
+    expect(result.pipeline.retrieval.mergedCandidateCount).toBeGreaterThan(0);
+    expect(result.output.utterance).toContain('Skyharbor');
   });
 
   it('retrieves scoped world lore when the npc profile uses a place-scope alias like town.earendale', async () => {
@@ -422,6 +546,65 @@ describe('session runtime social fast path', () => {
     expect(result.routing.intent).toBe('lore_world');
     expect(result.pipeline.retrieval.candidateCount).toBeGreaterThan(0);
     expect(result.output.utterance.toLowerCase()).toContain("don't know");
+  });
+
+  it('reuses a prior location referent across turns for follow-up lore questions', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.locations.towns.town.earendale#history',
+        pageId: 'lore.locations.towns.town.earendale',
+        title: 'Earendale',
+        sectionHeading: 'History',
+        summary: 'Earendale was founded by Tilda Voss after the rail line opened.',
+        content: 'Earendale was founded by Tilda Voss after the rail line opened.',
+        tokens: ['earendale', 'founded', 'tilda', 'voss', 'rail', 'line', 'opened'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.towns.town.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'town'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('earendale-referent-followup');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const first = await session.runTurn('Tell me about Earendale.', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+    });
+    expect(first.output.intent).toBe('answer');
+
+    const second = await session.runTurn('Who founded it?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+    });
+
+    expect(second.routing.intent).toBe('lore_world');
+    expect(second.pipeline.routing.interpretation?.referentCount).toBeGreaterThan(0);
+    expect(second.pipeline.routing.interpretation?.topReferent?.toLowerCase()).toContain('earendale');
+    expect(second.output.intent).toBe('answer');
+    expect(second.output.utterance).toContain('Tilda Voss');
   });
 
   it('answers direct current-location questions from authoritative runtime scene evidence', async () => {

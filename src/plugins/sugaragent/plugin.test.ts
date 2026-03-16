@@ -108,6 +108,90 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(snapshot.runtime?.lastTurnDiagnostics?.mode).toBe('character');
   });
 
+  it('forwards Sugarlang pedagogy context into the runtime request', async () => {
+    let capturedRequest: any;
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured(request) {
+          capturedRequest = request;
+          return {
+            jsonText: JSON.stringify({
+              utterance: 'Claro.',
+              emotion: 'warm',
+              intent: 'conversation',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            diagnostics: {},
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'hello there',
+      context: {
+        interactionMode: 'agent',
+        interactionPolicy: 'agent-first',
+        pedagogyContext: {
+          learnerBand: 'B1',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'light_support',
+          availableTrackedLexicalEntryIds: ['object.suitcase'],
+          teachingSubset: {
+            focusLexicalEntryIds: ['object.suitcase'],
+            reinforcementLexicalEntryIds: [],
+            ambientLexicalEntryIds: [],
+            protectedLexicalEntryIds: ['object.suitcase'],
+          },
+          groundingScope: [
+            {
+              lexicalEntryId: 'object.suitcase',
+              targetForm: 'maleta',
+              worldObjectId: 'suitcase-blue',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(turn?.utterance).toBe('Claro.');
+    expect(capturedRequest?.context?.pedagogyContext).toMatchObject({
+      learnerBand: 'B1',
+      targetLanguage: 'es',
+      supportLanguage: 'en',
+      supportLanguagePolicy: 'light_support',
+      availableTrackedLexicalEntryIds: ['object.suitcase'],
+    });
+  });
+
   it('requires a reply-parts contract for grounded turns and converts legacy grounded output to uncertainty', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
@@ -425,6 +509,111 @@ describe('createSugarAgentPlugin (phase 3)', () => {
         routeIntent: 'lore_world',
         queryType: 'world_query',
         retrievalQualityReason: 'no_candidates',
+      }),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('emits an explicit warning when embeddings degrade and lexical-only fallback is in use', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const plugin = createSugarAgentPlugin({
+      runtimeBridge: {
+        async health() {
+          return { ok: true, detail: 'test-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return {
+            jsonText: JSON.stringify({
+              utterance: "We're at the station right now.",
+              emotion: 'neutral',
+              intent: 'answer',
+              proposedIntents: [],
+              citations: [],
+              beatEvidence: {
+                coveredFacts: [],
+                uncoveredFacts: [],
+                completionSignal: 'none',
+                confidence: 0,
+              },
+            }),
+            diagnostics: {
+              pipelineVersion: 'evidence_first_v1',
+              routing: {
+                routeIntent: 'unclear',
+                queryType: 'conversation',
+                policyPath: 'safe_chat',
+                interpretation: {
+                  lane: 'knowledge',
+                  target: 'self',
+                  facet: 'location',
+                  timeframe: 'current',
+                  confidence: 0.68,
+                  ambiguous: true,
+                },
+                semantic: {
+                  exemplarEnabled: true,
+                  exemplarAttempted: true,
+                  exemplarChanged: false,
+                  degradedReason: 'embedding runtime unavailable',
+                },
+              },
+              retrieval: {
+                attempted: true,
+                candidateCount: 1,
+                selectedCount: 1,
+                lexicalCandidateCount: 1,
+                vectorCandidateCount: 0,
+                mergedCandidateCount: 1,
+                qualityPath: 'single_pass',
+                qualityReason: 'sufficient',
+                qualityGatePassed: true,
+                correctiveAttempted: false,
+                embeddingAvailable: false,
+                degradedReason: 'embedding runtime unavailable',
+                vectorModelId: 'xenova/all-MiniLM-L6-v2',
+              },
+              validation: {
+                decision: 'accept',
+                errors: [],
+                unsupportedClaims: 0,
+                requiresRepair: false,
+                npcOutputValidated: true,
+              },
+            },
+          };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+    });
+    await plugin.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    await plugin.runAgentTurn?.({
+      npcId: 'npc-baker',
+      npcName: 'Baker',
+      playerMessage: 'Where are we right now?',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[sugaragent][fallback][embedding_degraded]'),
+      expect.objectContaining({
+        npcId: 'npc-baker',
+        routeIntent: 'unclear',
+        queryType: 'conversation',
+        semanticDegradedReason: 'embedding runtime unavailable',
+        retrievalDegradedReason: 'embedding runtime unavailable',
       }),
     );
     warnSpy.mockRestore();

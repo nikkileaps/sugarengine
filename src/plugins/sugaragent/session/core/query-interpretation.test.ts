@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildEvidencePreview, extractFacetQueryTokens, interpretQuery } from './query-interpretation';
+import {
+  buildEvidencePreview,
+  enhanceInterpretationWithFacetSimilarity,
+  extractFacetQueryTokens,
+  interpretQuery,
+} from './query-interpretation';
 
 describe('query interpretation', () => {
   it('classifies short self job questions as self occupation knowledge', () => {
@@ -129,5 +134,107 @@ describe('query interpretation', () => {
 
     expect(interpretation.lane).toBe('social');
     expect(interpretation.ambiguous).toBe(false);
+  });
+
+  it('uses exemplar similarity to boost occupation interpretation for paraphrased work questions', async () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'What kind of work do you do around here?',
+      npcName: 'Rick Roll',
+      evidencePreview: buildEvidencePreview({
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      }),
+    });
+
+    const enhanced = await enhanceInterpretationWithFacetSimilarity({
+      interpretation,
+      embedTexts: async (texts) => texts.map((text) => (
+        text.includes('work do you do')
+          ? [1, 0, 0]
+          : text.includes('what do you do for work')
+            ? [1, 0, 0]
+            : text.includes('what is your job')
+              ? [1, 0, 0]
+              : [0, 1, 0]
+      )),
+    });
+
+    expect(enhanced.lane).toBe('knowledge');
+    expect(enhanced.target).toBe('self');
+    expect(enhanced.facet).toBe('occupation');
+  });
+
+  it('reuses the strongest recent location referent for backreference follow-ups', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'Who founded it?',
+      npcName: 'Rick Roll',
+      evidencePreview: buildEvidencePreview({
+        activeTopic: 'earendale',
+        recentReferents: [
+          {
+            kind: 'location',
+            text: 'Earendale',
+            id: 'locations.earendale',
+            confidence: 0.88,
+            salience: 0.88,
+            topic: 'earendale',
+            sourceRole: 'lore',
+          },
+          {
+            kind: 'location',
+            text: 'Station',
+            id: 'regions.station',
+            confidence: 0.44,
+            salience: 0.44,
+            topic: 'station',
+            sourceRole: 'scene',
+          },
+        ],
+      }),
+    });
+
+    expect(interpretation.lane).toBe('knowledge');
+    expect(interpretation.target).toBe('world');
+    expect(interpretation.facet).toBe('general_lore');
+    expect(interpretation.referents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'location',
+          text: 'Earendale',
+        }),
+      ]),
+    );
+  });
+
+  it('does not silently guess between competing person referents', () => {
+    const interpretation = interpretQuery({
+      playerMessage: 'What about him?',
+      npcName: 'Rick Roll',
+      evidencePreview: buildEvidencePreview({
+        recentReferents: [
+          {
+            kind: 'entity',
+            text: 'Captain Rowan',
+            id: 'npc.rowan',
+            confidence: 0.69,
+            salience: 0.69,
+            topic: 'rowan',
+            sourceRole: 'lore',
+          },
+          {
+            kind: 'entity',
+            text: 'Mayor Bell',
+            id: 'npc.bell',
+            confidence: 0.66,
+            salience: 0.66,
+            topic: 'bell',
+            sourceRole: 'lore',
+          },
+        ],
+      }),
+    });
+
+    expect(interpretation.referents).toEqual([]);
+    expect(interpretation.ambiguous).toBe(true);
   });
 });

@@ -30,6 +30,18 @@ Thumbs.db
 # SugarAgent bundled runtime assets (large binaries/models)
 src/plugins/sugaragent/runtime/bundle/*
 !src/plugins/sugaragent/runtime/bundle/.gitkeep
+!src/plugins/sugaragent/runtime/bundle/embeddings/
+src/plugins/sugaragent/runtime/bundle/embeddings/*
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/
+src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/*
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/config.json
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/special_tokens_map.json
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/tokenizer.json
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/tokenizer_config.json
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/vocab.txt
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/onnx/
+src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/onnx/*
+!src/plugins/sugaragent/runtime/bundle/embeddings/all-MiniLM-L6-v2/onnx/model_quantized.onnx
 
 # SugarAgent sim local session files
 .sugaragent-sim-sessions/

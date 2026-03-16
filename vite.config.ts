@@ -9,6 +9,11 @@ import {
   readActiveGameSelectionSync,
   writeActiveGameSelection,
 } from './scripts/lib/active-game.mjs';
+import {
+  embedTexts as embedTextsWithLocalRuntime,
+  getLocalEmbeddingRuntimeHealth,
+  LOCAL_EMBEDDING_MODEL_ID,
+} from './src/plugins/sugaragent/runtime/local-embedding-runtime';
 
 export default defineConfig({
   plugins: [
@@ -75,6 +80,10 @@ export default defineConfig({
 
         const resolveGameRootPaths = (rootPath: string) => {
           const normalizedRoot = resolveAbsoluteInputPath(rootPath);
+          // Keep preview diagnostics aligned with the session runtime contract.
+          // This bridge must forward Phase B semantic/vector fields instead of
+          // collapsing them back to the older phase-A subset, or the browser
+          // console will falsely suggest the new paths are inactive.
           return {
             rootPath: normalizedRoot,
             projectFilePath: join(normalizedRoot, 'project.sgrgame'),
@@ -471,6 +480,9 @@ export default defineConfig({
               routeIntent: routeIntent ?? undefined,
               queryType: queryType ?? undefined,
               policyPath: policyPath ?? undefined,
+              semantic: (typeof pipeline.routing === 'object' && pipeline.routing !== null && typeof (pipeline.routing as Record<string, unknown>).semantic === 'object' && (pipeline.routing as Record<string, unknown>).semantic !== null)
+                ? (pipeline.routing as Record<string, unknown>).semantic as Record<string, unknown>
+                : undefined,
               interpretation: (typeof pipeline.routing === 'object' && pipeline.routing !== null && typeof (pipeline.routing as Record<string, unknown>).interpretation === 'object' && (pipeline.routing as Record<string, unknown>).interpretation !== null)
                 ? (pipeline.routing as Record<string, unknown>).interpretation as Record<string, unknown>
                 : undefined,
@@ -543,6 +555,9 @@ export default defineConfig({
               attempted: retrievalAttempted,
               candidateCount: toFiniteNumber(pipelineRetrieval.candidateCount) ?? loreMatchCount,
               selectedCount: toFiniteNumber(pipelineRetrieval.selectedCount) ?? loreMatchCount,
+              lexicalCandidateCount: toFiniteNumber(pipelineRetrieval.lexicalCandidateCount) ?? undefined,
+              vectorCandidateCount: toFiniteNumber(pipelineRetrieval.vectorCandidateCount) ?? undefined,
+              mergedCandidateCount: toFiniteNumber(pipelineRetrieval.mergedCandidateCount) ?? undefined,
               qualityPath: retrievalQualityPath,
               qualityReason: providerStyleFallback
                 ? (fallbackReason ?? fallbackKind ?? 'provider-fallback')
@@ -552,6 +567,9 @@ export default defineConfig({
                   ?? (retrievalAttempted ? (loreMatchCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not-required'),
               qualityGatePassed: retrievalQualityGatePassed,
               correctiveAttempted: pipelineRetrieval.correctiveAttempted === true,
+              embeddingAvailable: pipelineRetrieval.embeddingAvailable === true,
+              degradedReason: normalizeOptionalString(pipelineRetrieval.degradedReason) ?? undefined,
+              vectorModelId: normalizeOptionalString(pipelineRetrieval.vectorModelId) ?? undefined,
             },
             validation: {
               decision: validationDecision,
@@ -1259,6 +1277,7 @@ export default defineConfig({
 
           const {
             ingestLoreDirectory,
+            augmentLoreArtifactsWithVectors,
             writeLoreArtifacts,
           } = await server.ssrLoadModule('/src/plugins/sugaragent/lore/lore-lib.ts') as {
             ingestLoreDirectory: (options: {
@@ -1270,17 +1289,27 @@ export default defineConfig({
               manifest: { counts: { chunks: number; files: number; issues: number } };
               issues: string[];
             };
+            augmentLoreArtifactsWithVectors: (input: {
+              artifacts: unknown;
+              embedTexts: (texts: string[]) => Promise<number[][]>;
+              embeddingModelId?: string;
+            }) => Promise<unknown>;
             writeLoreArtifacts: (outputDir: string, artifacts: unknown) => {
               manifestPath: string;
               chunksPath: string;
             };
           };
 
-          const artifacts = ingestLoreDirectory({
+          const baseArtifacts = ingestLoreDirectory({
             sourceDir,
             commit,
             repo,
             ref: ref ?? undefined,
+          });
+          const artifacts = await augmentLoreArtifactsWithVectors({
+            artifacts: baseArtifacts,
+            embedTexts: embedTextsWithLocalRuntime,
+            embeddingModelId: LOCAL_EMBEDDING_MODEL_ID,
           });
           const written = writeLoreArtifacts(outputDir, artifacts);
           sessionCache.clear();
@@ -1293,8 +1322,8 @@ export default defineConfig({
             commit,
             repo,
             ref: ref ?? undefined,
-            counts: artifacts.manifest.counts,
-            issues: artifacts.issues,
+            counts: (artifacts as { manifest: { counts: unknown } }).manifest.counts,
+            issues: (artifacts as { issues: string[] }).issues,
             written,
             clearedSessions,
           };
@@ -1439,9 +1468,11 @@ export default defineConfig({
                 const requestedGameId = normalizeOptionalString(body.gameId);
                 const runtimeMode = normalizeRuntimeMode(body.runtimeMode);
                 const session = await getSugarAgentSession('health-check', requestedGameId, runtimeMode);
+                const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
                 writeJson(res, 200, {
                   ok: true,
                   detail: session.startup?.runtime?.health?.detail ?? 'local-runtime-ready',
+                  embedding: embeddingHealth,
                 });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -1523,10 +1554,22 @@ export default defineConfig({
               const texts = Array.isArray(body.texts)
                 ? body.texts.filter((entry) => typeof entry === 'string')
                 : [];
-              writeJson(res, 200, {
-                ok: true,
-                vectors: texts.map(() => [0, 0, 0]),
-              });
+              try {
+                const vectors = await embedTextsWithLocalRuntime(texts);
+                const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
+                writeJson(res, 200, {
+                  ok: true,
+                  vectors,
+                  detail: embeddingHealth.detail,
+                  embedding: embeddingHealth,
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                writeJson(res, 503, {
+                  ok: false,
+                  error: `embedding runtime unavailable: ${message}`,
+                });
+              }
               return;
             }
 

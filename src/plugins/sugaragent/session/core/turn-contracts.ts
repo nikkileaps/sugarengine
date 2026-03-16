@@ -102,6 +102,19 @@ export interface ResolvedReferent {
   confidence: number;
 }
 
+export type ReferentSourceRole = 'player' | 'npc' | 'scene' | 'lore' | 'memory' | 'unknown';
+
+export interface ReferentPreviewCandidate {
+  kind: ResolvedReferent['kind'];
+  text: string;
+  id?: string;
+  confidence?: number;
+  salience?: number;
+  lastSeenAt?: number;
+  topic?: string;
+  sourceRole?: ReferentSourceRole;
+}
+
 export interface DiscourseMarkers {
   repair: boolean;
   filler: boolean;
@@ -125,11 +138,7 @@ export interface EvidencePreview {
   };
   topicSummary: {
     activeTopic?: string;
-    recentReferents: Array<{
-      kind: 'npc' | 'location' | 'topic';
-      text: string;
-      id?: string;
-    }>;
+    recentReferents: ReferentPreviewCandidate[];
   };
   scopeHints: {
     loreScopes: string[];

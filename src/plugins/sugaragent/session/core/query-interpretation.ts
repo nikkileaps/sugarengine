@@ -1,5 +1,7 @@
 import { tokenizeForPlan } from './retrieval-text';
 import { detectSocialAcknowledgement, isLikelyAcknowledgementOnlyMessage } from './social-cues';
+import { FACET_EXEMPLARS } from './query-exemplars';
+import { maxCosineSimilarity } from './semantic-vectors';
 import type {
   DiscourseMarkers,
   EvidencePreview,
@@ -7,6 +9,7 @@ import type {
   QueryInterpretation,
   QueryInterpretationCandidate,
   QueryLane,
+  ReferentPreviewCandidate,
   QueryTarget,
   QueryTimeframe,
   ResolvedReferent,
@@ -45,7 +48,7 @@ interface BuildEvidencePreviewInput {
   currentActivity?: string;
   currentGoal?: string;
   activeTopic?: string;
-  recentReferents?: Array<{ kind: 'npc' | 'location' | 'topic'; text: string; id?: string }>;
+  recentReferents?: ReferentPreviewCandidate[];
   loreScopes?: string[];
   selfLoreScopes?: string[];
   relatedLoreScopes?: string[];
@@ -61,6 +64,8 @@ interface InterpretationArchetype {
   facet: QueryFacet;
   timeframe: QueryTimeframe;
 }
+
+type EmbedTextsFn = (texts: string[]) => Promise<number[][]>;
 
 interface NormalizedDiscourse {
   text: string;
@@ -163,6 +168,10 @@ const FACET_SEED_TOKENS: Record<QueryFacet, string[]> = {
 };
 
 const KNOWLEDGE_FOCUS_CUE = /\b(who|what|when|where|why|how|do you know|know about|know anything about|tell me about|want to know|i want to know|does|do|is|are|have|has)\b/i;
+const LOCATION_BACKREFERENCE_CUE = /\b(there|that place|this place|that town|this town|that city|this city|that station|this station)\b/i;
+const PERSON_BACKREFERENCE_CUE = /\b(him|her)\b/i;
+const GENERIC_BACKREFERENCE_CUE = /\b(it|that one|this one|that thing|this thing)\b/i;
+const PLURAL_BACKREFERENCE_CUE = /\b(them|they)\b/i;
 
 const INTERPRETATION_ARCHETYPES: InterpretationArchetype[] = [
   { id: 'social_chat', lane: 'social', target: 'unknown', facet: 'unknown', timeframe: 'unknown' },
@@ -181,6 +190,8 @@ const INTERPRETATION_ARCHETYPES: InterpretationArchetype[] = [
   { id: 'mixed_knowledge', lane: 'knowledge', target: 'mixed', facet: 'general_lore', timeframe: 'unknown' },
 ];
 
+const facetExemplarVectorsByEmbed = new WeakMap<EmbedTextsFn, Promise<Record<QueryFacet, number[][]>>>();
+
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -193,6 +204,46 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry): entry is string => typeof entry === 'string')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function isReferentCandidateKind(value: unknown): value is ReferentPreviewCandidate['kind'] {
+  return value === 'npc'
+    || value === 'entity'
+    || value === 'location'
+    || value === 'faction'
+    || value === 'topic';
+}
+
+function normalizeReferentCandidate(value: unknown): ReferentPreviewCandidate | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  const kind = candidate.kind;
+  const text = normalizeOptionalString(candidate.text);
+  if (!isReferentCandidateKind(kind) || !text) return null;
+  return {
+    kind,
+    text,
+    id: normalizeOptionalString(candidate.id),
+    confidence: normalizeOptionalNumber(candidate.confidence),
+    salience: normalizeOptionalNumber(candidate.salience),
+    lastSeenAt: normalizeOptionalNumber(candidate.lastSeenAt),
+    topic: normalizeOptionalString(candidate.topic),
+    sourceRole: (
+      candidate.sourceRole === 'player'
+      || candidate.sourceRole === 'npc'
+      || candidate.sourceRole === 'scene'
+      || candidate.sourceRole === 'lore'
+      || candidate.sourceRole === 'memory'
+      || candidate.sourceRole === 'unknown'
+    )
+      ? candidate.sourceRole
+      : undefined,
+  };
 }
 
 function normalizeEvidencePreview(preview: Partial<EvidencePreview> | null | undefined): EvidencePreview {
@@ -214,11 +265,9 @@ function normalizeEvidencePreview(preview: Partial<EvidencePreview> | null | und
       activeTopic: normalizeOptionalString(preview?.topicSummary?.activeTopic),
       recentReferents: Array.isArray(preview?.topicSummary?.recentReferents)
         ? preview.topicSummary.recentReferents
-            .filter((entry): entry is { kind: 'npc' | 'location' | 'topic'; text: string; id?: string } => {
-              return Boolean(entry && typeof entry === 'object' && typeof entry.text === 'string'
-                && (entry.kind === 'npc' || entry.kind === 'location' || entry.kind === 'topic'));
-            })
-            .slice(0, 4)
+            .map((entry) => normalizeReferentCandidate(entry))
+            .filter((entry): entry is ReferentPreviewCandidate => Boolean(entry))
+            .slice(0, 6)
         : [],
     },
     scopeHints: {
@@ -396,6 +445,102 @@ function extractHistoryReferents(history: ConversationTurnLike[] | undefined): A
     .slice(-4);
 }
 
+function scoreRecentReferentCandidate(input: {
+  focusText: string;
+  candidate: ReferentPreviewCandidate;
+  activeTopic?: string;
+}): number {
+  const lower = input.focusText.toLowerCase();
+  const candidateTextLower = input.candidate.text.toLowerCase();
+  const activeTopic = normalizeOptionalString(input.activeTopic)?.toLowerCase();
+  const candidateTopic = normalizeOptionalString(input.candidate.topic)?.toLowerCase();
+  const explicitMention = candidateTextLower.length > 0 && lower.includes(candidateTextLower);
+  const hasLocationCue = LOCATION_BACKREFERENCE_CUE.test(input.focusText);
+  const hasPersonCue = PERSON_BACKREFERENCE_CUE.test(input.focusText);
+  const hasGenericCue = GENERIC_BACKREFERENCE_CUE.test(input.focusText);
+  const hasPluralCue = PLURAL_BACKREFERENCE_CUE.test(input.focusText);
+  let score = Math.max(0.3, Math.min(1, input.candidate.salience ?? input.candidate.confidence ?? 0.42));
+
+  if (explicitMention) score += 0.28;
+  if (activeTopic && candidateTopic && activeTopic === candidateTopic) score += 0.14;
+  if (input.candidate.lastSeenAt) score += 0.03;
+
+  if (hasLocationCue) {
+    if (input.candidate.kind === 'location') score += 0.22;
+    else if (input.candidate.kind === 'topic') score += 0.1;
+    else score -= 0.1;
+  }
+
+  if (hasPersonCue) {
+    if (input.candidate.kind === 'entity') score += 0.2;
+    else if (input.candidate.kind === 'npc') score += 0.08;
+    else score -= 0.12;
+  }
+
+  if (hasPluralCue) {
+    if (input.candidate.kind === 'faction') score += 0.14;
+    else if (input.candidate.kind === 'entity') score += 0.08;
+  }
+
+  if (hasGenericCue) {
+    if (input.candidate.kind === 'location') score += 0.12;
+    else if (input.candidate.kind === 'entity' || input.candidate.kind === 'topic' || input.candidate.kind === 'faction') score += 0.08;
+    else if (input.candidate.kind === 'npc') score -= 0.04;
+  }
+
+  if (!hasLocationCue && !hasPersonCue && !hasGenericCue && !hasPluralCue && explicitMention) {
+    score += 0.08;
+  }
+
+  return Number(Math.max(0, Math.min(1, score)).toFixed(4));
+}
+
+function resolveRecentBackreference(
+  focusText: string,
+  preview: EvidencePreview,
+  history: ConversationTurnLike[] | undefined,
+): ResolvedReferent | null {
+  const hasBackreference = (
+    LOCATION_BACKREFERENCE_CUE.test(focusText)
+    || PERSON_BACKREFERENCE_CUE.test(focusText)
+    || GENERIC_BACKREFERENCE_CUE.test(focusText)
+    || PLURAL_BACKREFERENCE_CUE.test(focusText)
+  );
+  if (!hasBackreference) return null;
+
+  const recentReferents = preview.topicSummary.recentReferents.length > 0
+    ? preview.topicSummary.recentReferents
+    : extractHistoryReferents(history);
+  if (recentReferents.length === 0) return null;
+
+  const scored = recentReferents
+    .map((candidate) => ({
+      candidate,
+      score: scoreRecentReferentCandidate({
+        focusText,
+        candidate,
+        activeTopic: preview.topicSummary.activeTopic,
+      }),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const top = scored[0];
+  const second = scored[1];
+  if (!top) return null;
+  const margin = second ? Number((top.score - second.score).toFixed(4)) : top.score;
+  const minimumScore = PERSON_BACKREFERENCE_CUE.test(focusText) ? 0.7 : 0.62;
+  if (top.score < minimumScore || margin < 0.1) {
+    return null;
+  }
+
+  return {
+    kind: top.candidate.kind,
+    text: top.candidate.text,
+    id: top.candidate.id,
+    confidence: top.score,
+  };
+}
+
 function resolveReferents(
   focusText: string,
   input: InterpretQueryInput,
@@ -445,20 +590,9 @@ function resolveReferents(
     }
   }
 
-  const shallowPronoun = /\b(him|her|them|there|this place|that place)\b/i.test(focusText);
-  const recentReferents = preview.topicSummary.recentReferents.length > 0
-    ? preview.topicSummary.recentReferents
-    : extractHistoryReferents(input.history);
-  if (shallowPronoun && recentReferents.length === 1) {
-    const recent = recentReferents[0];
-    if (recent) {
-      referents.push({
-        kind: recent.kind === 'topic' ? 'topic' : recent.kind,
-        text: recent.text,
-        id: recent.id,
-        confidence: 0.78,
-      });
-    }
+  const backreference = resolveRecentBackreference(focusText, preview, input.history);
+  if (backreference) {
+    referents.push(backreference);
   }
 
   const deduped = new Map<string, ResolvedReferent>();
@@ -615,6 +749,56 @@ function normalizeCandidateScore(value: number): number {
   return Number(Math.max(0, Math.min(1, value / 1.7)).toFixed(4));
 }
 
+function finalizeInterpretation(input: {
+  normalizedText: string;
+  focusText: string;
+  referents: ResolvedReferent[];
+  discourse: DiscourseMarkers;
+  candidateScores: QueryInterpretationCandidate[];
+}): QueryInterpretation {
+  const scoredCandidates = [...input.candidateScores]
+    .sort((a, b) => (
+      b.score - a.score
+      || a.lane.localeCompare(b.lane)
+      || a.target.localeCompare(b.target)
+      || a.facet.localeCompare(b.facet)
+    ));
+
+  const top = scoredCandidates[0] ?? {
+    lane: 'social' as QueryLane,
+    target: 'unknown' as QueryTarget,
+    facet: 'unknown' as QueryFacet,
+    timeframe: 'unknown' as QueryTimeframe,
+    score: 0,
+  };
+  const second = scoredCandidates[1] ?? { ...top, score: 0 };
+  const confidence = top.score;
+  const rawMargin = Number(Math.max(0, Math.min(1, top.score - second.score)).toFixed(4));
+  const socialConsensus = top.lane === 'social'
+    && second.lane === 'social'
+    && !hasLikelyQuestionForm(input.normalizedText);
+  const margin = socialConsensus ? Math.max(rawMargin, 0.24) : rawMargin;
+  const ambiguous = socialConsensus
+    ? confidence < 0.42
+    : (confidence < 0.48 || margin < 0.12);
+
+  return {
+    schemaVersion: 1,
+    lane: top.lane,
+    target: top.target,
+    facet: top.facet,
+    timeframe: top.timeframe,
+    focusText: input.focusText,
+    normalizedText: input.normalizedText,
+    referents: input.referents,
+    discourse: input.discourse,
+    candidateScores: scoredCandidates.slice(0, 6),
+    confidence,
+    margin,
+    ambiguous,
+  };
+}
+
 export function interpretQuery(input: InterpretQueryInput): QueryInterpretation {
   const preview = normalizeEvidencePreview(input.evidencePreview);
   const normalized = normalizeDiscourse(input.playerMessage);
@@ -638,45 +822,90 @@ export function interpretQuery(input: InterpretQueryInput): QueryInterpretation 
         timeframe: candidate.timeframe,
         score,
       };
-    })
-    .sort((a, b) => (
-      b.score - a.score
-      || a.lane.localeCompare(b.lane)
-      || a.target.localeCompare(b.target)
-      || a.facet.localeCompare(b.facet)
-    ));
+    });
 
-  const top = scoredCandidates[0] ?? {
-    lane: 'social' as QueryLane,
-    target: 'unknown' as QueryTarget,
-    facet: 'unknown' as QueryFacet,
-    timeframe: 'unknown' as QueryTimeframe,
-    score: 0,
-  };
-  const second = scoredCandidates[1] ?? { ...top, score: 0 };
-  const confidence = top.score;
-  const rawMargin = Number(Math.max(0, Math.min(1, top.score - second.score)).toFixed(4));
-  const socialConsensus = top.lane === 'social'
-    && second.lane === 'social'
-    && !hasLikelyQuestionForm(normalized.text);
-  const margin = socialConsensus ? Math.max(rawMargin, 0.24) : rawMargin;
-  const ambiguous = socialConsensus
-    ? confidence < 0.42
-    : (confidence < 0.48 || margin < 0.12);
-
-  return {
-    schemaVersion: 1,
-    lane: top.lane,
-    target: top.target,
-    facet: top.facet,
-    timeframe: top.timeframe,
-    focusText,
+  return finalizeInterpretation({
     normalizedText: normalized.text,
+    focusText,
     referents,
     discourse: normalized.markers,
-    candidateScores: scoredCandidates.slice(0, 6),
-    confidence,
-    margin,
-    ambiguous,
-  };
+    candidateScores: scoredCandidates,
+  });
+}
+
+async function getFacetExemplarVectors(embedTexts: EmbedTextsFn): Promise<Record<QueryFacet, number[][]>> {
+  const cached = facetExemplarVectorsByEmbed.get(embedTexts);
+  if (cached) {
+    return cached;
+  }
+  const promise = (async () => {
+    const facets = Object.entries(FACET_EXEMPLARS) as Array<[QueryFacet, string[]]>;
+    const texts = facets.flatMap(([, exemplarTexts]) => exemplarTexts);
+    const vectors = await embedTexts(texts);
+    const byFacet = {} as Record<QueryFacet, number[][]>;
+    let offset = 0;
+    for (const [facet, exemplarTexts] of facets) {
+      const facetVectors: number[][] = [];
+      for (let index = 0; index < exemplarTexts.length; index += 1) {
+        const maybeVector = vectors[offset + index];
+        if (Array.isArray(maybeVector) && maybeVector.length > 0) {
+          facetVectors.push(maybeVector);
+        }
+      }
+      byFacet[facet] = facetVectors;
+      offset += exemplarTexts.length;
+    }
+    return byFacet;
+  })().catch((error) => {
+    facetExemplarVectorsByEmbed.delete(embedTexts);
+    throw error;
+  });
+  facetExemplarVectorsByEmbed.set(embedTexts, promise);
+  return promise;
+}
+
+export async function enhanceInterpretationWithFacetSimilarity(input: {
+  interpretation: QueryInterpretation;
+  embedTexts: EmbedTextsFn;
+}): Promise<QueryInterpretation> {
+  if (input.interpretation.lane !== 'knowledge') return input.interpretation;
+  const focusText = normalizePlayerMessage(input.interpretation.focusText);
+  if (!focusText) return input.interpretation;
+
+  const [queryVector] = await input.embedTexts([focusText]);
+  if (!Array.isArray(queryVector) || queryVector.length === 0) {
+    return input.interpretation;
+  }
+
+  const exemplarVectors = await getFacetExemplarVectors(input.embedTexts);
+  const facetSimilarities = new Map<QueryFacet, number>();
+  let strongestFacetSimilarity = 0;
+  for (const facet of Object.keys(FACET_EXEMPLARS) as QueryFacet[]) {
+    const similarity = maxCosineSimilarity(queryVector, exemplarVectors[facet] ?? []);
+    facetSimilarities.set(facet, similarity);
+    if (similarity > strongestFacetSimilarity) strongestFacetSimilarity = similarity;
+  }
+
+  const adjustedCandidates = input.interpretation.candidateScores.map((candidate) => {
+    if (candidate.lane !== 'knowledge' || candidate.facet === 'unknown') {
+      return candidate;
+    }
+    const facetSimilarity = facetSimilarities.get(candidate.facet) ?? 0;
+    const similarityFloor = Math.max(0.35, strongestFacetSimilarity * 0.6);
+    const boost = facetSimilarity >= similarityFloor
+      ? Math.min(0.18, (facetSimilarity - similarityFloor) * 0.42)
+      : 0;
+    return {
+      ...candidate,
+      score: Number(Math.max(0, Math.min(1, candidate.score + boost)).toFixed(4)),
+    };
+  });
+
+  return finalizeInterpretation({
+    normalizedText: input.interpretation.normalizedText,
+    focusText: input.interpretation.focusText,
+    referents: input.interpretation.referents,
+    discourse: input.interpretation.discourse,
+    candidateScores: adjustedCandidates,
+  });
 }

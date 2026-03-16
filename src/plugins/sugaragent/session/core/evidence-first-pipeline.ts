@@ -1108,6 +1108,7 @@ export function runEvidenceFirstPipeline(
     };
 
     const socialTurn = buildDeterministicSocialReply(playerMessage, snapshot);
+    diagnostics.adaptationApplied = (adaptationContext ?? null) != null;
 
     // Verify social response doesn't leak facts
     if (checkSocialResponseForFactualLeakage(socialTurn.utterance)) {

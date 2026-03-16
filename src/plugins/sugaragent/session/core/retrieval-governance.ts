@@ -762,15 +762,20 @@ export function buildRerankCacheKey(input: BuildRerankCacheKeyInput): string {
 }
 
 function computeRerankEntryScore(input: ComputeRerankEntryScoreInput): number {
-  const baseScore = typeof input.candidate.score === 'number' && Number.isFinite(input.candidate.score)
-    ? Math.max(0, Math.min(1, input.candidate.score / 4))
-    : 0.3;
+  const lexicalBaseScore = typeof input.candidate.lexicalScore === 'number' && Number.isFinite(input.candidate.lexicalScore)
+    ? Math.max(0, Math.min(1, input.candidate.lexicalScore / 4))
+    : typeof input.candidate.score === 'number' && Number.isFinite(input.candidate.score)
+      ? Math.max(0, Math.min(1, input.candidate.score / 4))
+      : 0.3;
+  const vectorBoost = typeof input.candidate.vectorScore === 'number' && Number.isFinite(input.candidate.vectorScore)
+    ? Math.max(0, Math.min(0.22, input.candidate.vectorScore * 0.22))
+    : 0;
   const overlap = lexicalOverlapScore(input.query, candidateCoverageText(input.candidate));
   let poolBoost = 0;
   if (input.candidate.pool === 'self') poolBoost += 0.18;
   if (input.candidate.pool === 'related') poolBoost += normalizeQueryType(input.queryType) === 'other_query' ? 0.12 : 0.02;
   if (input.candidate.pool === 'ambient') poolBoost += normalizeQueryType(input.queryType) === 'world_query' ? 0.1 : 0.03;
-  const rerankScore = (baseScore * 0.48) + (overlap * 0.42) + poolBoost;
+  const rerankScore = (lexicalBaseScore * 0.4) + (overlap * 0.34) + vectorBoost + poolBoost;
   return Number(Math.max(0, Math.min(1, rerankScore)).toFixed(4));
 }
 
@@ -901,7 +906,13 @@ export function evaluateRetrievalQuality(input: EvaluateRetrievalQualityInput): 
 } {
   const queryType = normalizeQueryType(input.queryType);
   const routeIntent = normalizeRoutingIntent(input.routeIntent);
-  const knowledgeTurn = isKnowledgeSeekingQueryType(queryType)
+  const interpretationRequestsKnowledge = Boolean(
+    input.interpretation
+    && isRecord(input.interpretation)
+    && input.interpretation.lane === 'knowledge',
+  );
+  const knowledgeTurn = interpretationRequestsKnowledge
+    || isKnowledgeSeekingQueryType(queryType)
     || routeIntent === 'identity_self'
     || routeIntent === 'lore_world'
     || routeIntent === 'lore_other'

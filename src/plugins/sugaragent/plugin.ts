@@ -293,6 +293,12 @@ function formatGroundingSummary(input: {
   stage: string;
   routeIntent?: string;
   queryType?: string;
+  semantic?: {
+    exemplarEnabled?: boolean;
+    exemplarAttempted?: boolean;
+    exemplarChanged?: boolean;
+    degradedReason?: string;
+  } | null;
   interpretation?: {
     lane?: string;
     target?: string;
@@ -300,11 +306,16 @@ function formatGroundingSummary(input: {
     timeframe?: string;
     confidence?: number;
     ambiguous?: boolean;
+    referentCount?: number;
+    topReferent?: string;
   } | null;
   validationDecision?: string;
   retrievalCandidateCount?: number;
   retrievalSelectedCount?: number;
+  lexicalCandidateCount?: number;
+  vectorCandidateCount?: number;
   retrievalQualityReason?: string;
+  retrievalDegradedReason?: string;
   planSpeechAct?: string;
   planClaimCount?: number;
   providerUsedFallback?: boolean;
@@ -315,29 +326,152 @@ function formatGroundingSummary(input: {
   relatedLoreScopeCount?: number;
 }): string {
   const interpretation = input.interpretation ?? {};
+  const semantic = input.semantic ?? {};
   const interpretationSummary = interpretation.lane
     ? `${interpretation.lane}/${interpretation.target ?? 'unknown'}/${interpretation.facet ?? 'unknown'}/${interpretation.timeframe ?? 'unknown'}`
     : 'none';
   const confidence = typeof interpretation.confidence === 'number'
     ? interpretation.confidence.toFixed(2)
     : 'na';
+  const semanticSummary = semantic.degradedReason
+    ? 'degraded'
+    : semantic.exemplarChanged === true
+      ? 'changed'
+      : semantic.exemplarAttempted === true
+        ? 'attempted'
+        : semantic.exemplarEnabled === true
+          ? 'enabled'
+          : 'off';
   return [
     `npc=${input.npcId}`,
     `stage=${input.stage}`,
     `route=${input.routeIntent ?? 'unknown'}`,
     `qt=${input.queryType ?? 'conversation'}`,
     `interp=${interpretationSummary}`,
+    `sem=${semanticSummary}`,
     `conf=${confidence}`,
     `ambiguous=${interpretation.ambiguous === true ? 'yes' : 'no'}`,
+    `refs=${interpretation.referentCount ?? 0}`,
+    `topRef=${interpretation.topReferent ?? 'none'}`,
     `profileSelf=${input.selfEntityId ?? 'none'}`,
     `scopes=${input.loreScopeCount ?? 0}/${input.selfLoreScopeCount ?? 0}/${input.relatedLoreScopeCount ?? 0}`,
     `retrieval=${input.retrievalCandidateCount ?? 0}/${input.retrievalSelectedCount ?? 0}`,
+    `sources=${input.lexicalCandidateCount ?? 0}/${input.vectorCandidateCount ?? 0}`,
     `retrievalReason=${input.retrievalQualityReason ?? 'unknown'}`,
+    `embedding=${input.retrievalDegradedReason ? 'degraded' : 'ok'}`,
     `plan=${input.planSpeechAct ?? 'unknown'}:${input.planClaimCount ?? 0}`,
     `validation=${input.validationDecision ?? 'unknown'}`,
     `providerFallback=${input.providerUsedFallback === true ? 'yes' : 'no'}`,
     `pluginFallback=${input.pluginAppliedFallback === true ? 'yes' : 'no'}`,
   ].join(' ');
+}
+
+function formatSemanticSummary(input: {
+  npcId: string;
+  routeIntent?: string;
+  queryType?: string;
+  semantic?: {
+    exemplarEnabled?: boolean;
+    exemplarAttempted?: boolean;
+    exemplarChanged?: boolean;
+    degradedReason?: string;
+  } | null;
+  interpretation?: {
+    lane?: string;
+    target?: string;
+    facet?: string;
+    timeframe?: string;
+    confidence?: number;
+    ambiguous?: boolean;
+    referentCount?: number;
+    topReferent?: string;
+  } | null;
+}): string {
+  const semantic = input.semantic ?? {};
+  const interpretation = input.interpretation ?? {};
+  return [
+    `npc=${input.npcId}`,
+    `route=${input.routeIntent ?? 'unknown'}`,
+    `qt=${input.queryType ?? 'conversation'}`,
+    `mode=${semantic.exemplarEnabled === true ? 'exemplar-v1' : 'deterministic'}`,
+    `attempted=${semantic.exemplarAttempted === true ? 'yes' : 'no'}`,
+    `changed=${semantic.exemplarChanged === true ? 'yes' : 'no'}`,
+    `degraded=${semantic.degradedReason ? 'yes' : 'no'}`,
+    `interp=${interpretation.lane ? `${interpretation.lane}/${interpretation.target ?? 'unknown'}/${interpretation.facet ?? 'unknown'}` : 'none'}`,
+    `conf=${typeof interpretation.confidence === 'number' ? interpretation.confidence.toFixed(2) : 'na'}`,
+    `ambiguous=${interpretation.ambiguous === true ? 'yes' : 'no'}`,
+    `refs=${interpretation.referentCount ?? 0}`,
+    `topRef=${interpretation.topReferent ?? 'none'}`,
+  ].join(' ');
+}
+
+function formatRetrievalSummary(input: {
+  npcId: string;
+  routeIntent?: string;
+  queryType?: string;
+  retrieval?: {
+    attempted?: boolean;
+    candidateCount?: number;
+    selectedCount?: number;
+    lexicalCandidateCount?: number;
+    vectorCandidateCount?: number;
+    mergedCandidateCount?: number;
+    qualityReason?: string;
+    qualityPath?: string;
+    qualityGatePassed?: boolean;
+    correctiveAttempted?: boolean;
+    embeddingAvailable?: boolean;
+    degradedReason?: string;
+    vectorModelId?: string;
+  } | null;
+}): string {
+  const retrieval = input.retrieval ?? {};
+  return [
+    `npc=${input.npcId}`,
+    `route=${input.routeIntent ?? 'unknown'}`,
+    `qt=${input.queryType ?? 'conversation'}`,
+    `attempted=${retrieval.attempted === true ? 'yes' : 'no'}`,
+    `sources=${retrieval.lexicalCandidateCount ?? 0}/${retrieval.vectorCandidateCount ?? 0}`,
+    `merged=${retrieval.mergedCandidateCount ?? retrieval.candidateCount ?? 0}`,
+    `selected=${retrieval.selectedCount ?? 0}`,
+    `path=${retrieval.qualityPath ?? 'unknown'}`,
+    `reason=${retrieval.qualityReason ?? 'unknown'}`,
+    `gate=${retrieval.qualityGatePassed === true ? 'pass' : 'fail'}`,
+    `corrective=${retrieval.correctiveAttempted === true ? 'yes' : 'no'}`,
+    `embedding=${retrieval.degradedReason ? 'degraded' : retrieval.embeddingAvailable === true ? 'ok' : 'off'}`,
+    `model=${retrieval.vectorModelId ?? 'none'}`,
+  ].join(' ');
+}
+
+function emitEmbeddingDegradedWarning(input: {
+  npcId: string;
+  routeIntent?: string;
+  queryType?: string;
+  semanticDegradedReason?: string;
+  retrievalDegradedReason?: string;
+}): void {
+  const reasons = [
+    input.semanticDegradedReason ? `semantic=${input.semanticDegradedReason}` : null,
+    input.retrievalDegradedReason ? `retrieval=${input.retrievalDegradedReason}` : null,
+  ].filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+  const summary = [
+    `npc=${input.npcId}`,
+    `route=${input.routeIntent ?? 'unknown'}`,
+    `qt=${input.queryType ?? 'conversation'}`,
+    'fallback=lexical_only',
+    reasons.length > 0 ? `reason=${reasons.join(' | ')}` : 'reason=unknown',
+  ].join(' ');
+  console.warn(
+    `[sugaragent][fallback][embedding_degraded] ${summary}`,
+    {
+      npcId: input.npcId,
+      routeIntent: input.routeIntent,
+      queryType: input.queryType,
+      semanticDegradedReason: input.semanticDegradedReason,
+      retrievalDegradedReason: input.retrievalDegradedReason,
+      note: 'Embedding-assisted interpretation/retrieval is the main path. This warning means SugarAgent is temporarily using degraded lexical-only fallback because embeddings failed or were unavailable.',
+    },
+  );
 }
 
 function shouldWarnOnMissingSelfKnowledgeProfile(input: {
@@ -1485,6 +1619,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
       isFirstMeeting: (modeSession?.turnCount ?? 0) === 0,
       turnIndexWithNpc: nextTurnCount,
       topicCoverage: request.context?.topicCoverage,
+      pedagogyContext: request.context?.pedagogyContext,
     };
 
     if (turnBudgetFallback && beatContract && nextBeatTurnCount !== undefined) {
@@ -1603,6 +1738,9 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         const interpretation = isRecord(diagnostics.routing?.interpretation)
           ? diagnostics.routing?.interpretation
           : null;
+        const semantic = isRecord(diagnostics.routing?.semantic)
+          ? diagnostics.routing?.semantic
+          : null;
         const loreScopeCount = Array.isArray(npcProfile?.loreScopes) ? npcProfile.loreScopes.length : 0;
         const selfLoreScopeCount = Array.isArray(npcProfile?.selfLoreScopes) ? npcProfile.selfLoreScopes.length : 0;
         const relatedLoreScopeCount = Array.isArray(npcProfile?.relatedLoreScopes) ? npcProfile.relatedLoreScopes.length : 0;
@@ -1613,6 +1751,14 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           stage: groundingDebug.stage,
           routeIntent: groundingDebug.routeIntent,
           queryType: groundingDebug.queryType,
+          semantic: semantic
+            ? {
+                exemplarEnabled: semantic.exemplarEnabled === true,
+                exemplarAttempted: semantic.exemplarAttempted === true,
+                exemplarChanged: semantic.exemplarChanged === true,
+                degradedReason: toSafeString(semantic.degradedReason),
+              }
+            : null,
           interpretation: interpretation
             ? {
                 lane: toSafeString(interpretation.lane),
@@ -1621,12 +1767,17 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
                 timeframe: toSafeString(interpretation.timeframe),
                 confidence: toSafeNumber(interpretation.confidence, NaN),
                 ambiguous: interpretation.ambiguous === true,
+                referentCount: toSafeNumber(interpretation.referentCount, 0),
+                topReferent: toSafeString(interpretation.topReferent),
               }
             : null,
           validationDecision: diagnostics.validation?.decision,
           retrievalCandidateCount: diagnostics.retrieval?.candidateCount ?? 0,
           retrievalSelectedCount: diagnostics.retrieval?.selectedCount ?? 0,
+          lexicalCandidateCount: diagnostics.retrieval?.lexicalCandidateCount ?? 0,
+          vectorCandidateCount: diagnostics.retrieval?.vectorCandidateCount ?? 0,
           retrievalQualityReason: diagnostics.retrieval?.qualityReason ?? 'unknown',
+          retrievalDegradedReason: diagnostics.retrieval?.degradedReason,
           planSpeechAct,
           planClaimCount,
           providerUsedFallback: usedProviderFallback,
@@ -1656,6 +1807,67 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           retrieval: diagnostics.retrieval,
           planOutcome,
         });
+        if (semantic && (
+          semantic.exemplarEnabled === true
+          || typeof semantic.degradedReason === 'string'
+        )) {
+          console.debug(`[sugaragent][semantic] ${formatSemanticSummary({
+            npcId: request.npcId,
+            routeIntent: groundingDebug.routeIntent,
+            queryType: groundingDebug.queryType,
+            semantic: {
+              exemplarEnabled: semantic.exemplarEnabled === true,
+              exemplarAttempted: semantic.exemplarAttempted === true,
+              exemplarChanged: semantic.exemplarChanged === true,
+              degradedReason: toSafeString(semantic.degradedReason),
+            },
+            interpretation: interpretation
+              ? {
+                  lane: toSafeString(interpretation.lane),
+                  target: toSafeString(interpretation.target),
+                  facet: toSafeString(interpretation.facet),
+                  timeframe: toSafeString(interpretation.timeframe),
+                  confidence: toSafeNumber(interpretation.confidence, NaN),
+                  ambiguous: interpretation.ambiguous === true,
+                  referentCount: toSafeNumber(interpretation.referentCount, 0),
+                  topReferent: toSafeString(interpretation.topReferent),
+                }
+              : null,
+          })}`, {
+            npcId: request.npcId,
+            routeIntent: groundingDebug.routeIntent,
+            queryType: groundingDebug.queryType,
+            semantic,
+            interpretation,
+          });
+        }
+        if (diagnostics.retrieval && (
+          diagnostics.retrieval.attempted === true
+          || (diagnostics.retrieval.vectorCandidateCount ?? 0) > 0
+          || diagnostics.retrieval.embeddingAvailable === true
+          || typeof diagnostics.retrieval.degradedReason === 'string'
+        )) {
+          console.debug(`[sugaragent][retrieval] ${formatRetrievalSummary({
+            npcId: request.npcId,
+            routeIntent: groundingDebug.routeIntent,
+            queryType: groundingDebug.queryType,
+            retrieval: diagnostics.retrieval,
+          })}`, {
+            npcId: request.npcId,
+            routeIntent: groundingDebug.routeIntent,
+            queryType: groundingDebug.queryType,
+            retrieval: diagnostics.retrieval,
+          });
+        }
+        if (typeof semantic?.degradedReason === 'string' || typeof diagnostics.retrieval?.degradedReason === 'string') {
+          emitEmbeddingDegradedWarning({
+            npcId: request.npcId,
+            routeIntent: groundingDebug.routeIntent,
+            queryType: groundingDebug.queryType,
+            semanticDegradedReason: toSafeString(semantic?.degradedReason),
+            retrievalDegradedReason: toSafeString(diagnostics.retrieval?.degradedReason),
+          });
+        }
         if (shouldWarnOnMissingSelfKnowledgeProfile({
           routeIntent: groundingDebug.routeIntent,
           queryType: groundingDebug.queryType,
@@ -1694,10 +1906,16 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
             retrievalAttempted: diagnostics.retrieval?.attempted ?? false,
             retrievalCandidateCount: diagnostics.retrieval?.candidateCount ?? 0,
             retrievalSelectedCount: diagnostics.retrieval?.selectedCount ?? 0,
+            lexicalCandidateCount: diagnostics.retrieval?.lexicalCandidateCount ?? 0,
+            vectorCandidateCount: diagnostics.retrieval?.vectorCandidateCount ?? 0,
+            retrievalMergedCandidateCount: diagnostics.retrieval?.mergedCandidateCount ?? 0,
             retrievalQualityPath: diagnostics.retrieval?.qualityPath ?? 'unknown',
             retrievalQualityReason: diagnostics.retrieval?.qualityReason ?? 'unknown',
             retrievalQualityGatePassed: diagnostics.retrieval?.qualityGatePassed ?? false,
             retrievalCorrectiveAttempted: diagnostics.retrieval?.correctiveAttempted ?? false,
+            retrievalEmbeddingAvailable: diagnostics.retrieval?.embeddingAvailable ?? false,
+            retrievalEmbeddingDegradedReason: diagnostics.retrieval?.degradedReason,
+            retrievalVectorModelId: diagnostics.retrieval?.vectorModelId,
             replyPartsAttempted: diagnostics.generation?.replyParts?.attempted ?? false,
             replyPartsSuccess: diagnostics.generation?.replyParts?.success ?? false,
             replyPartCount: diagnostics.generation?.replyParts?.partCount ?? 0,

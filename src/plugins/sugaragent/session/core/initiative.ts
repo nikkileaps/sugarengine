@@ -418,7 +418,12 @@ export function resolveInitiativePolicy(input: ResolveInitiativePolicyInput): {
     reason = 'knowledge-turn-missing-evidence';
   } else if (
     (
-      ((routingIntent === 'unclear' || interpretation?.ambiguous === true) && playerHasQuestion && interpretation?.lane !== 'social')
+      (
+        (routingIntent === 'unclear' || interpretation?.ambiguous === true)
+        && playerHasQuestion
+        && interpretation?.lane !== 'social'
+        && !normalizeBoolean(input.hasEvidence)
+      )
       || (playerHasQuestion && retrievalConfidence < 0.2 && routingIntent !== 'session_recall')
     )
     && !normalizeBoolean(input.hasDirectAnswerEvidence)

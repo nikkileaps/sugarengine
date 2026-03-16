@@ -1,4 +1,4 @@
-import { retrieveLoreChunks } from '../../lore/lore-lib';
+import { retrieveLoreChunks, retrieveLoreChunksByVector } from '../../lore/lore-lib';
 import {
   expandFacetQueryTokenVariants,
   extractFacetQueryTokens,
@@ -75,6 +75,7 @@ interface GovernedLoreRetrievalInput {
   modelVersion?: unknown;
   rerankerClass?: string;
   retrievalFilters?: RetrievalFilters;
+  embedTexts?: ((texts: string[]) => Promise<number[][]>) | null;
 }
 
 function isRecord(value: unknown): value is RecordLike {
@@ -211,7 +212,71 @@ export function computeRetrievalQualityScore(quality: unknown): number {
   return Number(Math.max(0, Math.min(1, score)).toFixed(4));
 }
 
-export function runGovernedLoreRetrieval({
+function mergeRetrievalCandidates(input: {
+  lexicalCandidates: Array<Record<string, unknown>>;
+  vectorCandidates: Array<Record<string, unknown>>;
+}): Array<Record<string, unknown>> {
+  const mergedByChunkId = new Map<string, Record<string, unknown>>();
+
+  const absorb = (candidate: Record<string, unknown>, source: 'lexical' | 'vector') => {
+    const chunk = isRecord(candidate.chunk) ? candidate.chunk : null;
+    const chunkId = typeof chunk?.chunkId === 'string' ? chunk.chunkId : '';
+    if (!chunkId) return;
+    const existing = mergedByChunkId.get(chunkId) ?? {
+      ...candidate,
+      sources: [],
+    };
+    const lexicalScore = typeof candidate.lexicalScore === 'number' && Number.isFinite(candidate.lexicalScore)
+      ? Number(candidate.lexicalScore)
+      : source === 'lexical' && typeof candidate.score === 'number' && Number.isFinite(candidate.score)
+        ? Number(candidate.score)
+        : typeof existing.lexicalScore === 'number' && Number.isFinite(existing.lexicalScore)
+          ? Number(existing.lexicalScore)
+          : undefined;
+    const vectorScore = typeof candidate.vectorScore === 'number' && Number.isFinite(candidate.vectorScore)
+      ? Number(candidate.vectorScore)
+      : typeof existing.vectorScore === 'number' && Number.isFinite(existing.vectorScore)
+        ? Number(existing.vectorScore)
+        : undefined;
+    const sources = Array.isArray(existing.sources) ? existing.sources as string[] : [];
+    if (!sources.includes(source)) sources.push(source);
+    const mergedScore = Math.max(
+      typeof lexicalScore === 'number' ? lexicalScore : 0,
+      typeof candidate.score === 'number' && Number.isFinite(candidate.score) ? Number(candidate.score) : 0,
+      typeof vectorScore === 'number' ? vectorScore * 2.5 : 0,
+    );
+    mergedByChunkId.set(chunkId, {
+      ...existing,
+      ...candidate,
+      lexicalScore,
+      vectorScore,
+      score: Number(mergedScore.toFixed(4)),
+      sources,
+    });
+  };
+
+  for (const candidate of input.lexicalCandidates) {
+    if (isRecord(candidate)) absorb(candidate, 'lexical');
+  }
+  for (const candidate of input.vectorCandidates) {
+    if (isRecord(candidate)) absorb(candidate, 'vector');
+  }
+
+  return [...mergedByChunkId.values()]
+    .sort((left, right) => (
+      asFiniteScore(right) - asFiniteScore(left)
+      || String((isRecord(left.chunk) ? left.chunk.chunkId : '') ?? '')
+        .localeCompare(String((isRecord(right.chunk) ? right.chunk.chunkId : '') ?? ''))
+    ));
+}
+
+function asFiniteScore(candidate: Record<string, unknown>): number {
+  return typeof candidate.score === 'number' && Number.isFinite(candidate.score)
+    ? Number(candidate.score)
+    : 0;
+}
+
+export async function runGovernedLoreRetrieval({
   loreArtifacts,
   canRetrieveLore,
   shouldAttemptLoreRetrieval,
@@ -231,6 +296,7 @@ export function runGovernedLoreRetrieval({
   modelVersion,
   rerankerClass,
   retrievalFilters,
+  embedTexts,
 }: GovernedLoreRetrievalInput) {
   const normalizedMode = normalizeConversationModeForPolicy(mode);
   const budgetTier = resolveRerankBudgetTier({
@@ -240,7 +306,13 @@ export function runGovernedLoreRetrieval({
     hasBeatContract,
   });
   const candidateCap = resolveRerankCandidateCap(normalizedMode, budgetTier);
-  const knowledgeTurn = isKnowledgeSeekingQueryType(queryType)
+  const interpretationRequestsKnowledge = Boolean(
+    interpretation
+    && typeof interpretation === 'object'
+    && interpretation.lane === 'knowledge',
+  );
+  const knowledgeTurn = interpretationRequestsKnowledge
+    || isKnowledgeSeekingQueryType(queryType)
     || routingIntent === 'identity_self'
     || routingIntent === 'lore_world'
     || routingIntent === 'lore_other'
@@ -294,6 +366,11 @@ export function runGovernedLoreRetrieval({
         modelVersion,
         latencyMs: 0,
       },
+      lexicalCandidateCount: 0,
+      vectorCandidateCount: 0,
+      mergedCandidateCount: 0,
+      embeddingAvailable: typeof embedTexts === 'function',
+      degradedReason: null,
       attempts: [],
       qualityGatePassed: !knowledgeTurn,
     },
@@ -305,9 +382,30 @@ export function runGovernedLoreRetrieval({
 
   const retrieveMaxResults = Math.max(candidateCap * 2, candidateCap);
   const retrievalQuery = buildInterpretationRetrievalQuery(playerMessage, interpretation);
-  const initialCandidates = retrieveLoreChunks(loreArtifacts, retrievalQuery, {
+  const lexicalCandidates = retrieveLoreChunks(loreArtifacts, retrievalQuery, {
     ...scopeOptions,
     maxResults: retrieveMaxResults,
+  });
+  let vectorCandidates: Array<Record<string, unknown>> = [];
+  let degradedReason: string | null = null;
+  // Vector retrieval is part of the primary Phase B path. If embeddings are
+  // unavailable or fail, we degrade explicitly to lexical/entity retrieval; we
+  // do not keep a second feature-flagged "main path" alive here.
+  if (typeof embedTexts === 'function' && Array.isArray((loreArtifacts as RecordLike | null)?.chunkVectors)) {
+    try {
+      const [queryVector] = await embedTexts([retrievalQuery]);
+      vectorCandidates = retrieveLoreChunksByVector(loreArtifacts, queryVector, {
+        ...scopeOptions,
+        maxResults: retrieveMaxResults,
+      });
+    } catch (error) {
+      degradedReason = error instanceof Error ? error.message : String(error);
+      vectorCandidates = [];
+    }
+  }
+  const initialCandidates = mergeRetrievalCandidates({
+    lexicalCandidates,
+    vectorCandidates,
   });
   const initialCacheKey = buildRerankCacheKey({
     query: retrievalQuery,
@@ -360,6 +458,9 @@ export function runGovernedLoreRetrieval({
     {
       attempt: 'initial',
       query: retrievalQuery,
+      lexicalCandidateCount: lexicalCandidates.length,
+      vectorCandidateCount: vectorCandidates.length,
+      mergedCandidateCount: initialCandidates.length,
       candidateCount: initialCandidates.length,
       selectedCount: initialSelected.length,
       quality: {
@@ -374,6 +475,7 @@ export function runGovernedLoreRetrieval({
         cacheHit: initialRerank.cacheHit,
         latencyMs: initialRerank.latencyMs,
       },
+      degradedReason,
     },
   ];
 
@@ -407,12 +509,32 @@ export function runGovernedLoreRetrieval({
       }
     }
 
-    const correctiveCandidates = retrieveLoreChunks(loreArtifacts, correctiveQuery, {
+    const correctiveLexicalCandidates = retrieveLoreChunks(loreArtifacts, correctiveQuery, {
       ...scopeOptions,
       maxResults: retrieveMaxResults,
       loreScopes: correctiveLoreScopes,
       selfLoreScopes: correctiveSelfLoreScopes,
       relatedLoreScopes: correctiveRelatedLoreScopes,
+    });
+    let correctiveVectorCandidates: Array<Record<string, unknown>> = [];
+    if (typeof embedTexts === 'function' && Array.isArray((loreArtifacts as RecordLike | null)?.chunkVectors)) {
+      try {
+        const [correctiveQueryVector] = await embedTexts([correctiveQuery]);
+        correctiveVectorCandidates = retrieveLoreChunksByVector(loreArtifacts, correctiveQueryVector, {
+          ...scopeOptions,
+          maxResults: retrieveMaxResults,
+          loreScopes: correctiveLoreScopes,
+          selfLoreScopes: correctiveSelfLoreScopes,
+          relatedLoreScopes: correctiveRelatedLoreScopes,
+        });
+      } catch (error) {
+        degradedReason = degradedReason ?? (error instanceof Error ? error.message : String(error));
+        correctiveVectorCandidates = [];
+      }
+    }
+    const correctiveCandidates = mergeRetrievalCandidates({
+      lexicalCandidates: correctiveLexicalCandidates,
+      vectorCandidates: correctiveVectorCandidates,
     });
     const correctiveCacheKey = buildRerankCacheKey({
       query: correctiveQuery,
@@ -451,6 +573,9 @@ export function runGovernedLoreRetrieval({
     attemptLogs.push({
       attempt: 'corrective',
       query: correctiveQuery,
+      lexicalCandidateCount: correctiveLexicalCandidates.length,
+      vectorCandidateCount: correctiveVectorCandidates.length,
+      mergedCandidateCount: correctiveCandidates.length,
       candidateCount: correctiveCandidates.length,
       selectedCount: correctiveSelected.length,
       quality: {
@@ -465,6 +590,7 @@ export function runGovernedLoreRetrieval({
         cacheHit: correctiveRerank.cacheHit,
         latencyMs: correctiveRerank.latencyMs,
       },
+      degradedReason,
     });
 
     const useCorrective = correctiveQualityScore >= initialQualityScore;
@@ -515,6 +641,11 @@ export function runGovernedLoreRetrieval({
         modelVersion,
         latencyMs: totalRerankLatencyMs,
       },
+      lexicalCandidateCount: lexicalCandidates.length,
+      vectorCandidateCount: vectorCandidates.length,
+      mergedCandidateCount: finalRanked.length,
+      embeddingAvailable: typeof embedTexts === 'function' && degradedReason === null,
+      degradedReason,
       attempts: attemptLogs,
       qualityGatePassed: knowledgeGatePassed,
     },

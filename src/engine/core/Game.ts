@@ -136,6 +136,7 @@ export class Game {
   private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
   private fadeOverlay: FadeOverlay;
   private pluginManager: PluginManager | null = null;
+  private hasSugarAgentProvider = false;
   private contentBasePath: string;
   private lastAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
   private readonly dialoguePresenter: DialoguePresenter;
@@ -219,6 +220,11 @@ export class Game {
         executeIntent: (intent) => this.executePluginIntent(intent),
       }, config.plugins);
 
+      this.hasSugarAgentProvider = this.pluginManager.getPlugins().some((plugin) => (
+        plugin.descriptor.id === 'sugaragent'
+        && typeof plugin.runAgentTurn === 'function'
+      ));
+
       // Run plugin updates within ECS update ordering.
       this.engine.world.addSystem(new PluginSystem(this.pluginManager));
     }
@@ -236,7 +242,7 @@ export class Game {
     );
 
     // Register SugarAgent provider adapter (priority 100 — agent/hybrid conversations).
-    if (this.pluginManager) {
+    if (this.pluginManager && this.hasSugarAgentProvider) {
       this.conversationHost.registerProvider(
         new SugarAgentProviderAdapter(this.pluginManager, {
           gameId: config.gameId,
@@ -758,11 +764,13 @@ export class Game {
       const hasDefaultDialogue = !!dialogueId;
       const hasBehaviorTree = this.engine.hasNPCBehaviorTree(id);
       const canUsePlugin = this.pluginManager !== null
+        && this.hasSugarAgentProvider
         && (interactionMode === 'agent' || interactionMode === 'hybrid');
       const hasConversationProvider = this.conversationHost.hasProviderFor(id, {
         hasQuestDialogue: false,
         hasBehaviorTree,
         npcInteractionMode: interactionMode,
+        hasAgentProvider: this.hasSugarAgentProvider,
         npcName: npcInfo?.name,
       });
       return {
@@ -1719,6 +1727,7 @@ export class Game {
         hasQuestDialogue: true,
         hasBehaviorTree,
         npcInteractionMode: interactionMode,
+        hasAgentProvider: this.hasSugarAgentProvider,
         npcName,
         dialogueId: questDialogue.dialogue,
       };
@@ -1738,6 +1747,7 @@ export class Game {
             hasQuestDialogue: false,
             hasBehaviorTree: true,
             npcInteractionMode: interactionMode,
+            hasAgentProvider: this.hasSugarAgentProvider,
             npcName,
             dialogueId: btAction.dialogueId,
           };
@@ -1761,6 +1771,7 @@ export class Game {
         hasQuestDialogue: false,
         hasBehaviorTree,
         npcInteractionMode: interactionMode,
+        hasAgentProvider: this.hasSugarAgentProvider,
         npcName,
       };
       const session = await this.conversationHost.startConversation(npcId, npcName, ctx);
@@ -1777,6 +1788,7 @@ export class Game {
         hasQuestDialogue: false,
         hasBehaviorTree: false,
         npcInteractionMode: interactionMode,
+        hasAgentProvider: this.hasSugarAgentProvider,
         npcName,
         dialogueId: npcDefaultDialogue,
       };

@@ -358,6 +358,52 @@ function projectInterpretationCandidateScores(interpretation: QueryInterpretatio
     .sort((a, b) => b.score - a.score);
 }
 
+export function routeTurnIntentFromInterpretation(
+  playerMessage: unknown,
+  interpretation: QueryInterpretation,
+): RoutingResult {
+  const source = normalizeRoutingSource(playerMessage);
+  if (!source) {
+    return {
+      intent: 'social_chat',
+      confidence: 1,
+      margin: 1,
+      candidateScores: [{ intent: 'social_chat', score: 1 }],
+      policyPath: 'chat',
+      interpretation: {
+        ...interpretation,
+        lane: 'social',
+        target: 'unknown',
+        facet: 'unknown',
+        timeframe: 'unknown',
+        confidence: 1,
+        margin: 1,
+        ambiguous: false,
+      },
+    };
+  }
+
+  const intent = projectInterpretationIntent(interpretation);
+  const candidateScores = projectInterpretationCandidateScores(interpretation);
+  const forceSocialChat = isLikelySmallTalkQuery(source)
+    && interpretation.lane === 'social'
+    && !interpretation.ambiguous;
+
+  return {
+    intent: forceSocialChat ? 'social_chat' : intent,
+    confidence: Number((forceSocialChat ? Math.max(0.94, interpretation.confidence) : interpretation.confidence).toFixed(4)),
+    margin: Number((forceSocialChat ? Math.max(0.24, interpretation.margin) : interpretation.margin).toFixed(4)),
+    candidateScores: forceSocialChat
+      ? [
+          { intent: 'social_chat', score: Number(Math.max(0.94, interpretation.confidence).toFixed(4)) },
+          ...candidateScores.filter((entry) => entry.intent !== 'social_chat'),
+        ].slice(0, 6)
+      : candidateScores,
+    policyPath: routeIntentToPolicyPath(forceSocialChat ? 'social_chat' : intent),
+    interpretation,
+  };
+}
+
 export function routeTurnIntent(
   playerMessage: unknown,
   npcName: unknown,
@@ -382,44 +428,7 @@ export function routeTurnIntent(
     loreEntityHints: options?.loreEntityHints,
     evidencePreview: options?.evidencePreview,
   });
-
-  if (!source) {
-    return {
-      intent: 'social_chat',
-      confidence: 1,
-      margin: 1,
-      candidateScores: [{ intent: 'social_chat', score: 1 }],
-      policyPath: 'chat',
-      interpretation: {
-        ...interpretation,
-        lane: 'social',
-        target: 'unknown',
-        facet: 'unknown',
-        timeframe: 'unknown',
-        confidence: 1,
-        margin: 1,
-        ambiguous: false,
-      },
-    };
-  }
-  const intent = projectInterpretationIntent(interpretation);
-  const candidateScores = projectInterpretationCandidateScores(interpretation);
-  const forceSocialChat = isLikelySmallTalkQuery(source)
-    && interpretation.lane === 'social'
-    && !interpretation.ambiguous;
-  return {
-    intent: forceSocialChat ? 'social_chat' : intent,
-    confidence: Number((forceSocialChat ? Math.max(0.94, interpretation.confidence) : interpretation.confidence).toFixed(4)),
-    margin: Number((forceSocialChat ? Math.max(0.24, interpretation.margin) : interpretation.margin).toFixed(4)),
-    candidateScores: forceSocialChat
-      ? [
-          { intent: 'social_chat', score: Number(Math.max(0.94, interpretation.confidence).toFixed(4)) },
-          ...candidateScores.filter((entry) => entry.intent !== 'social_chat'),
-        ].slice(0, 6)
-      : candidateScores,
-    policyPath: routeIntentToPolicyPath(forceSocialChat ? 'social_chat' : intent),
-    interpretation,
-  };
+  return routeTurnIntentFromInterpretation(source, interpretation);
 }
 
 export function classifyTurnQueryType(playerMessage: unknown, npcName: unknown): QueryType {

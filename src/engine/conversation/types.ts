@@ -246,6 +246,8 @@ export interface ProviderSelectionContext {
   hasQuestDialogue: boolean;
   hasBehaviorTree: boolean;
   npcInteractionMode: 'scripted' | 'agent' | 'hybrid';
+  /** Whether the runtime has a concrete agent provider available. */
+  hasAgentProvider?: boolean;
   targetLanguage?: string;
   supportLanguage?: string;
   /** Learner band override, used by providers to pre-resolve band policy. */

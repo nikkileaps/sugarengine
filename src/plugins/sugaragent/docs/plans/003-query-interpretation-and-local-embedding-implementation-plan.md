@@ -1,5 +1,19 @@
 # Plan 003: Query Interpretation and Local Embedding Implementation
 
+## Status
+
+Complete as of 2026-03-15.
+
+Phase A and Phase B are now implemented in preview/dev:
+
+1. shared `QueryInterpretation` is live across routing, retrieval, and planning,
+2. preview `embed()` is real rather than stubbed,
+3. vector artifacts and vector-assisted retrieval are operational,
+4. exemplar-assisted interpretation is live,
+5. degraded mode falls back explicitly to lexical/entity behavior rather than silent fake vectors.
+
+Remaining work after this plan continues in [Plan 004: Referential Depth and Native Embedding Follow-On](./004-referential-depth-and-native-embedding-follow-on.md).
+
 Builds on:
 
 - [ADR-SA-015: Hybrid Intent Routing and Evidence Policy](../adr/015-hybrid-intent-routing-and-evidence-policy.md)
@@ -355,21 +369,16 @@ Native/runtime parity and deeper referent resolution continue in [Plan 004: Refe
 
 ## Rollout and Safety
 
-### Feature flags
+### Rollout note
 
-Recommended flags:
+The temporary rollout flags proposed during planning are no longer kept as live runtime toggles.
 
-1. `query_interpretation_v1`
-2. `vector_retrieval_v1`
-3. `facet_exemplar_similarity_v1`
+After Plan 003 closeout:
 
-### Rollout order
-
-1. enable `query_interpretation_v1` in tests and replay first,
-2. enable in preview after regressions are green,
-3. make preview `embed()` real,
-4. enable vector retrieval in replay/shadow,
-5. enable vector retrieval in preview once diagnostics are stable.
+1. shared interpretation is the canonical path,
+2. exemplar-assisted interpretation is the canonical semantic path when embeddings are available,
+3. vector retrieval is the canonical retrieval enhancement when embeddings and vector artifacts are available,
+4. degraded lexical/entity behavior remains only as explicit fallback when embeddings fail or are unavailable.
 
 ### Degraded mode
 

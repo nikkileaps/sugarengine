@@ -4,10 +4,12 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyTurnToSession,
+  buildRecentReferentPreview,
   buildTurnTopicCoverageContext,
   countPlayerTurns,
   extractConversationTopics,
   extractSalientFacts,
+  getSessionReferentsForNpc,
   loadSessionState,
   resetSessionState,
   sanitizeSessionId,
@@ -112,6 +114,63 @@ describe('session-state', () => {
       expect(npc?.facts).toContain('My name is Nikki');
       expect(npc?.facts.some((fact) => fact.toLowerCase().includes('fire in the mountains'))).toBe(false);
       expect(npc?.events.some((event) => event.type === 'npc_commitment' && event.text.includes('come back tomorrow'))).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists referent candidates and reuses the strongest topic-aligned one on the next turn', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sugaragent-session-state-'));
+    try {
+      const session = loadSessionState('referent-memory', tempDir);
+      applyTurnToSession(
+        session,
+        'npc.baker',
+        'Tell me about Earendale.',
+        'Earendale was founded by Tilda Voss.',
+        {
+          referentCandidates: [
+            {
+              kind: 'location',
+              text: 'Earendale',
+              id: 'locations.earendale',
+              confidence: 0.92,
+              topic: 'earendale',
+              sourceRole: 'lore',
+            },
+            {
+              kind: 'location',
+              text: 'Station',
+              id: 'regions.station',
+              confidence: 0.58,
+              topic: 'station',
+              sourceRole: 'scene',
+            },
+          ],
+          activeTopic: 'earendale',
+        },
+      );
+
+      const reloaded = loadSessionState('referent-memory', tempDir);
+      const referents = getSessionReferentsForNpc(reloaded, 'npc.baker');
+      expect(referents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'location',
+            text: 'Earendale',
+          }),
+        ]),
+      );
+
+      const preview = buildRecentReferentPreview(referents, 'Who founded that town?', {
+        activeTopic: 'earendale',
+      });
+      expect(preview[0]).toEqual(
+        expect.objectContaining({
+          kind: 'location',
+          text: 'Earendale',
+        }),
+      );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

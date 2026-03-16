@@ -13,9 +13,9 @@
 
 import type {
   LanguageAdaptationContext,
-  NpcStateSnapshot,
 } from './turn-contracts';
 import type { SugarAgentTurnOutput } from '../../contracts/turn';
+import type { PluginPedagogyContext } from '../../../../engine/plugins/types';
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -49,6 +49,95 @@ interface SugarAgentPlayerModel {
   targetLanguage?: string;
   estimatedLevel?: string;
   confidence?: number;
+}
+
+function normalizeSupportPolicy(
+  value: unknown,
+): PluginPedagogyContext['supportLanguagePolicy'] | undefined {
+  return value === 'full_support'
+    || value === 'heavy_support'
+    || value === 'light_support'
+    || value === 'target_dominant'
+    || value === 'target_only'
+    ? value
+    : undefined;
+}
+
+function deriveCodeSwitchPolicy(
+  supportLanguagePolicy: PluginPedagogyContext['supportLanguagePolicy'],
+): LanguageAdaptationContext['codeSwitchPolicy'] {
+  if (supportLanguagePolicy === 'full_support' || supportLanguagePolicy === 'heavy_support' || supportLanguagePolicy === 'light_support') {
+    return 'gloss_only';
+  }
+  return 'none';
+}
+
+function deriveBandBounds(
+  learnerBand: string | undefined,
+): Pick<LanguageAdaptationContext, 'maxSentenceLength' | 'maxClauseDepth'> {
+  switch (learnerBand) {
+    case 'B0':
+      return { maxSentenceLength: 8, maxClauseDepth: 1 };
+    case 'B1':
+      return { maxSentenceLength: 10, maxClauseDepth: 1 };
+    case 'B2':
+      return { maxSentenceLength: 12, maxClauseDepth: 2 };
+    case 'B3':
+      return { maxSentenceLength: 16, maxClauseDepth: 2 };
+    case 'B4':
+      return { maxSentenceLength: 22, maxClauseDepth: 3 };
+    default:
+      return {};
+  }
+}
+
+function deriveFocusVocabulary(
+  pedagogyContext: PluginPedagogyContext,
+): string[] | undefined {
+  const groundingScope = Array.isArray(pedagogyContext.groundingScope)
+    ? pedagogyContext.groundingScope
+    : [];
+  const focusIds = new Set(pedagogyContext.teachingSubset?.focusLexicalEntryIds ?? []);
+  const preferredEntries = focusIds.size > 0
+    ? groundingScope.filter((entry) => focusIds.has(entry.lexicalEntryId))
+    : groundingScope;
+  const forms = Array.from(new Set(
+    preferredEntries
+      .map((entry) => entry.targetForm?.trim())
+      .filter((entry): entry is string => Boolean(entry)),
+  ));
+  return forms.length > 0 ? forms.slice(0, 8) : undefined;
+}
+
+export function buildSugarlangLanguageAdaptationContext(
+  pedagogyContext: PluginPedagogyContext | null | undefined,
+): LanguageAdaptationContext | null {
+  if (!pedagogyContext?.targetLanguage) return null;
+
+  const learnerBand = typeof pedagogyContext.learnerBand === 'string'
+    ? pedagogyContext.learnerBand
+    : undefined;
+  const supportLanguagePolicy = normalizeSupportPolicy(pedagogyContext.supportLanguagePolicy);
+  const focusVocabulary = deriveFocusVocabulary(pedagogyContext);
+  const bandBounds = deriveBandBounds(learnerBand);
+
+  return {
+    schemaVersion: 1,
+    source: 'sugarlang',
+    targetLanguage: pedagogyContext.targetLanguage,
+    learnerLevel: learnerBand,
+    cefrBand: learnerBand,
+    codeSwitchPolicy: deriveCodeSwitchPolicy(supportLanguagePolicy),
+    glossBudget: supportLanguagePolicy === 'full_support'
+      ? 3
+      : supportLanguagePolicy === 'heavy_support'
+        ? 2
+        : supportLanguagePolicy === 'light_support'
+          ? 1
+          : 0,
+    focusVocabulary,
+    ...bandBounds,
+  };
 }
 
 export async function resolveLanguageAdaptationContext(

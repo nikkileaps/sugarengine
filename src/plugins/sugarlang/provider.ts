@@ -388,9 +388,19 @@ export function createSugarlangScriptedProvider(
     const scenarioId = config.getScenarioForNpc(npcId, context.npcName);
     if (!scenarioId) return false;
 
-    // If the NPC supports agent mode and the active band prefers agent interaction,
-    // decline so SugarAgentProviderAdapter can handle it instead.
-    if (context.npcInteractionMode === 'agent' || context.npcInteractionMode === 'hybrid') {
+    // Explicit agent mode means SugarAgent owns the turn when that provider exists.
+    // Sugarlang still participates as middleware and contributes pedagogy context.
+    if (context.npcInteractionMode === 'agent' && context.hasAgentProvider) {
+      const bandId = (context.learnerBandOverride ?? 'B0') as LearnerBandId;
+      console.log(
+        `[SL·provider] declining NPC "${npcId}" — band=${bandId} mode=agent, deferring to SugarAgent`,
+      );
+      return false;
+    }
+
+    // Hybrid mode keeps the authored/scripted path unless the active band
+    // explicitly prefers the agent provider.
+    if (context.npcInteractionMode === 'hybrid' && context.hasAgentProvider) {
       const bandId = (context.learnerBandOverride ?? 'B0') as LearnerBandId;
       const targetLang = context.targetLanguage ?? 'es';
       const bandContent = resolveSceneBandContent(contentBundle, scenarioId, targetLang, bandId);

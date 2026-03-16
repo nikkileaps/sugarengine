@@ -145,6 +145,12 @@ export interface PluginAgentTurnDiagnostics {
     routeIntent?: string;
     queryType?: string;
     policyPath?: string;
+    semantic?: {
+      exemplarEnabled?: boolean;
+      exemplarAttempted?: boolean;
+      exemplarChanged?: boolean;
+      degradedReason?: string;
+    };
     interpretation?: {
       lane?: string;
       target?: string;
@@ -154,6 +160,8 @@ export interface PluginAgentTurnDiagnostics {
       confidence?: number;
       margin?: number;
       ambiguous?: boolean;
+      referentCount?: number;
+      topReferent?: string;
     };
   };
   mode?: PluginAgentConversationMode;
@@ -208,10 +216,16 @@ export interface PluginAgentTurnDiagnostics {
     attempted?: boolean;
     candidateCount?: number;
     selectedCount?: number;
+    lexicalCandidateCount?: number;
+    vectorCandidateCount?: number;
+    mergedCandidateCount?: number;
     qualityPath?: string;
     qualityReason?: string;
     qualityGatePassed?: boolean;
     correctiveAttempted?: boolean;
+    embeddingAvailable?: boolean;
+    degradedReason?: string;
+    vectorModelId?: string;
   };
   authoring?: {
     available?: boolean;

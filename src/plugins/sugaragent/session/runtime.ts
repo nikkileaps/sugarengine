@@ -14,6 +14,10 @@ import {
   loadLoreArtifacts,
 } from '../lore/lore-lib';
 import {
+  embedTexts as embedTextsWithLocalRuntime,
+  LOCAL_EMBEDDING_MODEL_ID,
+} from '../runtime/local-embedding-runtime';
+import {
   DEFAULT_MODEL_PROFILE,
   getModelProfile,
 } from '../runtime/model-profiles';
@@ -22,14 +26,17 @@ import {
   isKnowledgeSeekingQueryType,
   refineRouteWithLoreEntityMentions,
   routeIntentToQueryType,
+  routeTurnIntentFromInterpretation,
   routeIntentUsesLore,
   routeTurnIntent,
 } from './core/routing';
 import {
   applyTurnToSession,
+  buildRecentReferentPreview,
   buildTurnTopicCoverageContext,
   countPlayerTurns,
   getSessionFactsForNpc,
+  getSessionReferentsForNpc,
   getSessionTopicCoverageForNpc,
   loadSessionState,
   MAX_HISTORY_ENTRIES,
@@ -62,10 +69,12 @@ import {
   isEvidenceItemRelevantForTurn,
 } from './core/evidence-first-pipeline';
 import {
+  buildSugarlangLanguageAdaptationContext,
   resolveLanguageAdaptationContext,
 } from './core/language-adaptation';
 import {
   buildEvidencePreview,
+  enhanceInterpretationWithFacetSimilarity,
 } from './core/query-interpretation';
 import {
   runGovernedLoreRetrieval,
@@ -100,8 +109,9 @@ import {
   checkSocialResponseForFactualLeakage,
 } from './core/turn-path-routing';
 import type { SugarAgentTurnOutput } from '../contracts/turn';
-import type { QueryType } from './core/routing';
-import type { EvidenceFirstPipelineDiagnostics } from './core/turn-contracts';
+import type { QueryType, RoutingResult } from './core/routing';
+import type { EvidenceFirstPipelineDiagnostics, QueryInterpretation, ReferentPreviewCandidate } from './core/turn-contracts';
+import type { PluginPedagogyContext } from '../../../engine/plugins/types';
 
 type RecordLike = Record<string, any>;
 
@@ -111,6 +121,7 @@ interface SessionRuntime {
   loadModel(modelName?: string): Promise<void>;
   generateJson(request: any): Promise<{ jsonText: string; rawText?: string }>;
   generateStructured(input: any): Promise<{ jsonText: string; rawText?: string }>;
+  embed(texts: string[]): Promise<number[][]>;
 }
 
 interface GenerationDiagnostics {
@@ -255,6 +266,89 @@ function sanitizeRuntimeOutput(text: unknown): string {
   return withoutAnsi.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
+function buildTurnReferentCandidates(input: {
+  playerMessage: string;
+  npcName?: string;
+  activeTopic?: string | null;
+  sceneRegionName?: string;
+  sceneRegionPath?: string;
+  loreEntityHints?: Array<{
+    entityId: string;
+    entityType: 'world' | 'character' | 'faction' | 'unknown';
+    matchedText: string;
+  }>;
+  interpretation?: QueryInterpretation;
+}): ReferentPreviewCandidate[] {
+  const candidates: ReferentPreviewCandidate[] = [];
+  const activeTopic = normalizeOptionalString(input.activeTopic);
+  const npcName = normalizeOptionalString(input.npcName)?.toLowerCase();
+  const explicitNpcMention = npcName ? input.playerMessage.toLowerCase().includes(npcName) : false;
+
+  for (const referent of input.interpretation?.referents ?? []) {
+    if (referent.kind === 'npc' && !explicitNpcMention) continue;
+    candidates.push({
+      kind: referent.kind,
+      text: referent.text,
+      id: referent.id,
+      confidence: referent.confidence,
+      topic: activeTopic ?? referent.text,
+      sourceRole: 'player',
+    });
+  }
+
+  for (const hint of input.loreEntityHints ?? []) {
+    if (hint.entityType === 'unknown') continue;
+    candidates.push({
+      kind: hint.entityType === 'world'
+        ? 'location'
+        : hint.entityType === 'faction'
+          ? 'faction'
+          : 'entity',
+      text: hint.matchedText,
+      id: hint.entityId,
+      confidence: 0.72,
+      topic: activeTopic ?? hint.matchedText,
+      sourceRole: 'lore',
+    });
+  }
+
+  if (activeTopic) {
+    candidates.push({
+      kind: 'topic',
+      text: activeTopic,
+      id: activeTopic,
+      confidence: 0.56,
+      topic: activeTopic,
+      sourceRole: 'memory',
+    });
+  }
+
+  if (/\b(where are we|where am i|where are you|this place|here|there)\b/i.test(input.playerMessage)) {
+    const sceneLocation = normalizeOptionalString(input.sceneRegionName) ?? normalizeOptionalString(input.sceneRegionPath);
+    if (sceneLocation) {
+      candidates.push({
+        kind: 'location',
+        text: sceneLocation,
+        id: sceneLocation,
+        confidence: 0.68,
+        topic: sceneLocation,
+        sourceRole: 'scene',
+      });
+    }
+  }
+
+  const deduped = new Map<string, ReferentPreviewCandidate>();
+  for (const candidate of candidates) {
+    const key = `${candidate.kind}:${candidate.id ?? candidate.text}`.toLowerCase();
+    const existing = deduped.get(key);
+    if (!existing || (candidate.confidence ?? 0) > (existing.confidence ?? 0)) {
+      deduped.set(key, candidate);
+    }
+  }
+
+  return [...deduped.values()].slice(0, 8);
+}
+
 function computeEvidenceBackedRetrievalConfidence(input: RecordLike | null | undefined): number {
   const queryType = input?.queryType;
   const routeIntent = input?.routeIntent;
@@ -308,6 +402,7 @@ function buildValidatedPlanSupportSlots(input: RecordLike | null | undefined) {
 
 function buildPlanBoundReplyPartsPrompt(input: RecordLike | null | undefined): string {
   const safeInput = isRecord(input) ? input : {};
+  const turnContext = isRecord(safeInput.turnContext) ? safeInput.turnContext : null;
   const basePrompt = buildReplyPartsPrompt({
     npcName: safeInput.npcName,
     playerMessage: safeInput.playerMessage,
@@ -343,7 +438,12 @@ function buildPlanBoundReplyPartsPrompt(input: RecordLike | null | undefined): s
   planLines.push('- rumor: use a strong hedge such as "I heard" or "people say"');
   planLines.push('If the validated plan is uncertain, return an uncertain part instead of guessing.');
 
-  return `${basePrompt}\n${planLines.join('\n')}`;
+  return [
+    ...buildLanguageInstructionLines(turnContext),
+    buildPedagogyBlock(turnContext),
+    basePrompt,
+    planLines.join('\n'),
+  ].filter(Boolean).join('\n');
 }
 
 function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): string {
@@ -365,6 +465,7 @@ function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): 
     `You are ${sanitizePromptText(npcName || 'NPC')}, an NPC in a game.`,
     'This is a social fast-path turn. The player is not asking for grounded lore.',
     'Reply naturally and in character. Sound like a person in the world, not a generic assistant.',
+    ...buildLanguageInstructionLines(turnContext),
     'Keep the visible reply concise: 1 to 2 short sentences.',
     'Prefer exactly one social part unless a second social part helps the flow.',
     'Do not use grounded parts.',
@@ -377,6 +478,7 @@ function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): 
     buildGlobalSafetyBlock(safeInput.globalSafetyBounds),
     buildNpcProfileBlock(safeInput.npcProfile),
     buildTurnContextBlock(turnContext),
+    buildPedagogyBlock(turnContext),
     buildMemoryFactBlock(safeInput.memoryFacts),
     buildHistoryBlock(safeInput.history),
     buildReplyPartsPrompt({
@@ -444,6 +546,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
     queryType,
     routeIntent,
     plan,
+    turnContext: safeInput.turnContext,
     supportSlots: allowedSupportSlots,
   });
   const generated = await runtime.generateJson({
@@ -509,12 +612,11 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
   }
 
   const mustCarryKnowledge = planClaims.length > 0 && (speechAct === 'answer' || speechAct === 'recall');
-  const realizedUncertainParts = normalized.parts.filter((part) => part.kind === 'uncertain').length;
-  if (mustCarryKnowledge && realizedKnowledgeParts === 0 && realizedUncertainParts > 0) {
+  if (mustCarryKnowledge && realizedKnowledgeParts === 0) {
     generationDiagnostics.draft.success = false;
-    generationDiagnostics.draft.failureReason = 'reply-parts-regressed-to-uncertain';
+    generationDiagnostics.draft.failureReason = 'reply-parts-missing-knowledge-carry';
     generationDiagnostics.replyParts.success = false;
-    generationDiagnostics.replyParts.failureReason = 'reply-parts-regressed-to-uncertain';
+    generationDiagnostics.replyParts.failureReason = 'reply-parts-missing-knowledge-carry';
     return null;
   }
 
@@ -777,6 +879,105 @@ function buildGlobalSafetyBlock(globalSafetyBounds: unknown): string | null {
   ].join('\n');
 }
 
+function getPedagogyContext(turnContext: unknown): PluginPedagogyContext | null {
+  if (!isRecord(turnContext) || !isRecord(turnContext.pedagogyContext)) return null;
+  return turnContext.pedagogyContext as PluginPedagogyContext;
+}
+
+function buildPedagogyVocabularyList(pedagogyContext: PluginPedagogyContext): string[] {
+  const groundingScope = Array.isArray(pedagogyContext.groundingScope)
+    ? pedagogyContext.groundingScope
+    : [];
+  const focusIds = new Set(pedagogyContext.teachingSubset?.focusLexicalEntryIds ?? []);
+  const preferredEntries = focusIds.size > 0
+    ? groundingScope.filter((entry) => focusIds.has(entry.lexicalEntryId))
+    : groundingScope;
+
+  return Array.from(new Set(
+    preferredEntries
+      .map((entry) => normalizeOptionalString(entry.targetForm))
+      .filter((entry): entry is string => Boolean(entry)),
+  )).slice(0, 8);
+}
+
+function buildLanguageInstructionLines(turnContext: unknown): string[] {
+  const pedagogyContext = getPedagogyContext(turnContext);
+  const targetLanguage = normalizeOptionalString(pedagogyContext?.targetLanguage);
+  const supportLanguage = normalizeOptionalString(pedagogyContext?.supportLanguage);
+  const learnerBand = normalizeOptionalString(pedagogyContext?.learnerBand);
+  const supportPolicy = normalizeOptionalString(pedagogyContext?.supportLanguagePolicy);
+
+  if (!targetLanguage) {
+    return [
+      'Respond in the same language as the player message unless asked to switch languages.',
+      'If the player message is English, respond in English.',
+    ];
+  }
+
+  const lines = [
+    `Sugarlang target language is ${targetLanguage}. Keep the visible reply in ${targetLanguage}.`,
+    learnerBand
+      ? `Match the learner's current Sugarlang band (${learnerBand}). Prefer simple, high-frequency wording for that band.`
+      : 'Prefer simple, learnable target-language wording.',
+    'Do not switch back to the player language just because the player wrote in it.',
+  ];
+
+  if (supportPolicy === 'target_only') {
+    lines.push('Do not include support-language words or translations in the visible reply.');
+  } else if (supportPolicy === 'target_dominant') {
+    lines.push(
+      `Keep the reply overwhelmingly in ${targetLanguage}.` +
+      `${supportLanguage ? ` Use ${supportLanguage} only for a tiny clarification if absolutely necessary.` : ''}`,
+    );
+  } else if (supportPolicy === 'light_support' || supportPolicy === 'heavy_support' || supportPolicy === 'full_support') {
+    lines.push(
+      `${supportLanguage ? `If a gloss is necessary, keep it short and in ${supportLanguage}.` : 'If a gloss is necessary, keep it very short.'}` +
+      ' The target-language reply should still lead.',
+    );
+  }
+
+  return lines;
+}
+
+function buildPedagogyBlock(turnContext: unknown): string | null {
+  const pedagogyContext = getPedagogyContext(turnContext);
+  if (!pedagogyContext) return null;
+
+  const lines: string[] = [];
+  const targetLanguage = normalizeOptionalString(pedagogyContext.targetLanguage);
+  const supportLanguage = normalizeOptionalString(pedagogyContext.supportLanguage);
+  const learnerBand = normalizeOptionalString(pedagogyContext.learnerBand);
+  const supportPolicy = normalizeOptionalString(pedagogyContext.supportLanguagePolicy);
+  const correctionPosture = normalizeOptionalString(pedagogyContext.correctionPosture);
+  const trackedPoolSize = Array.isArray(pedagogyContext.availableTrackedLexicalEntryIds)
+    ? pedagogyContext.availableTrackedLexicalEntryIds.length
+    : 0;
+  const focusVocabulary = buildPedagogyVocabularyList(pedagogyContext);
+
+  if (targetLanguage) lines.push(`- Target language: ${sanitizePromptText(targetLanguage)}`);
+  if (supportLanguage) lines.push(`- Support language: ${sanitizePromptText(supportLanguage)}`);
+  if (learnerBand) lines.push(`- Learner band: ${sanitizePromptText(learnerBand)}`);
+  if (supportPolicy) lines.push(`- Support policy: ${sanitizePromptText(supportPolicy)}`);
+  if (correctionPosture) lines.push(`- Correction posture: ${sanitizePromptText(correctionPosture)}`);
+  if (trackedPoolSize > 0) lines.push(`- Tracked vocabulary pool: ${trackedPoolSize} items`);
+  if (focusVocabulary.length > 0) {
+    lines.push(`- Prefer this target-language vocabulary when natural: ${focusVocabulary.join(', ')}`);
+  }
+  if (pedagogyContext.ambientHaloAllowance) {
+    const halo = pedagogyContext.ambientHaloAllowance;
+    lines.push(
+      '- Ambient vocabulary allowance:' +
+      ` trackedLookahead=${halo.maxTrackedLookahead ?? 0}` +
+      ` untrackedPhrases=${halo.maxUntrackedPhrases ?? 0}` +
+      ` higherBand=${halo.allowHigherBandTracked ? 'yes' : 'no'}` +
+      ` flavor=${halo.allowUntrackedFlavor ? 'yes' : 'no'}`,
+    );
+  }
+
+  if (lines.length === 0) return null;
+  return ['Sugarlang pedagogy context:', ...lines].join('\n');
+}
+
 function tokenizeSnippetText(text: unknown): string[] {
   return sanitizePromptText(text)
     .toLowerCase()
@@ -974,14 +1175,14 @@ function buildLlamaPrompt(input: RecordLike | null | undefined): string {
   const blocks = [
     `You are ${npcName}, an NPC in a game.`,
     'Have a short, natural back-and-forth conversation with the player.',
-    'Respond in the same language as the player message unless asked to switch languages.',
-    'If the player message is English, respond in English.',
+    ...buildLanguageInstructionLines(turnContext),
     'Never repeat the player message verbatim.',
     'Never repeat something you already said in the conversation history.',
     'Keep the total visible reply concise (1-2 sentences).',
     buildGlobalSafetyBlock(globalSafetyBounds),
     buildNpcProfileBlock(npcProfile),
     buildTurnContextBlock(turnContext),
+    buildPedagogyBlock(turnContext),
     buildMemoryFactBlock(memoryFacts),
     buildHistoryBlock(history),
     buildReplyPartsPrompt({
@@ -1088,33 +1289,33 @@ function createMockRuntime(): SessionRuntime {
     const npcName = normalizeOptionalString(input.npcName) ?? 'NPC';
     const playerMessage = normalizeOptionalString(input.playerMessage) ?? '';
     const queryType = normalizeOptionalString(input.turnContext?.queryType) ?? 'conversation';
-    const supportSlots = Array.isArray(input.supportSlots)
-      ? input.supportSlots.filter((entry: unknown) => isRecord(entry) && typeof entry.slotId === 'string' && typeof entry.snippet === 'string')
-      : [];
+  const supportSlots = Array.isArray(input.supportSlots)
+    ? input.supportSlots.filter((entry: unknown) => isRecord(entry) && typeof entry.slotId === 'string' && typeof entry.snippet === 'string')
+    : [];
+
+    if (supportSlots.length > 0) {
+      const selectedSupport = supportSlots[0];
+      return {
+        parts: [
+          {
+            kind: 'grounded',
+            text: sanitizePromptText(selectedSupport.snippet),
+            support: [selectedSupport.slotId],
+          },
+        ],
+        emotion: queryType === 'self_query' ? 'warm' : 'grounded',
+        intent: 'answer',
+        proposedIntents: [],
+        beatEvidence: {
+          coveredFacts: [],
+          uncoveredFacts: [],
+          completionSignal: 'none',
+          confidence: 0,
+        },
+      };
+    }
 
     if (isKnowledgeSeekingQueryType(queryType)) {
-      if (supportSlots.length > 0) {
-        const selectedSupport = supportSlots[0];
-        return {
-          parts: [
-            {
-              kind: 'grounded',
-              text: sanitizePromptText(selectedSupport.snippet),
-              support: [selectedSupport.slotId],
-            },
-          ],
-          emotion: queryType === 'self_query' ? 'warm' : 'grounded',
-          intent: 'answer',
-          proposedIntents: [],
-          beatEvidence: {
-            coveredFacts: [],
-            uncoveredFacts: [],
-            completionSignal: 'none',
-            confidence: 0,
-          },
-        };
-      }
-
       return {
         parts: [
           {
@@ -1184,6 +1385,9 @@ function createMockRuntime(): SessionRuntime {
         kind: 'draft-turn',
         input,
       });
+    },
+    async embed(texts) {
+      return embedTextsWithLocalRuntime(Array.isArray(texts) ? texts : []);
     },
   };
 }
@@ -1290,6 +1494,9 @@ function createLlamaRuntime(args: SessionOptions): SessionRuntime {
         attempt: input.attempt,
       });
     },
+    async embed(texts) {
+      return embedTextsWithLocalRuntime(Array.isArray(texts) ? texts : []);
+    },
   };
 }
 
@@ -1299,6 +1506,7 @@ function defaultPipelineDiagnostics(input: RecordLike | null | undefined): Recor
   const policyPath = safeInput.routing?.policyPath ?? 'safe_chat';
   const queryType = safeInput.queryType ?? routeIntentToQueryType(routeIntent);
   const interpretation = isRecord(safeInput.routing?.interpretation) ? safeInput.routing.interpretation : null;
+  const semantic = isRecord(safeInput.routing?.semantic) ? safeInput.routing.semantic : {};
   const loreMatchCount = Array.isArray(safeInput.loreMatches) ? safeInput.loreMatches.length : 0;
   const retrieval = isRecord(safeInput.retrieval) ? safeInput.retrieval : {};
   const missingGameLoreBundle = safeInput.missingGameLoreBundle === true;
@@ -1341,13 +1549,32 @@ function defaultPipelineDiagnostics(input: RecordLike | null | undefined): Recor
             confidence: Number.isFinite(interpretation.confidence) ? Number(interpretation.confidence) : undefined,
             margin: Number.isFinite(interpretation.margin) ? Number(interpretation.margin) : undefined,
             ambiguous: interpretation.ambiguous === true,
+            referentCount: Array.isArray(interpretation.referents) ? interpretation.referents.length : 0,
+            topReferent: Array.isArray(interpretation.referents) && interpretation.referents[0]
+              ? `${String(interpretation.referents[0].kind)}:${String(interpretation.referents[0].text)}`
+              : undefined,
           }
         : undefined,
+      semantic: {
+        exemplarEnabled: semantic.exemplarEnabled === true,
+        exemplarAttempted: semantic.exemplarAttempted === true,
+        exemplarChanged: semantic.exemplarChanged === true,
+        degradedReason: normalizeOptionalString(semantic.degradedReason),
+      },
     },
     retrieval: {
       attempted: retrievalAttempted,
       candidateCount: retrievalCandidateCount,
       selectedCount: retrievalSelectedCount,
+      lexicalCandidateCount: Number.isFinite(retrieval.lexicalCandidateCount)
+        ? Math.max(0, Math.floor(Number(retrieval.lexicalCandidateCount)))
+        : undefined,
+      vectorCandidateCount: Number.isFinite(retrieval.vectorCandidateCount)
+        ? Math.max(0, Math.floor(Number(retrieval.vectorCandidateCount)))
+        : undefined,
+      mergedCandidateCount: Number.isFinite(retrieval.mergedCandidateCount)
+        ? Math.max(0, Math.floor(Number(retrieval.mergedCandidateCount)))
+        : undefined,
       qualityPath: missingGameLoreBundle
         ? 'error'
         : normalizeOptionalString(retrieval.qualityPath)
@@ -1358,6 +1585,9 @@ function defaultPipelineDiagnostics(input: RecordLike | null | undefined): Recor
           ?? (retrievalAttempted ? (retrievalSelectedCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not_required'),
       qualityGatePassed: retrieval.qualityGatePassed === true,
       correctiveAttempted: retrieval.correctiveAttempted === true,
+      embeddingAvailable: retrieval.embeddingAvailable === true,
+      degradedReason: normalizeOptionalString(retrieval.degradedReason),
+      vectorModelId: normalizeOptionalString(retrieval.vectorModelId),
     },
     initiative: {
       decision: {
@@ -1462,6 +1692,26 @@ function createEchoReply(message: string): SugarAgentTurnOutput {
   };
 }
 
+function didSemanticInterpretationChange(
+  baseRouting: RoutingResult,
+  enhancedRouting: RoutingResult,
+): boolean {
+  const baseInterpretation = isRecord(baseRouting?.interpretation) ? baseRouting.interpretation : null;
+  const enhancedInterpretation = isRecord(enhancedRouting?.interpretation) ? enhancedRouting.interpretation : null;
+  if ((baseRouting?.intent ?? 'unclear') !== (enhancedRouting?.intent ?? 'unclear')) {
+    return true;
+  }
+  if (!baseInterpretation || !enhancedInterpretation) {
+    return false;
+  }
+  return (
+    normalizeOptionalString(baseInterpretation.lane) !== normalizeOptionalString(enhancedInterpretation.lane)
+    || normalizeOptionalString(baseInterpretation.target) !== normalizeOptionalString(enhancedInterpretation.target)
+    || normalizeOptionalString(baseInterpretation.facet) !== normalizeOptionalString(enhancedInterpretation.facet)
+    || normalizeOptionalString(baseInterpretation.timeframe) !== normalizeOptionalString(enhancedInterpretation.timeframe)
+  );
+}
+
 export async function createSugarAgentSession(options: RecordLike = {}) {
   const args = normalizeSessionOptions(options);
   const runtimeMode = resolveRuntimeMode(args);
@@ -1527,6 +1777,13 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         getSessionTopicCoverageForNpc(session, args.npc),
         message,
       ) ?? undefined;
+      const recentReferentPreview = buildRecentReferentPreview(
+        getSessionReferentsForNpc(session, args.npc),
+        message,
+        {
+          activeTopic: topicCoverageContext?.activeTopic ?? null,
+        },
+      );
       const derivedContext = {
         isFirstMeeting: priorPlayerTurns === 0,
         turnIndexWithNpc: priorPlayerTurns + 1,
@@ -1538,6 +1795,12 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
       );
 
       const loreEntityHints = collectLoreEntityRouteMatches(message, loreArtifacts);
+      let semanticDiagnostics = {
+        exemplarEnabled: true,
+        exemplarAttempted: false,
+        exemplarChanged: false,
+        degradedReason: undefined as string | undefined,
+      };
       const interpretationPreview = buildEvidencePreview({
         selfEntityId: npcProfile?.selfEntityId,
         regionName: normalizeOptionalString(turnContext?.regionName),
@@ -1545,11 +1808,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         currentActivity: normalizeOptionalString(turnContext?.currentActivity),
         currentGoal: normalizeOptionalString(turnContext?.currentGoal),
         activeTopic: topicCoverageContext?.activeTopic ?? undefined,
-        recentReferents: loreEntityHints.slice(0, 2).map((entry) => ({
-          kind: entry.entityType === 'world' ? 'location' : entry.entityType === 'character' ? 'topic' : 'topic',
-          text: entry.matchedText,
-          id: entry.entityId,
-        })),
+        recentReferents: recentReferentPreview,
         loreScopes: normalizeStringArray(npcProfile?.loreScopes),
         selfLoreScopes: normalizeStringArray(npcProfile?.selfLoreScopes),
         relatedLoreScopes: normalizeStringArray(npcProfile?.relatedLoreScopes),
@@ -1561,7 +1820,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
           .map((entry) => entry.entityId),
         tagHints: loreEntityHints.map((entry) => entry.matchedText),
       });
-      const routing = routeTurnIntent(message, npcName, {
+      const baseRouting = routeTurnIntent(message, npcName, {
         history,
         scene: {
           regionName: normalizeOptionalString(turnContext?.regionName),
@@ -1572,8 +1831,31 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         loreEntityHints,
         evidencePreview: interpretationPreview,
       });
+      let embeddingDegradedReason: string | null = null;
+      let interpretedRouting = baseRouting;
+      // Phase B closed with exemplar-assisted interpretation as the default
+      // semantic path. Degraded lexical-only scoring is fallback behavior only
+      // when embeddings fail or are unavailable; it is not an alternate main
+      // path and should stay observable in logs/diagnostics.
+      if (baseRouting.interpretation) {
+        semanticDiagnostics.exemplarAttempted = true;
+        try {
+          const enhancedRouting = routeTurnIntentFromInterpretation(
+            message,
+            await enhanceInterpretationWithFacetSimilarity({
+              interpretation: baseRouting.interpretation,
+              embedTexts: (texts) => runtime.embed(texts),
+            }),
+          );
+          semanticDiagnostics.exemplarChanged = didSemanticInterpretationChange(baseRouting, enhancedRouting);
+          interpretedRouting = enhancedRouting;
+        } catch (error) {
+          embeddingDegradedReason = error instanceof Error ? error.message : String(error);
+          semanticDiagnostics.degradedReason = embeddingDegradedReason;
+        }
+      }
       const routingRefinement = refineRouteWithLoreEntityMentions({
-        route: routing,
+        route: interpretedRouting,
         playerMessage: message,
         loreArtifacts,
       });
@@ -1597,7 +1879,18 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         const output = createEchoReply(message);
         generationDiagnostics.draft.skippedReason = 'echo_provider';
         generationDiagnostics.replyParts.skippedReason = 'echo_provider';
-        applyTurnToSession(session, args.npc, message, output.utterance);
+        applyTurnToSession(session, args.npc, message, output.utterance, {
+          referentCandidates: buildTurnReferentCandidates({
+            playerMessage: message,
+            npcName,
+            activeTopic: topicCoverageContext?.activeTopic ?? null,
+            sceneRegionName: normalizeOptionalString(turnContext?.regionName),
+            sceneRegionPath: normalizeOptionalString(turnContext?.regionPath),
+            loreEntityHints,
+            interpretation: resolvedRouting.interpretation,
+          }),
+          activeTopic: topicCoverageContext?.activeTopic ?? null,
+        });
         return {
           output,
           attempts: 1,
@@ -1606,10 +1899,20 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
           loreMatches: [],
           routing: resolvedRouting,
           pipeline: defaultPipelineDiagnostics({
-            routing: resolvedRouting,
+            routing: {
+              ...resolvedRouting,
+              semantic: semanticDiagnostics,
+            },
             queryType,
             loreMatches: [],
             retrievalAttempted: false,
+            retrieval: embeddingDegradedReason
+              ? {
+                  embeddingAvailable: false,
+                  degradedReason: embeddingDegradedReason,
+                  vectorModelId: LOCAL_EMBEDDING_MODEL_ID,
+                }
+              : undefined,
             missingGameLoreBundle: args.missingGameLoreBundle === true,
             usedFallback: false,
             validationErrors: [],
@@ -1632,10 +1935,14 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
       const requireScopes = args.requireLoreScopeForRetrieval === true;
       const canRetrieveLore = Boolean(loreArtifacts);
       const shouldAttemptLoreRetrieval = canRetrieveLore
-        && (isKnowledgeSeekingQueryType(queryType) || routeIntentUsesLore(resolvedRouting.intent))
+        && (
+          isKnowledgeSeekingQueryType(queryType)
+          || routeIntentUsesLore(resolvedRouting.intent)
+          || resolvedRouting.interpretation?.lane === 'knowledge'
+        )
         && (!requireScopes || hasScopes);
 
-      const governedRetrieval = runGovernedLoreRetrieval({
+      const governedRetrieval = await runGovernedLoreRetrieval({
         loreArtifacts,
         canRetrieveLore,
         shouldAttemptLoreRetrieval,
@@ -1652,15 +1959,17 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         hasBeatContract: Boolean(turnOptionsRecord.beatContract),
         rerankCache: undefined,
         artifactVersion: undefined,
-        modelVersion: undefined,
+        modelVersion: LOCAL_EMBEDDING_MODEL_ID,
         rerankerClass: 'lexical',
         retrievalFilters: routingRefinement.retrievalFilters,
+        embedTexts: (texts) => runtime.embed(texts),
       });
       const retrieval = {
         attempted: governedRetrieval.governance.attempted,
         matches: governedRetrieval.loreMatches,
         quality: governedRetrieval.retrievalQuality,
         governance: governedRetrieval.governance,
+        embeddingDegradedReason,
       };
       const groundingEvidenceEntries = buildGroundingEvidenceEntries({
         loreMatches: retrieval.matches,
@@ -1756,8 +2065,10 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         isFirstMeeting: derivedContext.isFirstMeeting,
       });
 
-      // Resolve language adaptation context (context gathering only)
-      const adaptationContext = await resolveLanguageAdaptationContext(null, null);
+      // Resolve language adaptation context from Sugarlang pedagogy first,
+      // then fall back to any SugarAgent-local language model if present.
+      const adaptationContext = buildSugarlangLanguageAdaptationContext(getPedagogyContext(turnContext))
+        ?? await resolveLanguageAdaptationContext(null, null);
       snapshot.languageAdaptation = adaptationContext;
 
       // Run the evidence-first pipeline
@@ -1802,6 +2113,7 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
           evidenceEntries: groundingEvidenceEntries,
           selfEntityId: npcProfile.selfEntityId,
           npcId: args.npc,
+          turnContext,
           generationDiagnostics,
         });
 
@@ -1863,9 +2175,20 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
         ...filterMemoryWrites({ plan: acceptedPlan }),
         ...extractNpcCommitments(efOutput.utterance, acceptedPlan),
       ];
+      const persistedReferentCandidates = buildTurnReferentCandidates({
+        playerMessage: message,
+        npcName,
+        activeTopic: topicCoverageContext?.activeTopic ?? null,
+        sceneRegionName: normalizeOptionalString(turnContext?.regionName),
+        sceneRegionPath: normalizeOptionalString(turnContext?.regionPath),
+        loreEntityHints,
+        interpretation: resolvedRouting.interpretation,
+      });
 
       applyTurnToSession(session, args.npc, message, efOutput.utterance, {
         memoryWrites: persistedMemoryWrites,
+        referentCandidates: persistedReferentCandidates,
+        activeTopic: topicCoverageContext?.activeTopic ?? null,
       });
 
       validationErrors.sort();
@@ -1873,17 +2196,26 @@ export async function createSugarAgentSession(options: RecordLike = {}) {
       const usedFallback = efResult.diagnostics.deterministicFallbackUsed === true || efPlanAcceptable === false;
 
       const pipeline = defaultPipelineDiagnostics({
-        routing: resolvedRouting,
+        routing: {
+          ...resolvedRouting,
+          semantic: semanticDiagnostics,
+        },
         queryType,
         loreMatches: retrieval.matches,
         retrieval: {
           attempted: retrieval.attempted,
           candidateCount: retrieval.governance.candidateCount,
           selectedCount: retrieval.governance.selectedCount,
+          lexicalCandidateCount: retrieval.governance.lexicalCandidateCount,
+          vectorCandidateCount: retrieval.governance.vectorCandidateCount,
+          mergedCandidateCount: retrieval.governance.mergedCandidateCount,
           qualityPath: retrieval.governance.qualityPath,
           qualityReason: retrieval.governance.qualityReason,
           qualityGatePassed: retrieval.governance.qualityGatePassed,
           correctiveAttempted: retrieval.governance.correctiveAttempted,
+          embeddingAvailable: retrieval.governance.embeddingAvailable,
+          degradedReason: retrieval.governance.degradedReason ?? retrieval.embeddingDegradedReason ?? undefined,
+          vectorModelId: LOCAL_EMBEDDING_MODEL_ID,
         },
         retrievalAttempted: retrieval.attempted,
         missingGameLoreBundle: args.missingGameLoreBundle === true,
