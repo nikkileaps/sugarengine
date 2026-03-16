@@ -33,7 +33,7 @@ import {
   extractDeclaredIdentityName,
   isLikelyGreetingOnlyMessage,
 } from './turn-quality';
-import { detectSocialAcknowledgement } from './social-cues';
+import { detectSocialAcknowledgement, isLikelySmallTalkQuery } from './social-cues';
 import {
   localizeGroundedUncertaintyReply,
   localizeSimpleSocialReply,
@@ -383,6 +383,7 @@ function buildDeterministicSocialReply(
   const asksIdentity = shouldAnswerWithNpcName(message);
   const frustration = /\b(i was pretty clear|i was clear|that was clear|pretty clear|be serious|come on)\b/i.test(message);
   const acknowledgement = detectSocialAcknowledgement(message, targetLanguage);
+  const smallTalkQuery = isLikelySmallTalkQuery(message, targetLanguage);
 
   if (frustration) {
     return {
@@ -433,6 +434,16 @@ function buildDeterministicSocialReply(
   if (isLikelyGreetingOnlyMessage(message, targetLanguage)) {
     return {
       utterance: localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName }),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (smallTalkQuery) {
+    return {
+      utterance: localizeSimpleSocialReply('status_good_and_you', targetLanguage),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -1102,6 +1113,12 @@ export function runEvidenceFirstPipeline(
       hasLoreEntityMention: turnRouting.factualRiskSignals.includes('lore_entity_mention'),
       hasFactualClausePattern: turnRouting.factualRiskSignals.includes('factual_clause_pattern'),
       hasRouteConflict: turnRouting.factualRiskSignals.includes('route_conflict'),
+    },
+    pathDecision: {
+      semanticSocialProtected: turnRouting.semanticSocialProtected === true,
+      heuristicFallbackUsed: turnRouting.heuristicFallbackUsed === true,
+      heuristicFallbackReason: turnRouting.heuristicFallbackReason,
+      suppressedRiskSignals: turnRouting.suppressedRiskSignals,
     },
     deliveryLanguageContextApplied: false,
     deterministicFallbackUsed: false,

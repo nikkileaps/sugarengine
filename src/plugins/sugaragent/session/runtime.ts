@@ -110,6 +110,9 @@ import {
   hasLikelyQuestionForm,
 } from './core/routing';
 import {
+  isLikelySmallTalkQuery,
+} from './core/social-cues';
+import {
   computeNoveltyState,
 } from './core/turn-planning';
 import {
@@ -1447,6 +1450,7 @@ function buildMockSocialReplyParts(requestInput: unknown) {
   const targetLanguage = normalizeOptionalString(getPedagogyContext(input.turnContext)?.targetLanguage);
   const declaredName = extractDeclaredIdentityName(playerMessage, targetLanguage);
   const acknowledgement = detectSocialAcknowledgement(playerMessage, targetLanguage);
+  const smallTalkQuery = isLikelySmallTalkQuery(playerMessage, targetLanguage);
 
   let text = localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName });
   if (declaredName) {
@@ -1455,6 +1459,8 @@ function buildMockSocialReplyParts(requestInput: unknown) {
       npcName,
       playerName: safeName,
     });
+  } else if (smallTalkQuery) {
+    text = localizeSimpleSocialReply('status_good_and_you', targetLanguage);
   } else if (acknowledgement === 'gratitude') {
     text = localizeSimpleSocialReply('any_time', targetLanguage);
   } else if (acknowledgement === 'shared_preference') {

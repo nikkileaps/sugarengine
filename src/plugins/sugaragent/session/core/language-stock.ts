@@ -113,6 +113,7 @@ export function localizeSimpleSocialReply(
   key:
     | 'hi_im_npc'
     | 'nice_to_meet_you'
+    | 'status_good_and_you'
     | 'any_time'
     | 'shared_preference'
     | 'shared_preference_cheese'
@@ -133,6 +134,7 @@ export function localizeSimpleSocialReply(
     switch (key) {
       case 'hi_im_npc': return `Hola. Soy ${npcName}.`;
       case 'nice_to_meet_you': return `Mucho gusto, ${playerName}. Soy ${npcName}.`;
+      case 'status_good_and_you': return 'Estoy bien. Y tu?';
       case 'any_time': return 'De nada.';
       case 'shared_preference': return 'A mi tambien.';
       case 'shared_preference_cheese': return 'A mi tambien. El queso siempre gana.';
@@ -149,6 +151,7 @@ export function localizeSimpleSocialReply(
     switch (key) {
       case 'hi_im_npc': return `Bonjour. Je suis ${npcName}.`;
       case 'nice_to_meet_you': return `Ravi de te rencontrer, ${playerName}. Je suis ${npcName}.`;
+      case 'status_good_and_you': return 'Je vais bien. Et toi ?';
       case 'any_time': return 'Avec plaisir.';
       case 'shared_preference': return 'Moi aussi.';
       case 'shared_preference_cheese': return 'Moi aussi. Le fromage gagne toujours.';
@@ -165,6 +168,7 @@ export function localizeSimpleSocialReply(
     switch (key) {
       case 'hi_im_npc': return `Hallo. Ich bin ${npcName}.`;
       case 'nice_to_meet_you': return `Freut mich, ${playerName}. Ich bin ${npcName}.`;
+      case 'status_good_and_you': return 'Mir geht es gut. Und dir?';
       case 'any_time': return 'Gern geschehen.';
       case 'shared_preference': return 'Ich auch.';
       case 'shared_preference_cheese': return 'Ich auch. Kaese ist schwer zu schlagen.';
@@ -181,6 +185,7 @@ export function localizeSimpleSocialReply(
     switch (key) {
       case 'hi_im_npc': return `Ciao. Sono ${npcName}.`;
       case 'nice_to_meet_you': return `Piacere, ${playerName}. Sono ${npcName}.`;
+      case 'status_good_and_you': return 'Sto bene. E tu?';
       case 'any_time': return 'Di niente.';
       case 'shared_preference': return 'Anche io.';
       case 'shared_preference_cheese': return 'Anche io. Il formaggio vince sempre.';
@@ -197,6 +202,7 @@ export function localizeSimpleSocialReply(
     switch (key) {
       case 'hi_im_npc': return `Ola. Eu sou ${npcName}.`;
       case 'nice_to_meet_you': return `Prazer, ${playerName}. Eu sou ${npcName}.`;
+      case 'status_good_and_you': return 'Estou bem. E voce?';
       case 'any_time': return 'De nada.';
       case 'shared_preference': return 'Eu tambem.';
       case 'shared_preference_cheese': return 'Eu tambem. Queijo e dificil de superar.';
@@ -212,6 +218,7 @@ export function localizeSimpleSocialReply(
   switch (key) {
     case 'hi_im_npc': return `Hi. I'm ${npcName}.`;
     case 'nice_to_meet_you': return `Nice to meet you, ${playerName}. I'm ${npcName}.`;
+    case 'status_good_and_you': return "I'm doing well. And you?";
     case 'any_time': return 'Any time.';
     case 'shared_preference': return 'You and me both.';
     case 'shared_preference_cheese': return 'You and me both. Cheese is hard to beat.';

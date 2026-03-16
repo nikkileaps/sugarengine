@@ -69,9 +69,29 @@ export function resolveTurnPath(
   loreEntityIds?: string[],
 ): TurnRoutingDecision {
   const signals = collectTurnRiskSignals(playerMessage, snapshot, loreEntityIds);
+  const interpretation = route.interpretation;
+  const semanticSocialProtected = (
+    route.intent === 'social_chat'
+    && interpretation?.lane === 'social'
+    && interpretation.ambiguous === false
+    && route.confidence >= 0.64
+    && route.margin >= 0.12
+  );
 
   // Route conflict: ambiguous routing or low confidence
   signals.hasRouteConflict = route.confidence < 0.48 || route.margin < 0.12;
+
+  const suppressedRiskSignals: string[] = [];
+  if (semanticSocialProtected) {
+    if (signals.hasKnowledgeWhCue) {
+      signals.hasKnowledgeWhCue = false;
+      suppressedRiskSignals.push('knowledge_wh_cue');
+    }
+    if (signals.hasFactualClausePattern) {
+      signals.hasFactualClausePattern = false;
+      suppressedRiskSignals.push('factual_clause_pattern');
+    }
+  }
 
   const socialFastPathEligible =
     route.intent === 'social_chat' &&
@@ -88,12 +108,41 @@ export function resolveTurnPath(
   if (signals.hasFactualClausePattern) activeSignals.push('factual_clause_pattern');
   if (signals.hasRouteConflict) activeSignals.push('route_conflict');
 
+  const heuristicFallbackUsed = (
+    route.intent === 'social_chat'
+    && !socialFastPathEligible
+    && !semanticSocialProtected
+    && activeSignals.some((signal) =>
+      signal === 'knowledge_wh_cue'
+      || signal === 'factual_clause_pattern'
+      || signal === 'recall_cue'
+      || signal === 'lore_entity_mention'
+      || signal === 'route_conflict')
+  );
+  const heuristicFallbackReason = heuristicFallbackUsed
+    ? `grounded path forced by heuristic risk signals: ${activeSignals.join(', ')}`
+    : undefined;
+
+  if (heuristicFallbackUsed) {
+    console.warn('[sugaragent][turn-path] heuristic fallback forced grounded path for social turn', {
+      routeIntent: route.intent,
+      confidence: route.confidence,
+      margin: route.margin,
+      activeSignals,
+      playerMessage,
+    });
+  }
+
   return {
     routeIntent: route.intent,
     path: socialFastPathEligible ? 'social_fast' : 'grounded',
     socialFastPathEligible,
     routeConfidence: route.confidence,
     factualRiskSignals: activeSignals,
+    semanticSocialProtected,
+    heuristicFallbackUsed,
+    heuristicFallbackReason,
+    suppressedRiskSignals,
   };
 }
 

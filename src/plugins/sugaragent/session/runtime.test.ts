@@ -203,6 +203,46 @@ describe('session runtime social fast path', () => {
     expect(result.routing.intent).toBe('social_chat');
   });
 
+  it('keeps english small-talk questions on the social fast path when the target language is Italian', async () => {
+    const sessionId = makeSessionId('italian-small-talk');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'station-clerk',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('How are you today?', {
+      npcName: 'Station Clerk',
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'it',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'full_support',
+          deliveryContract: {
+            detailLevel: 'minimal',
+            maxKnowledgeClaims: 1,
+            maxKnowledgeParts: 1,
+            maxSentences: 1,
+            maxSentenceLength: 8,
+            maxClauseDepth: 1,
+            allowExactNumbers: false,
+            allowEnrichmentFacts: false,
+            preferConcreteFacts: true,
+            preferHighFrequencyLexicon: true,
+          },
+        },
+      },
+    });
+
+    expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+    expect(result.routing.intent).toBe('social_chat');
+    expect(result.output.utterance).toBe('Sto bene. E tu?');
+  });
+
   it('recognizes Spanish self-introductions on the social fast path', async () => {
     const sessionId = makeSessionId('spanish-intro');
     createdSessionIds.add(sessionId);

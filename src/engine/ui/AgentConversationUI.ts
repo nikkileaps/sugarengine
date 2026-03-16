@@ -33,6 +33,7 @@ export class AgentConversationUI {
   private activeSession: AgentConversationSessionView | null = null;
   private resetting = false;
   private visible = false;
+  private typingIndicatorEl: HTMLDivElement | null = null;
 
   constructor(parent: HTMLElement) {
     this.injectStyles();
@@ -223,6 +224,41 @@ export class AgentConversationUI {
         font-size: 12px;
       }
 
+      .agent-chat-line.typing {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 20px;
+      }
+
+      .agent-chat-typing-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.28;
+        animation: agent-chat-typing-bounce 1.1s ease-in-out infinite;
+      }
+
+      .agent-chat-typing-dot:nth-child(2) {
+        animation-delay: 0.16s;
+      }
+
+      .agent-chat-typing-dot:nth-child(3) {
+        animation-delay: 0.32s;
+      }
+
+      @keyframes agent-chat-typing-bounce {
+        0%, 80%, 100% {
+          opacity: 0.28;
+          transform: translateY(0);
+        }
+        40% {
+          opacity: 1;
+          transform: translateY(-2px);
+        }
+      }
+
       .agent-chat-form {
         border-top: 1px solid rgba(180, 160, 140, 0.2);
         padding: 10px;
@@ -276,6 +312,30 @@ export class AgentConversationUI {
     this.historyEl.scrollTop = this.historyEl.scrollHeight;
   }
 
+  private showTypingIndicator(): void {
+    this.removeTypingIndicator();
+
+    const line = document.createElement('div');
+    line.className = 'agent-chat-line npc typing';
+    line.setAttribute('aria-label', 'NPC is typing');
+
+    for (let i = 0; i < 3; i += 1) {
+      const dot = document.createElement('span');
+      dot.className = 'agent-chat-typing-dot';
+      line.appendChild(dot);
+    }
+
+    this.historyEl.appendChild(line);
+    this.historyEl.scrollTop = this.historyEl.scrollHeight;
+    this.typingIndicatorEl = line;
+  }
+
+  private removeTypingIndicator(): void {
+    if (!this.typingIndicatorEl) return;
+    this.typingIndicatorEl.remove();
+    this.typingIndicatorEl = null;
+  }
+
   private async submit(): Promise<void> {
     if (!this.submitHandler || this.resetting) return;
 
@@ -287,11 +347,14 @@ export class AgentConversationUI {
 
     this.inputEl.disabled = true;
     this.sendEl.disabled = true;
+    this.showTypingIndicator();
 
     try {
       const result = await this.submitHandler(message);
+      this.removeTypingIndicator();
       this.addLine('npc', result.utterance);
     } catch (error) {
+      this.removeTypingIndicator();
       const messageText = error instanceof Error ? error.message : 'Conversation failed.';
       this.addLine('system', messageText);
     } finally {
@@ -306,6 +369,7 @@ export class AgentConversationUI {
     const displayName = session.npcName?.trim() || session.npcId;
     this.titleEl.textContent = `Talking to ${displayName}`;
     this.historyEl.innerHTML = '';
+    this.typingIndicatorEl = null;
     this.addLine('system', 'Conversation started. Type your message.');
     this.container.classList.add('visible');
     this.visible = true;
@@ -318,6 +382,7 @@ export class AgentConversationUI {
     this.visible = false;
     InputManager.getInstance()?.popContext('agentConversation');
     this.activeSession = null;
+    this.removeTypingIndicator();
     this.historyEl.innerHTML = '';
     this.inputEl.value = '';
   }
@@ -349,9 +414,11 @@ export class AgentConversationUI {
 
     try {
       const result = await this.resetHandler({ ...this.activeSession });
+      this.removeTypingIndicator();
       this.historyEl.innerHTML = '';
       this.addLine('system', result?.detail ?? 'Conversation memory reset. Type your message.');
     } catch (error) {
+      this.removeTypingIndicator();
       const messageText = error instanceof Error ? error.message : 'Could not reset conversation memory.';
       this.addLine('system', messageText);
     } finally {

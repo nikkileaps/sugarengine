@@ -75,6 +75,10 @@ export interface TurnRoutingDecision {
   socialFastPathEligible: boolean;
   routeConfidence: number;
   factualRiskSignals: string[];
+  semanticSocialProtected?: boolean;
+  heuristicFallbackUsed?: boolean;
+  heuristicFallbackReason?: string;
+  suppressedRiskSignals?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +358,12 @@ export interface EvidenceFirstPipelineDiagnostics {
   pipelineVersion: 'evidence_first_v1';
   turnPath: TurnPath;
   riskSignals: TurnRiskSignals;
+  pathDecision?: {
+    semanticSocialProtected: boolean;
+    heuristicFallbackUsed: boolean;
+    heuristicFallbackReason?: string;
+    suppressedRiskSignals?: string[];
+  };
   retrievalRun?: RetrievalRun;
   planOutcome?: {
     speechAct: PlanSpeechAct;
