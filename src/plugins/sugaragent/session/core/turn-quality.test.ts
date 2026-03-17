@@ -54,4 +54,37 @@ describe('turn-quality', () => {
       expect(quality.reason).toContain('player-attribution claim is not grounded');
     }
   });
+
+  it('rejects generic assistant filler on social turns', () => {
+    const quality = validateTurnQuality(
+      { utterance: "Got it. Tell me a little more and I'll help where I can." },
+      'hello',
+      [],
+      [],
+      { routingIntent: 'social_chat', queryType: 'conversation' },
+    );
+    expect(quality.valid).toBe(false);
+    if (!quality.valid) {
+      expect(quality.reason).toContain('generic assistant filler');
+    }
+  });
+
+  it('rejects social replies that confuse a destination with the current location', () => {
+    const quality = validateTurnQuality(
+      { utterance: 'Welcome to the resort.' },
+      "I'm headed to the resort to start a new apprenticeship.",
+      [],
+      [],
+      {
+        routingIntent: 'social_chat',
+        queryType: 'conversation',
+        regionName: 'Station',
+        regionPath: 'regions.station',
+      },
+    );
+    expect(quality.valid).toBe(false);
+    if (!quality.valid) {
+      expect(quality.reason).toContain('authoritative current location');
+    }
+  });
 });

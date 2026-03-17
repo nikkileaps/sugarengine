@@ -9,6 +9,11 @@ import {
   readActiveGameSelectionSync,
   writeActiveGameSelection,
 } from './scripts/lib/active-game.mjs';
+import {
+  embedTexts as embedTextsWithLocalRuntime,
+  getLocalEmbeddingRuntimeHealth,
+  LOCAL_EMBEDDING_MODEL_ID,
+} from './src/plugins/sugaragent/runtime/local-embedding-runtime';
 
 export default defineConfig({
   plugins: [
@@ -17,7 +22,6 @@ export default defineConfig({
       name: 'sugarengine-active-game-sync',
       configureServer(server) {
         const projectRoot = process.cwd();
-        const defaultAuthoringBundlePath = resolve(projectRoot, 'public', 'plugins', 'sugaragent', 'authoring.bundle.json');
         const defaultLoreDir = resolve(projectRoot, 'src', 'plugins', 'sugaragent', 'lore', 'generated');
         const sessionCache = new Map<string, Promise<{
           runTurn: (
@@ -31,13 +35,24 @@ export default defineConfig({
           ) => Promise<{
             output: Record<string, unknown>;
             usedFallback?: boolean;
+            fallbackKind?: string;
             validationErrors?: string[];
             routing?: Record<string, unknown>;
             pipeline?: Record<string, unknown>;
             grounding?: Record<string, unknown>;
             loreMatches?: Array<Record<string, unknown>>;
           }>;
-          startup?: { runtime?: { health?: { detail?: string } } };
+          startup?: {
+            runtime?: { health?: { detail?: string } };
+            lore?: {
+              loaded?: boolean;
+              dir?: string;
+            };
+            session?: {
+              loaded?: boolean;
+              pathToFile?: string;
+            };
+          };
         }>>();
         const registeredGameRoots = new Map<string, string>();
         const loreResolutionWarnings = new Set<string>();
@@ -65,6 +80,10 @@ export default defineConfig({
 
         const resolveGameRootPaths = (rootPath: string) => {
           const normalizedRoot = resolveAbsoluteInputPath(rootPath);
+          // Keep preview diagnostics aligned with the session runtime contract.
+          // This bridge must forward Phase B semantic/vector fields instead of
+          // collapsing them back to the older phase-A subset, or the browser
+          // console will falsely suggest the new paths are inactive.
           return {
             rootPath: normalizedRoot,
             projectFilePath: join(normalizedRoot, 'project.sgrgame'),
@@ -307,11 +326,13 @@ export default defineConfig({
         const buildTurnDiagnostics = (
           result: {
             usedFallback?: boolean;
+            fallbackKind?: string;
             validationErrors?: string[];
             routing?: Record<string, unknown>;
             pipeline?: Record<string, unknown>;
             grounding?: Record<string, unknown>;
             loreMatches?: Array<Record<string, unknown>>;
+            authoring?: Record<string, unknown>;
           },
           requestContext: Record<string, unknown>,
         ): Record<string, unknown> => {
@@ -411,6 +432,7 @@ export default defineConfig({
           const topicCoverageTrackedCount = toFiniteNumber(topicCoverageInput.trackedTopicCount);
           const topicCoverageExhausted = topicCoverageInput.topicExhausted === true || topicCoverageInput.exhausted === true;
           const routeIntent = normalizeOptionalString(pipeline.routeIntent) ?? normalizeOptionalString(routing.intent);
+          const queryType = normalizeOptionalString(pipeline.queryType);
           const policyPath = normalizeOptionalString(pipeline.policyPath) ?? normalizeOptionalString(routing.policyPath);
 
           const evidenceFacts = toFiniteNumber(pipelineEvidenceBudgetUsage.facts)
@@ -438,19 +460,33 @@ export default defineConfig({
             || routeIntent === 'lore_world'
             || routeIntent === 'lore_other'
             || routeIntent === 'mixed_knowledge';
+          const fallbackKind = normalizeOptionalString(result.fallbackKind);
+          const providerStyleFallback = fallbackKind === 'provider_unavailable' || fallbackKind === 'validation_fallback';
           const fallbackReason = normalizeOptionalString(pipeline.fallbackReason);
           const retrievalQualityReason = normalizeOptionalString(retrievalQuality.reason);
           const retrievalQualityPath = normalizeOptionalString(pipelineRetrieval.qualityPath) ?? (!retrievalAttempted
             ? 'not_required'
-            : result.usedFallback
+            : providerStyleFallback
               ? 'fallback'
               : loreMatchCount > 0
                 ? 'single_pass'
                 : 'abstain');
+          const retrievalQualityGatePassed = pipelineRetrieval.qualityGatePassed === true;
           const validationDecision = normalizeOptionalString(groundingSummary.decision)
             ?? (result.usedFallback ? 'fallback' : (validationErrors.length > 0 ? 'repair' : 'accept'));
 
           return {
+            routing: {
+              routeIntent: routeIntent ?? undefined,
+              queryType: queryType ?? undefined,
+              policyPath: policyPath ?? undefined,
+              semantic: (typeof pipeline.routing === 'object' && pipeline.routing !== null && typeof (pipeline.routing as Record<string, unknown>).semantic === 'object' && (pipeline.routing as Record<string, unknown>).semantic !== null)
+                ? (pipeline.routing as Record<string, unknown>).semantic as Record<string, unknown>
+                : undefined,
+              interpretation: (typeof pipeline.routing === 'object' && pipeline.routing !== null && typeof (pipeline.routing as Record<string, unknown>).interpretation === 'object' && (pipeline.routing as Record<string, unknown>).interpretation !== null)
+                ? (pipeline.routing as Record<string, unknown>).interpretation as Record<string, unknown>
+                : undefined,
+            },
             mode,
             modeReason,
             modeResolution: {
@@ -519,12 +555,21 @@ export default defineConfig({
               attempted: retrievalAttempted,
               candidateCount: toFiniteNumber(pipelineRetrieval.candidateCount) ?? loreMatchCount,
               selectedCount: toFiniteNumber(pipelineRetrieval.selectedCount) ?? loreMatchCount,
+              lexicalCandidateCount: toFiniteNumber(pipelineRetrieval.lexicalCandidateCount) ?? undefined,
+              vectorCandidateCount: toFiniteNumber(pipelineRetrieval.vectorCandidateCount) ?? undefined,
+              mergedCandidateCount: toFiniteNumber(pipelineRetrieval.mergedCandidateCount) ?? undefined,
               qualityPath: retrievalQualityPath,
-              qualityReason: fallbackReason
-                ?? normalizeOptionalString(pipelineRetrieval.qualityReason)
-                ?? retrievalQualityReason
-                ?? (retrievalAttempted ? (loreMatchCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not-required'),
+              qualityReason: providerStyleFallback
+                ? (fallbackReason ?? fallbackKind ?? 'provider-fallback')
+                : normalizeOptionalString(pipelineRetrieval.qualityReason)
+                  ?? retrievalQualityReason
+                  ?? fallbackReason
+                  ?? (retrievalAttempted ? (loreMatchCount > 0 ? 'lore-selected' : 'no-lore-selected') : 'not-required'),
+              qualityGatePassed: retrievalQualityGatePassed,
               correctiveAttempted: pipelineRetrieval.correctiveAttempted === true,
+              embeddingAvailable: pipelineRetrieval.embeddingAvailable === true,
+              degradedReason: normalizeOptionalString(pipelineRetrieval.degradedReason) ?? undefined,
+              vectorModelId: normalizeOptionalString(pipelineRetrieval.vectorModelId) ?? undefined,
             },
             validation: {
               decision: validationDecision,
@@ -569,6 +614,54 @@ export default defineConfig({
 
         const buildPreviewSessionId = (slug: string, npcId: string): string => {
           return sanitizeSessionId(`preview-${slug || 'default'}-${npcId}`);
+        };
+
+        const shouldRebuildCachedSugarAgentSession = (
+          session: {
+            startup?: {
+              lore?: {
+                loaded?: boolean;
+                dir?: string;
+              };
+              session?: {
+                loaded?: boolean;
+                pathToFile?: string;
+              };
+            };
+          } | null | undefined,
+          loreConfig: {
+            loreDir: string;
+            useLore: boolean;
+          },
+        ): boolean => {
+          if (!session || typeof session !== 'object') return true;
+          const cachedLore = typeof session.startup?.lore === 'object' && session.startup.lore !== null
+            ? session.startup.lore
+            : {};
+          const cachedSession = typeof session.startup?.session === 'object' && session.startup.session !== null
+            ? session.startup.session
+            : {};
+          const expectedUseLore = process.env.SUGARAGENT_USE_LORE === 'false'
+            ? false
+            : loreConfig.useLore;
+          const cachedLoreLoaded = cachedLore.loaded === true;
+          const cachedLoreDir = normalizeOptionalString(cachedLore.dir);
+          const cachedSessionLoaded = cachedSession.loaded === true;
+          const cachedSessionPath = normalizeOptionalString(cachedSession.pathToFile);
+
+          if (expectedUseLore && !cachedLoreLoaded) {
+            return true;
+          }
+          if (!expectedUseLore && cachedLoreLoaded) {
+            return true;
+          }
+          if (expectedUseLore && cachedLoreDir && resolve(cachedLoreDir) !== resolve(loreConfig.loreDir)) {
+            return true;
+          }
+          if (cachedSessionLoaded && cachedSessionPath && !fsSync.existsSync(cachedSessionPath)) {
+            return true;
+          }
+          return false;
         };
 
         const writeJson = (
@@ -1112,20 +1205,6 @@ export default defineConfig({
           };
         };
 
-        const resolveSessionAuthoringBundlePath = (slug: string): string => {
-          if (!slug) {
-            return defaultAuthoringBundlePath;
-          }
-          const registeredGameRoot = resolveRegisteredGameRoot(slug);
-          const gameBundle = registeredGameRoot
-            ? resolve(registeredGameRoot, 'plugins', 'sugaragent', 'authoring.bundle.json')
-            : '';
-          if (fsSync.existsSync(gameBundle)) {
-            return gameBundle;
-          }
-          return resolve(projectRoot, 'public', 'games', slug, 'plugins', 'sugaragent', 'authoring.bundle.json');
-        };
-
         const resolveLoreLockPath = (slug: string): string | null => {
           const registeredGameRoot = slug ? resolveRegisteredGameRoot(slug) : null;
           const candidatePaths = [
@@ -1198,6 +1277,7 @@ export default defineConfig({
 
           const {
             ingestLoreDirectory,
+            augmentLoreArtifactsWithVectors,
             writeLoreArtifacts,
           } = await server.ssrLoadModule('/src/plugins/sugaragent/lore/lore-lib.ts') as {
             ingestLoreDirectory: (options: {
@@ -1209,20 +1289,31 @@ export default defineConfig({
               manifest: { counts: { chunks: number; files: number; issues: number } };
               issues: string[];
             };
+            augmentLoreArtifactsWithVectors: (input: {
+              artifacts: unknown;
+              embedTexts: (texts: string[]) => Promise<number[][]>;
+              embeddingModelId?: string;
+            }) => Promise<unknown>;
             writeLoreArtifacts: (outputDir: string, artifacts: unknown) => {
               manifestPath: string;
               chunksPath: string;
             };
           };
 
-          const artifacts = ingestLoreDirectory({
+          const baseArtifacts = ingestLoreDirectory({
             sourceDir,
             commit,
             repo,
             ref: ref ?? undefined,
           });
+          const artifacts = await augmentLoreArtifactsWithVectors({
+            artifacts: baseArtifacts,
+            embedTexts: embedTextsWithLocalRuntime,
+            embeddingModelId: LOCAL_EMBEDDING_MODEL_ID,
+          });
           const written = writeLoreArtifacts(outputDir, artifacts);
           sessionCache.clear();
+          const clearedSessions = await clearSessionsForGame(slug);
 
           return {
             slug,
@@ -1231,9 +1322,10 @@ export default defineConfig({
             commit,
             repo,
             ref: ref ?? undefined,
-            counts: artifacts.manifest.counts,
-            issues: artifacts.issues,
+            counts: (artifacts as { manifest: { counts: unknown } }).manifest.counts,
+            issues: (artifacts as { issues: string[] }).issues,
             written,
+            clearedSessions,
           };
         };
 
@@ -1245,10 +1337,18 @@ export default defineConfig({
           const slug = await resolveRuntimeGameSlug(requestedGameId);
           const runtimeMode = normalizeRuntimeMode(runtimeModeInput);
           const cacheKey = `${slug || 'default'}:${npcId}:${runtimeMode}`;
+          const loreConfig = resolveSessionLoreConfig(slug);
           let pending = sessionCache.get(cacheKey);
+          if (pending) {
+            const cachedSession = await pending;
+            if (!shouldRebuildCachedSugarAgentSession(cachedSession, loreConfig)) {
+              return cachedSession;
+            }
+            sessionCache.delete(cacheKey);
+            pending = undefined;
+          }
           if (!pending) {
             pending = (async () => {
-              const loreConfig = resolveSessionLoreConfig(slug);
               const { createSugarAgentSession } = await server.ssrLoadModule('/src/plugins/sugaragent/session/runtime.ts') as {
                 createSugarAgentSession: (options: Record<string, unknown>) => Promise<{
                   runTurn: (
@@ -1264,27 +1364,39 @@ export default defineConfig({
                   ) => Promise<{
                     output: Record<string, unknown>;
                     usedFallback?: boolean;
+                    fallbackKind?: string;
                     validationErrors?: string[];
                     routing?: Record<string, unknown>;
                     pipeline?: Record<string, unknown>;
                     grounding?: Record<string, unknown>;
                     loreMatches?: Array<Record<string, unknown>>;
                   }>;
-                  startup?: { runtime?: { health?: { detail?: string } } };
+                  startup?: {
+                    runtime?: { health?: { detail?: string } };
+                    lore?: {
+                      loaded?: boolean;
+                      dir?: string;
+                    };
+                    session?: {
+                      loaded?: boolean;
+                      pathToFile?: string;
+                    };
+                  };
                 }>;
               };
 
-              const authoringBundlePath = resolveSessionAuthoringBundlePath(slug);
-
               const sessionId = buildPreviewSessionId(slug, npcId);
 
+              // Important boundary note:
+              // This preview-session bridge is not the authoritative source of SugarAgent authoring.
+              // The main preview/game plugin builds SugarAgent authoring directly from the loaded project
+              // document in memory. This session runtime only receives resolved npcProfile overrides per turn.
               return createSugarAgentSession({
                 npc: npcId,
                 provider: 'local',
                 runtime: runtimeMode,
                 rerankerClass: 'learned',
                 simulateInvalidJson: process.env.SUGARAGENT_SIM_INVALID_JSON ?? 'never',
-                authoringBundlePath,
                 session: sessionId,
                 loreDir: loreConfig.loreDir,
                 useLore: process.env.SUGARAGENT_USE_LORE === 'false'
@@ -1356,9 +1468,11 @@ export default defineConfig({
                 const requestedGameId = normalizeOptionalString(body.gameId);
                 const runtimeMode = normalizeRuntimeMode(body.runtimeMode);
                 const session = await getSugarAgentSession('health-check', requestedGameId, runtimeMode);
+                const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
                 writeJson(res, 200, {
                   ok: true,
                   detail: session.startup?.runtime?.health?.detail ?? 'local-runtime-ready',
+                  embedding: embeddingHealth,
                 });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -1411,14 +1525,26 @@ export default defineConfig({
                 attempt,
                 repair,
               });
-              const diagnostics = buildTurnDiagnostics(result, requestContext);
+              const diagnostics = buildTurnDiagnostics({
+                ...result,
+                authoring: (typeof session.startup?.authoring === 'object' && session.startup.authoring !== null)
+                  ? session.startup.authoring as Record<string, unknown>
+                  : undefined,
+              }, requestContext);
               writeJson(res, 200, {
                 ok: true,
                 jsonText: JSON.stringify(result.output),
                 attempts: result.attempts,
                 usedFallback: result.usedFallback,
+                fallbackKind: result.fallbackKind,
                 validationErrors: result.validationErrors,
-                detail: result.usedFallback ? 'provider-fallback' : 'provider-ok',
+                detail: result.fallbackKind === 'provider_unavailable'
+                  ? 'provider-unavailable'
+                  : result.fallbackKind === 'validation_fallback'
+                    ? 'validation-fallback'
+                    : result.fallbackKind === 'deterministic_runtime'
+                      ? 'runtime-deterministic'
+                      : 'provider-ok',
                 diagnostics,
               });
               return;
@@ -1428,10 +1554,22 @@ export default defineConfig({
               const texts = Array.isArray(body.texts)
                 ? body.texts.filter((entry) => typeof entry === 'string')
                 : [];
-              writeJson(res, 200, {
-                ok: true,
-                vectors: texts.map(() => [0, 0, 0]),
-              });
+              try {
+                const vectors = await embedTextsWithLocalRuntime(texts);
+                const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
+                writeJson(res, 200, {
+                  ok: true,
+                  vectors,
+                  detail: embeddingHealth.detail,
+                  embedding: embeddingHealth,
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                writeJson(res, 503, {
+                  ok: false,
+                  error: `embedding runtime unavailable: ${message}`,
+                });
+              }
               return;
             }
 
@@ -1444,9 +1582,12 @@ export default defineConfig({
             if (op === 'reingestLore') {
               const requestedGameId = normalizeOptionalString(body.gameId);
               const result = await reingestLoreForGame(requestedGameId, body);
+              const removedSessionCount = Array.isArray(result.clearedSessions?.removedFiles)
+                ? result.clearedSessions.removedFiles.length
+                : 0;
               writeJson(res, 200, {
                 ok: true,
-                detail: `lore re-ingested for ${result.slug || 'default'} and runtime cache cleared`,
+                detail: `lore re-ingested for ${result.slug || 'default'}, runtime cache cleared, and ${removedSessionCount} persisted NPC session${removedSessionCount === 1 ? '' : 's'} removed`,
                 gameId: result.slug,
                 source: result.sourceDir,
                 output: result.outputDir,
@@ -1455,6 +1596,7 @@ export default defineConfig({
                 ref: result.ref,
                 counts: result.counts,
                 issues: result.issues,
+                removedSessions: result.clearedSessions?.removedFiles ?? [],
               });
               return;
             }
@@ -1489,6 +1631,50 @@ export default defineConfig({
                 removedCacheEntries: result.removedCacheEntries,
                 removedFiles: result.removedFiles,
               });
+              return;
+            }
+
+            if (op === 'listLoreScopes') {
+              const requestedGameId = normalizeOptionalString(body.gameId);
+              const slug = await resolveRuntimeGameSlug(requestedGameId);
+              const loreConfig = resolveSessionLoreConfig(slug);
+              const chunksPath = resolve(loreConfig.loreDir, 'chunks.json');
+              if (!fsSync.existsSync(chunksPath)) {
+                writeJson(res, 200, { ok: true, scopes: [], chunks: 0 });
+                return;
+              }
+              const chunks = JSON.parse(fsSync.readFileSync(chunksPath, 'utf8'));
+              if (!Array.isArray(chunks)) {
+                writeJson(res, 200, { ok: true, scopes: [], chunks: 0 });
+                return;
+              }
+              const scopeSet = new Set<string>();
+              for (const chunk of chunks) {
+                const meta = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+                const candidates: unknown[] = [
+                  chunk.chunkId, chunk.pageId, meta.id,
+                  ...(Array.isArray(meta.tags) ? meta.tags : []),
+                  ...(Array.isArray(meta.entity_ids) ? meta.entity_ids : []),
+                  ...(Array.isArray(meta.location_ids) ? meta.location_ids : []),
+                  ...(Array.isArray(meta.faction_ids) ? meta.faction_ids : []),
+                ];
+                for (const raw of candidates) {
+                  if (typeof raw !== 'string') continue;
+                  const normalized = raw.trim().toLowerCase();
+                  if (!normalized) continue;
+                  scopeSet.add(normalized);
+                  // Strip lore. prefix
+                  if (normalized.startsWith('lore.') && normalized.length > 5) {
+                    scopeSet.add(normalized.slice(5));
+                  }
+                  // Add dot-split segments
+                  for (const part of normalized.split(/[.#/_-]+/)) {
+                    if (part.length >= 3) scopeSet.add(part);
+                  }
+                }
+              }
+              const scopes = Array.from(scopeSet).sort();
+              writeJson(res, 200, { ok: true, scopes, chunks: chunks.length });
               return;
             }
 

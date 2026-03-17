@@ -103,6 +103,19 @@ describe('retrieveLoreChunks scope filtering', () => {
     expect(results[0]?.selfEntityMatch).toBe(true);
   });
 
+  it('keeps self-entity evidence available on self_query even when only ambient lore scopes are configured', () => {
+    const results = retrieveLoreChunks(artifacts, 'what do you do for work', {
+      queryType: 'self_query',
+      selfEntityId: 'npc.baker',
+      loreScopes: ['wordlark.story.station_intro'],
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.some((entry) => entry.chunk.chunkId.includes('npcs.baker'))).toBe(true);
+  });
+
   it('allows related pool boost for other_query lookups', () => {
     const results = retrieveLoreChunks(artifacts, 'what about rowan background', {
       queryType: 'other_query',

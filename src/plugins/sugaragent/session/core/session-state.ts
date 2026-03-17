@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { ReferentPreviewCandidate, ReferentSourceRole } from './turn-contracts';
 
 export const DEFAULT_SESSION_DIR = path.resolve('.sugaragent-sim-sessions');
 export const MAX_HISTORY_ENTRIES = 8;
 export const MAX_SESSION_FACTS_PER_NPC = 24;
 export const MAX_SESSION_EVENTS_PER_NPC = 64;
 export const MAX_TOPIC_COVERAGE_PER_NPC = 24;
+export const MAX_REFERENT_CANDIDATES_PER_NPC = 16;
 export const TOPIC_EXHAUSTION_MIN_MENTIONS = 3;
 export const TOPIC_EXHAUSTION_MAX_NOVELTY = 0.34;
 
@@ -61,6 +63,20 @@ const TOPIC_STOPWORDS = new Set([
   'who',
   'why',
   'with',
+  'yeah',
+  'yep',
+  'yup',
+  'ok',
+  'okay',
+  'well',
+  'man',
+  'dude',
+  'hmm',
+  'uh',
+  'umm',
+  'huh',
+  'right',
+  'sure',
   'you',
   'your',
 ]);
@@ -134,16 +150,29 @@ interface TopicCoverageEntry {
   lastMentionAt: number;
 }
 
+interface SessionReferentEntry {
+  kind: ReferentPreviewCandidate['kind'];
+  text: string;
+  id?: string;
+  topic?: string;
+  sourceRole: ReferentSourceRole;
+  mentions: number;
+  confidence: number;
+  salience: number;
+  lastSeenAt: number;
+}
+
 interface SessionNpcState {
   facts: string[];
   history: SessionHistoryEntry[];
   events: SessionEvent[];
   topicCoverage: TopicCoverageEntry[];
+  referents: SessionReferentEntry[];
   updatedAt: number;
 }
 
 interface SessionState {
-  schemaVersion: 3;
+  schemaVersion: 4;
   sessionId: string;
   updatedAt: number;
   npcs: Record<string, SessionNpcState>;
@@ -188,7 +217,7 @@ export function resolveSessionPath(sessionId: unknown, sessionDir = DEFAULT_SESS
 
 export function createEmptySessionState(sessionId: string): SessionState {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     sessionId,
     updatedAt: Date.now(),
     npcs: {},
@@ -207,6 +236,37 @@ export function normalizeTopicToken(text: unknown): string {
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9\u00c0-\u024f_-]+/g, '');
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeReferentSourceRole(value: unknown): ReferentSourceRole {
+  return value === 'player'
+    || value === 'npc'
+    || value === 'scene'
+    || value === 'lore'
+    || value === 'memory'
+    ? value
+    : 'unknown';
+}
+
+function isReferentKind(value: unknown): value is SessionReferentEntry['kind'] {
+  return value === 'npc'
+    || value === 'entity'
+    || value === 'location'
+    || value === 'faction'
+    || value === 'topic';
+}
+
+function normalizeReferentTopic(topic: unknown, fallbackText?: unknown): string | undefined {
+  const explicit = normalizeTopicToken(topic);
+  if (explicit) return explicit;
+  const fallback = normalizeTopicToken(fallbackText);
+  return fallback || undefined;
 }
 
 export function extractConversationTopics(message: unknown): string[] {
@@ -240,6 +300,24 @@ export function extractConversationTopics(message: unknown): string[] {
     ));
 
   return Array.from(new Set([...focusedTopics, ...baseTopics])).slice(0, 8);
+}
+
+function computeReferentSalience(input: {
+  mentions: number;
+  confidence: number;
+  sourceRole: ReferentSourceRole;
+  topicMatch: boolean;
+}): number {
+  const mentionBoost = Math.min(0.24, Math.max(0, input.mentions - 1) * 0.05);
+  const sourceBoost = input.sourceRole === 'lore'
+    ? 0.08
+    : input.sourceRole === 'scene'
+      ? 0.05
+      : input.sourceRole === 'npc'
+        ? 0.03
+        : 0;
+  const topicBoost = input.topicMatch ? 0.08 : 0;
+  return Number(Math.max(0.2, Math.min(1, 0.32 + input.confidence * 0.4 + mentionBoost + sourceBoost + topicBoost)).toFixed(4));
 }
 
 export function computeTopicNovelty(mentions: unknown): number {
@@ -292,8 +370,6 @@ export function extractSalientFacts(message: unknown): string[] {
     /i like ([^.!?]{3,80})/i,
     /i need ([^.!?]{3,80})/i,
     /i have ([^.!?]{3,80})/i,
-    /there is ([^.!?]{3,100})/i,
-    /there's ([^.!?]{3,100})/i,
     /i promised ([^.!?]{3,100})/i,
     /i gave you ([^.!?]{3,100})/i,
     /i am worried about ([^.!?]{3,100})/i,
@@ -309,11 +385,54 @@ export function extractSalientFacts(message: unknown): string[] {
     }
   }
 
-  if (lower.includes('fire') && lower.includes('mountain')) {
-    facts.push('There is a fire in the mountains.');
+  return Array.from(new Set(facts));
+}
+
+function persistMemoryWritesToNpc(
+  npc: SessionNpcState,
+  memoryWrites: unknown,
+  now: number,
+): void {
+  const writes = Array.isArray(memoryWrites) ? memoryWrites : [];
+  if (writes.length === 0) return;
+
+  const nextFacts = new Set(npc.facts);
+  for (const write of writes) {
+    if (!isRecord(write)) continue;
+    const type = typeof write.type === 'string' ? write.type : 'unknown';
+    const source = typeof write.source === 'string' ? write.source : 'runtime_memory';
+    const ownerType = typeof write.ownerType === 'string' && EVIDENCE_OWNER_TYPES.has(write.ownerType)
+      ? write.ownerType
+      : 'unknown';
+    const text = normalizeFact(write.text);
+    if (!text) continue;
+
+    if (type === 'player_fact') {
+      nextFacts.add(text);
+      npc.events.push({
+        id: `player_fact:${now}:${randomId()}`,
+        type: 'player_fact',
+        ownerType: 'player',
+        text,
+        timestamp: now,
+        source,
+      });
+      continue;
+    }
+
+    if (type === 'npc_commitment' || type === 'shared_event') {
+      npc.events.push({
+        id: `${type}:${now}:${randomId()}`,
+        type,
+        ownerType,
+        text,
+        timestamp: now,
+        source,
+      });
+    }
   }
 
-  return Array.from(new Set(facts));
+  npc.facts = Array.from(nextFacts).slice(-MAX_SESSION_FACTS_PER_NPC);
 }
 
 export function ensureSessionNpc(state: SessionState, npcId: string): SessionNpcState {
@@ -323,6 +442,7 @@ export function ensureSessionNpc(state: SessionState, npcId: string): SessionNpc
       history: [],
       events: [],
       topicCoverage: [],
+      referents: [],
       updatedAt: Date.now(),
     };
   }
@@ -331,6 +451,9 @@ export function ensureSessionNpc(state: SessionState, npcId: string): SessionNpc
   }
   if (!Array.isArray(state.npcs[npcId].topicCoverage)) {
     state.npcs[npcId].topicCoverage = [];
+  }
+  if (!Array.isArray(state.npcs[npcId].referents)) {
+    state.npcs[npcId].referents = [];
   }
   return state.npcs[npcId];
 }
@@ -351,7 +474,7 @@ export function loadSessionState(sessionId: unknown, sessionDir = DEFAULT_SESSIO
     const parsed = JSON.parse(raw);
     if (
       !isRecord(parsed)
-      || (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3)
+      || (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3 && parsed.schemaVersion !== 4)
       || !isRecord(parsed.npcs)
     ) {
       return {
@@ -423,6 +546,43 @@ export function loadSessionState(sessionId: unknown, sessionDir = DEFAULT_SESSIO
             .filter((entry) => entry.topic.length > 0)
             .slice(-MAX_TOPIC_COVERAGE_PER_NPC)
           : [],
+        referents: Array.isArray(value.referents)
+          ? value.referents
+            .filter((entry): entry is RecordLike => {
+              if (!isRecord(entry)) return false;
+              if (!isReferentKind(entry.kind)) return false;
+              return typeof entry.text === 'string' && entry.text.trim().length > 0;
+            })
+            .map((entry) => {
+              const confidence = typeof entry.confidence === 'number' && Number.isFinite(entry.confidence)
+                ? Number(Math.max(0, Math.min(1, entry.confidence)).toFixed(4))
+                : 0.5;
+              const mentions = Number.isFinite(entry.mentions) ? Math.max(1, Math.floor(Number(entry.mentions))) : 1;
+              const topic = normalizeReferentTopic(entry.topic, entry.text);
+              const sourceRole = normalizeReferentSourceRole(entry.sourceRole);
+              const topicMatch = typeof topic === 'string' && topic.length > 0;
+              const salience = typeof entry.salience === 'number' && Number.isFinite(entry.salience)
+                ? Number(Math.max(0, Math.min(1, entry.salience)).toFixed(4))
+                : computeReferentSalience({
+                    mentions,
+                    confidence,
+                    sourceRole,
+                    topicMatch,
+                  });
+              return {
+                kind: entry.kind as SessionReferentEntry['kind'],
+                text: String(entry.text),
+                id: normalizeOptionalString(entry.id),
+                topic,
+                sourceRole,
+                mentions,
+                confidence,
+                salience,
+                lastSeenAt: toSafeTimestamp(entry.lastSeenAt, Date.now()),
+              };
+            })
+            .slice(-MAX_REFERENT_CANDIDATES_PER_NPC)
+          : [],
         updatedAt: toSafeTimestamp(value.updatedAt, Date.now()),
       };
     }
@@ -478,6 +638,64 @@ export function getSessionTopicCoverageForNpc(
   if (!session) return [];
   const npc = session.state.npcs[npcId];
   return Array.isArray(npc?.topicCoverage) ? npc.topicCoverage : [];
+}
+
+export function getSessionReferentsForNpc(
+  session: LoadedSessionState | null | undefined,
+  npcId: string,
+): SessionReferentEntry[] {
+  if (!session) return [];
+  const npc = session.state.npcs[npcId];
+  return Array.isArray(npc?.referents) ? npc.referents : [];
+}
+
+export function buildRecentReferentPreview(
+  referentEntries: unknown,
+  playerMessage: unknown,
+  options?: {
+    activeTopic?: string | null;
+  },
+): ReferentPreviewCandidate[] {
+  const entries = Array.isArray(referentEntries)
+    ? referentEntries.filter((entry): entry is SessionReferentEntry => (
+      isRecord(entry)
+      && isReferentKind(entry.kind)
+      && typeof entry.text === 'string'
+      && entry.text.trim().length > 0
+    ))
+    : [];
+  if (entries.length === 0) return [];
+
+  const activeTopic = normalizeReferentTopic(options?.activeTopic);
+  const playerTopics = extractConversationTopics(playerMessage);
+  const playerTopicSet = new Set(playerTopics);
+
+  return entries
+    .map((entry) => {
+      const topic = normalizeReferentTopic(entry.topic, entry.text);
+      const topicalBoost = topic && (playerTopicSet.has(topic) || (activeTopic && topic === activeTopic))
+        ? 0.12
+        : 0;
+      const sceneBoost = entry.sourceRole === 'scene' && /\b(here|there|place|station|town|city)\b/i.test(String(playerMessage ?? ''))
+        ? 0.06
+        : 0;
+      const score = Number(Math.max(0, Math.min(1, (entry.salience ?? entry.confidence ?? 0.4) + topicalBoost + sceneBoost)).toFixed(4));
+      return {
+        kind: entry.kind,
+        text: entry.text,
+        id: entry.id,
+        topic,
+        confidence: entry.confidence,
+        salience: score,
+        lastSeenAt: entry.lastSeenAt,
+        sourceRole: entry.sourceRole,
+      } satisfies ReferentPreviewCandidate;
+    })
+    .sort((a, b) => (
+      (b.salience ?? 0) - (a.salience ?? 0)
+      || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0)
+    ))
+    .slice(0, 6);
 }
 
 export function buildTurnTopicCoverageContext(topicCoverageEntries: unknown, playerMessage: unknown): {
@@ -599,6 +817,65 @@ export function updateNpcTopicCoverage(npc: SessionNpcState, playerMessage: unkn
     .slice(-MAX_TOPIC_COVERAGE_PER_NPC);
 }
 
+function persistReferentCandidatesToNpc(
+  npc: SessionNpcState,
+  referentCandidates: unknown,
+  now: number,
+  activeTopic?: unknown,
+): void {
+  const candidates = Array.isArray(referentCandidates) ? referentCandidates : [];
+  if (candidates.length === 0) return;
+
+  const activeTopicToken = normalizeReferentTopic(activeTopic);
+  const referentMap = new Map<string, SessionReferentEntry>();
+  for (const entry of npc.referents) {
+    if (!isReferentKind(entry.kind) || typeof entry.text !== 'string' || entry.text.trim().length === 0) continue;
+    const key = `${entry.kind}:${entry.id ?? entry.text}`.toLowerCase();
+    referentMap.set(key, entry);
+  }
+
+  for (const rawCandidate of candidates) {
+    if (!isRecord(rawCandidate) || !isReferentKind(rawCandidate.kind)) continue;
+    const text = normalizeOptionalString(rawCandidate.text);
+    if (!text) continue;
+    const id = normalizeOptionalString(rawCandidate.id);
+    const key = `${rawCandidate.kind}:${id ?? text}`.toLowerCase();
+    const existing = referentMap.get(key);
+    const confidence = typeof rawCandidate.confidence === 'number' && Number.isFinite(rawCandidate.confidence)
+      ? Number(Math.max(0, Math.min(1, rawCandidate.confidence)).toFixed(4))
+      : (existing?.confidence ?? 0.5);
+    const mentions = (existing?.mentions ?? 0) + 1;
+    const topic = normalizeReferentTopic(rawCandidate.topic, activeTopicToken ?? text) ?? existing?.topic;
+    const sourceRole = normalizeReferentSourceRole(rawCandidate.sourceRole ?? existing?.sourceRole);
+    const salience = computeReferentSalience({
+      mentions,
+      confidence,
+      sourceRole,
+      topicMatch: typeof topic === 'string' && topic.length > 0 && topic === activeTopicToken,
+    });
+
+    referentMap.set(key, {
+      kind: rawCandidate.kind,
+      text,
+      id,
+      topic,
+      sourceRole,
+      mentions,
+      confidence,
+      salience,
+      lastSeenAt: now,
+    });
+  }
+
+  npc.referents = [...referentMap.values()]
+    .sort((a, b) => (
+      b.lastSeenAt - a.lastSeenAt
+      || b.salience - a.salience
+      || b.mentions - a.mentions
+    ))
+    .slice(0, MAX_REFERENT_CANDIDATES_PER_NPC);
+}
+
 export function countPlayerTurns(history: unknown): number {
   if (!Array.isArray(history)) return 0;
   return history.reduce((count, entry) => {
@@ -611,45 +888,56 @@ export function applyTurnToSession(
   npcId: string,
   playerMessage: unknown,
   npcReply: unknown,
+  options?: {
+    memoryWrites?: unknown;
+    referentCandidates?: unknown;
+    activeTopic?: string | null;
+  },
 ): void {
   if (!session) return;
   const now = Date.now();
   const npc = ensureSessionNpc(session.state, npcId);
   npc.updatedAt = now;
 
-  const newFacts = extractSalientFacts(playerMessage);
-  if (newFacts.length > 0) {
-    const merged = Array.from(new Set([...npc.facts, ...newFacts]));
-    npc.facts = merged.slice(-MAX_SESSION_FACTS_PER_NPC);
-    for (const fact of newFacts) {
+  const hasExplicitMemoryWrites = Array.isArray(options?.memoryWrites);
+  if (hasExplicitMemoryWrites) {
+    persistMemoryWritesToNpc(npc, options?.memoryWrites, now);
+  } else {
+    const newFacts = extractSalientFacts(playerMessage);
+    if (newFacts.length > 0) {
+      const merged = Array.from(new Set([...npc.facts, ...newFacts]));
+      npc.facts = merged.slice(-MAX_SESSION_FACTS_PER_NPC);
+      for (const fact of newFacts) {
+        npc.events.push({
+          id: `player_fact:${now}:${randomId()}`,
+          type: 'player_fact',
+          ownerType: 'player',
+          text: fact,
+          timestamp: now,
+          source: 'player_message',
+        });
+      }
+    }
+
+    const npcCommitmentMatches = String(npcReply ?? '')
+      .split(/(?<=[.!?])\s+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => /\b(i will|i'll|i can|i promise|let me)\b/i.test(entry))
+      .slice(0, 2);
+    for (const commitment of npcCommitmentMatches) {
       npc.events.push({
-        id: `player_fact:${now}:${randomId()}`,
-        type: 'player_fact',
-        ownerType: 'player',
-        text: fact,
+        id: `npc_commitment:${now}:${randomId()}`,
+        type: 'npc_commitment',
+        ownerType: 'npc',
+        text: normalizeFact(commitment),
         timestamp: now,
-        source: 'player_message',
+        source: 'npc_reply',
       });
     }
   }
 
-  const npcCommitmentMatches = String(npcReply ?? '')
-    .split(/(?<=[.!?])\s+/)
-    .map((entry) => entry.trim())
-    .filter((entry) => /\b(i will|i'll|i can|i promise|let me)\b/i.test(entry))
-    .slice(0, 2);
-  for (const commitment of npcCommitmentMatches) {
-    npc.events.push({
-      id: `npc_commitment:${now}:${randomId()}`,
-      type: 'npc_commitment',
-      ownerType: 'npc',
-      text: normalizeFact(commitment),
-      timestamp: now,
-      source: 'npc_reply',
-    });
-  }
-
   updateNpcTopicCoverage(npc, playerMessage, now);
+  persistReferentCandidatesToNpc(npc, options?.referentCandidates, now, options?.activeTopic);
   npc.events = npc.events.slice(-MAX_SESSION_EVENTS_PER_NPC);
 
   npc.history.push({ role: 'player', text: String(playerMessage ?? ''), updatedAt: now });

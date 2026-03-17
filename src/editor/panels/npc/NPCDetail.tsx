@@ -17,10 +17,17 @@ import {
   Box,
   ScrollArea,
   Avatar,
+  Switch,
 } from '@mantine/core';
 import { useEditorStore } from '../../store/useEditorStore';
+import type { PluginConfigData } from '../../store/useEditorStore';
+import {
+  createDefaultNPCInteractionCapabilities,
+  normalizeNPCInteractionCapabilities,
+} from '../../../engine/conversation';
 import { NPCEntry } from './NPCPanel';
 import { BehaviorTreeCanvas } from './BehaviorTreeCanvas';
+import { resolveNPCInteractionOptions } from '../../utils/npcInteractionOptions';
 
 const ANIM_SLOTS = ['idle', 'walk', 'run', 'jump'] as const;
 
@@ -29,17 +36,71 @@ interface NPCDetailProps {
   dialogues: { id: string; name?: string; nodes?: { speaker?: string }[] }[];
   quests: { id: string; name: string; stages: { id: string; description: string; objectives: { id: string; type: string; target: string; description: string }[] }[] }[];
   items?: { id: string; name: string }[];
+  plugins?: PluginConfigData[];
   onChange: (updated: NPCEntry) => void;
   onDelete: () => void;
 }
 
-export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDelete }: NPCDetailProps) {
+export function NPCDetail({ npc, dialogues, quests, items = [], plugins = [], onChange, onDelete }: NPCDetailProps) {
   const setDirty = useEditorStore((s) => s.setDirty);
   const [showBehaviorTree, setShowBehaviorTree] = useState(false);
   const [agentConstraintsDraft, setAgentConstraintsDraft] = useState('');
   const [agentLoreScopesDraft, setAgentLoreScopesDraft] = useState('');
   const [agentSelfLoreScopesDraft, setAgentSelfLoreScopesDraft] = useState('');
   const [agentRelatedLoreScopesDraft, setAgentRelatedLoreScopesDraft] = useState('');
+  const [availableLoreScopes, setAvailableLoreScopes] = useState<Set<string> | null>(null);
+  const interactionCapabilities = normalizeNPCInteractionCapabilities(npc.interactionCapabilities);
+  const interactionOptions = resolveNPCInteractionOptions(plugins);
+  const availableInteractionIds = new Set(interactionOptions.map((option) => option.id));
+  const sugarAgentEnabled = availableInteractionIds.has('chat');
+  const usesSugarAgent = sugarAgentEnabled
+    && (
+      interactionCapabilities.chat.enabled
+      || interactionCapabilities.scenario.agentAssist === 'allow'
+    );
+
+  // Fetch available lore scopes for validation
+  useEffect(() => {
+    if (!sugarAgentEnabled) {
+      setAvailableLoreScopes(null);
+      return;
+    }
+    let cancelled = false;
+    fetch('/__sugaragent/runtime', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'listLoreScopes' }),
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!cancelled && data?.scopes) {
+          setAvailableLoreScopes(new Set(data.scopes));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [sugarAgentEnabled]);
+
+  const validateScope = (scope: string): boolean => {
+    if (!availableLoreScopes) return true; // Not loaded yet, don't warn
+    const normalized = scope.trim().toLowerCase();
+    if (!normalized) return true;
+    const withoutPrefix = normalized.startsWith('lore.') ? normalized.slice(5) : normalized;
+    // Check direct match or prefix match
+    if (availableLoreScopes.has(normalized) || availableLoreScopes.has(withoutPrefix)) return true;
+    for (const available of availableLoreScopes) {
+      if (available.startsWith(`${withoutPrefix}.`) || available.endsWith(`.${withoutPrefix}`)) return true;
+    }
+    return false;
+  };
+
+  const getUnmatchedScopes = (draft: string): string[] => {
+    if (!availableLoreScopes) return [];
+    return draft
+      .split(/[\n,]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !validateScope(s));
+  };
 
   // Find dialogues where this NPC speaks
   const npcDialogues = dialogues.filter((d) =>
@@ -87,6 +148,31 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
   const normalizeOptionalText = (value: string | undefined): string | undefined => {
     if (typeof value !== 'string') return undefined;
     return value.trim().length === 0 ? undefined : value;
+  };
+
+  const updateInteractionCapabilities = (
+    updates: {
+      scenario?: Partial<typeof interactionCapabilities.scenario>;
+      chat?: Partial<typeof interactionCapabilities.chat>;
+    },
+  ) => {
+    const next = normalizeNPCInteractionCapabilities({
+      ...interactionCapabilities,
+      ...updates,
+      scenario: {
+        ...interactionCapabilities.scenario,
+        ...(updates.scenario ?? {}),
+      },
+      chat: {
+        ...interactionCapabilities.chat,
+        ...(updates.chat ?? {}),
+      },
+    });
+    onChange({
+      ...npc,
+      interactionCapabilities: next,
+    });
+    setDirty(true);
   };
 
   const updateAgentProfile = (updates: Partial<NonNullable<NPCEntry['agentProfile']>>) => {
@@ -137,6 +223,7 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
     onChange({
       ...npc,
       agentProfile: hasData ? normalized : undefined,
+      interactionCapabilities: npc.interactionCapabilities ?? createDefaultNPCInteractionCapabilities(),
     });
     setDirty(true);
   };
@@ -429,122 +516,175 @@ export function NPCDetail({ npc, dialogues, quests, items = [], onChange, onDele
                 </Stack>
               </Paper>
 
-              {/* SugarAgent Card */}
+              {/* Interaction Card */}
               <Paper
                 p="md"
                 radius="md"
                 style={{ background: '#181825', border: '1px solid #313244' }}
               >
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb="md">
-                  SugarAgent
+                  Interactions
                 </Text>
                 <Stack gap="sm">
-                  <Select
-                    label="Interaction Mode"
-                    description="Scripted keeps current behavior. Agent/Hybrid enables SugarAgent routing."
-                    data={[
-                      { value: 'scripted', label: 'Scripted' },
-                      { value: 'hybrid', label: 'Hybrid (Scripted then Agent)' },
-                      { value: 'agent', label: 'Agent (Plugin-first)' },
-                    ]}
-                    value={npc.interactionMode || 'scripted'}
-                    onChange={(value) => {
-                      onChange({
-                        ...npc,
-                        interactionMode: (value as NPCEntry['interactionMode']) || 'scripted',
+                  <Switch
+                    label="Scenario / Scripted"
+                    description="Enable structured dialogue or sugarlang-authored scenario interaction for this NPC."
+                    checked={interactionCapabilities.scenario.enabled}
+                    onChange={(event) => {
+                      updateInteractionCapabilities({
+                        scenario: { enabled: event.currentTarget.checked },
                       });
-                      setDirty(true);
                     }}
-                    size="sm"
+                    disabled={!availableInteractionIds.has('scenario')}
+                    size="md"
                   />
 
-                  <Textarea
-                    label="Agent Persona"
-                    description="Optional style/persona guidance for this NPC."
-                    value={npc.agentProfile?.persona || ''}
-                    onChange={(e) => updateAgentProfile({ persona: e.currentTarget.value })}
-                    placeholder="Warm neighborhood baker who notices small details..."
-                    minRows={2}
-                    autosize
-                    size="sm"
-                  />
+                  {sugarAgentEnabled && (
+                    <Switch
+                      label="Chat"
+                      description="Enable free-form NPC chat when a chat-capable provider is available."
+                      checked={interactionCapabilities.chat.enabled}
+                      onChange={(event) => {
+                        updateInteractionCapabilities({
+                          chat: { enabled: event.currentTarget.checked },
+                        });
+                      }}
+                      size="md"
+                    />
+                  )}
 
-                  <TextInput
-                    label="Agent Tone"
-                    value={npc.agentProfile?.tone || ''}
-                    onChange={(e) => updateAgentProfile({ tone: e.currentTarget.value })}
-                    placeholder="friendly, grounded, concise"
-                    size="sm"
-                  />
+                  {sugarAgentEnabled && interactionCapabilities.scenario.enabled && (
+                    <Select
+                      label="Scenario Agent Assist"
+                      description="Controls whether the structured scenario lane may delegate to agent assistance when authored content allows it."
+                      data={[
+                        { value: 'disallow', label: 'Disabled' },
+                        { value: 'allow', label: 'Allowed' },
+                      ]}
+                      value={interactionCapabilities.scenario.agentAssist}
+                      onChange={(value) => {
+                        updateInteractionCapabilities({
+                          scenario: {
+                            agentAssist: value === 'allow' ? 'allow' : 'disallow',
+                          },
+                        });
+                      }}
+                      size="sm"
+                    />
+                  )}
 
-                  <TextInput
-                    label="Self Entity ID"
-                    description="Canonical lore entity for this NPC (for identity-aware retrieval)."
-                    value={npc.agentProfile?.selfEntityId || ''}
-                    onChange={(e) => updateAgentProfile({ selfEntityId: e.currentTarget.value })}
-                    placeholder="npc.baker"
-                    size="sm"
-                  />
+                  {!sugarAgentEnabled && (
+                    <Text size="xs" c="dimmed">
+                      Enable the SugarAgent plugin to author NPC chat and agent-assist settings.
+                    </Text>
+                  )}
 
-                  <Textarea
-                    label="Constraints"
-                    description="NPC-specific constraints (one per line or comma-separated)."
-                    value={agentConstraintsDraft}
-                    onChange={(e) => {
-                      const nextText = e.currentTarget.value;
-                      setAgentConstraintsDraft(nextText);
-                      updateAgentProfile({ constraints: parseList(nextText) });
-                    }}
-                    placeholder={'Do not reveal Captain Rowan\'s hidden identity before beat.gate_reveal'}
-                    minRows={2}
-                    autosize
-                    size="sm"
-                  />
+                  {usesSugarAgent && (
+                    <>
+                      <Textarea
+                        label="Agent Persona"
+                        description="Optional style/persona guidance for this NPC."
+                        value={npc.agentProfile?.persona || ''}
+                        onChange={(e) => updateAgentProfile({ persona: e.currentTarget.value })}
+                        placeholder="Warm neighborhood baker who notices small details..."
+                        minRows={2}
+                        autosize
+                        size="sm"
+                      />
 
-                  <Textarea
-                    label="Lore Scopes"
-                    description="One per line (or comma-separated)."
-                    value={agentLoreScopesDraft}
-                    onChange={(e) => {
-                      const nextText = e.currentTarget.value;
-                      setAgentLoreScopesDraft(nextText);
-                      updateAgentProfile({ loreScopes: parseList(nextText) });
-                    }}
-                    placeholder={'town.history\nnpc.baker'}
-                    minRows={2}
-                    autosize
-                    size="sm"
-                  />
+                      <TextInput
+                        label="Agent Tone"
+                        value={npc.agentProfile?.tone || ''}
+                        onChange={(e) => updateAgentProfile({ tone: e.currentTarget.value })}
+                        placeholder="friendly, grounded, concise"
+                        size="sm"
+                      />
 
-                  <Textarea
-                    label="Self Lore Scopes"
-                    description="Lore scopes for facts specifically about this NPC."
-                    value={agentSelfLoreScopesDraft}
-                    onChange={(e) => {
-                      const nextText = e.currentTarget.value;
-                      setAgentSelfLoreScopesDraft(nextText);
-                      updateAgentProfile({ selfLoreScopes: parseList(nextText) });
-                    }}
-                    placeholder={'npc.baker\npeople.bakers.bub'}
-                    minRows={2}
-                    autosize
-                    size="sm"
-                  />
+                      <TextInput
+                        label="Self Entity ID"
+                        description="Canonical lore entity for this NPC (for identity-aware retrieval)."
+                        value={npc.agentProfile?.selfEntityId || ''}
+                        onChange={(e) => updateAgentProfile({ selfEntityId: e.currentTarget.value })}
+                        placeholder="npc.baker"
+                        size="sm"
+                      />
 
-                  <Textarea
-                    label="Related Lore Scopes"
-                    description="Lore scopes for friends/family/acquaintances of this NPC."
-                    value={agentRelatedLoreScopesDraft}
-                    onChange={(e) => {
-                      const nextText = e.currentTarget.value;
-                      setAgentRelatedLoreScopesDraft(nextText);
-                      updateAgentProfile({ relatedLoreScopes: parseList(nextText) });
-                    }}
-                    placeholder={'npc.baker.family\nnpc.baker.friends'}
-                    minRows={2}
-                    autosize
-                    size="sm"
-                  />
+                      <Textarea
+                        label="Constraints"
+                        description="NPC-specific constraints (one per line or comma-separated)."
+                        value={agentConstraintsDraft}
+                        onChange={(e) => {
+                          const nextText = e.currentTarget.value;
+                          setAgentConstraintsDraft(nextText);
+                          updateAgentProfile({ constraints: parseList(nextText) });
+                        }}
+                        placeholder={'Do not reveal Captain Rowan\'s hidden identity before beat.gate_reveal'}
+                        minRows={2}
+                        autosize
+                        size="sm"
+                      />
+
+                      <Textarea
+                        label="Lore Scopes"
+                        description="One per line (or comma-separated)."
+                        value={agentLoreScopesDraft}
+                        onChange={(e) => {
+                          const nextText = e.currentTarget.value;
+                          setAgentLoreScopesDraft(nextText);
+                          updateAgentProfile({ loreScopes: parseList(nextText) });
+                        }}
+                        placeholder={'town.history\nnpc.baker'}
+                        minRows={2}
+                        autosize
+                        size="sm"
+                      />
+                      {getUnmatchedScopes(agentLoreScopesDraft).map((scope) => (
+                        <Text key={scope} size="xs" c="red" mt={-8}>
+                          No lore chunks match scope "{scope}"
+                        </Text>
+                      ))}
+
+                      <Textarea
+                        label="Self Lore Scopes"
+                        description="Lore scopes for facts specifically about this NPC."
+                        value={agentSelfLoreScopesDraft}
+                        onChange={(e) => {
+                          const nextText = e.currentTarget.value;
+                          setAgentSelfLoreScopesDraft(nextText);
+                          updateAgentProfile({ selfLoreScopes: parseList(nextText) });
+                        }}
+                        placeholder={'npc.baker\npeople.bakers.bub'}
+                        minRows={2}
+                        autosize
+                        size="sm"
+                      />
+                      {getUnmatchedScopes(agentSelfLoreScopesDraft).map((scope) => (
+                        <Text key={scope} size="xs" c="red" mt={-8}>
+                          No lore chunks match scope "{scope}"
+                        </Text>
+                      ))}
+
+                      <Textarea
+                        label="Related Lore Scopes"
+                        description="Lore scopes for friends/family/acquaintances of this NPC."
+                        value={agentRelatedLoreScopesDraft}
+                        onChange={(e) => {
+                          const nextText = e.currentTarget.value;
+                          setAgentRelatedLoreScopesDraft(nextText);
+                          updateAgentProfile({ relatedLoreScopes: parseList(nextText) });
+                        }}
+                        placeholder={'npc.baker.family\nnpc.baker.friends'}
+                        minRows={2}
+                        autosize
+                        size="sm"
+                      />
+                      {getUnmatchedScopes(agentRelatedLoreScopesDraft).map((scope) => (
+                        <Text key={scope} size="xs" c="red" mt={-8}>
+                          No lore chunks match scope "{scope}"
+                        </Text>
+                      ))}
+                    </>
+                  )}
                 </Stack>
               </Paper>
             </Stack>

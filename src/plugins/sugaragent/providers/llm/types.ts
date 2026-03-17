@@ -1,5 +1,8 @@
 import type { SugarAgentTurnOutput } from '../../contracts/turn';
-import type { PluginAgentTurnDiagnostics } from '../../../../engine/plugins/types';
+import type {
+  PluginAgentTurnDiagnostics,
+  PluginPedagogyContext,
+} from '../../../../engine/plugins/types';
 
 export interface LLMGenerateRequest {
   npcId: string;
@@ -18,6 +21,7 @@ export interface LLMGenerateRequest {
   context?: {
     gameId?: string;
     regionPath?: string;
+    regionName?: string;
     episodeId?: string;
     runtimeMode?: 'llama' | 'auto' | 'mock';
     interactionMode?: 'scripted' | 'agent' | 'hybrid';
@@ -31,6 +35,7 @@ export interface LLMGenerateRequest {
       trackedTopicCount?: number;
       exhausted?: boolean;
     };
+    pedagogyContext?: PluginPedagogyContext;
   };
 }
 
@@ -38,7 +43,7 @@ export interface LLMGenerateResult {
   output: SugarAgentTurnOutput;
   attempts: number;
   usedFallback: boolean;
-  fallbackKind?: 'provider_unavailable' | 'validation_fallback';
+  fallbackKind?: 'provider_unavailable' | 'validation_fallback' | 'deterministic_runtime';
   validationErrors: string[];
   rawResponses: string[];
   diagnostics?: PluginAgentTurnDiagnostics;

@@ -9,6 +9,10 @@ import {
   normalizeEvidenceTextForPlan,
   tokenizeForPlan,
 } from './retrieval-text';
+import {
+  expandFacetQueryTokenVariants,
+  extractFacetQueryTokens,
+} from './knowledge-query';
 
 export type ConversationMode = 'character' | 'narrative' | 'hybrid';
 export type RerankBudgetTier = 'low' | 'standard' | 'high';
@@ -20,8 +24,12 @@ interface RecordLike {
 
 interface MatchChunk {
   chunkId?: unknown;
+  pageId?: unknown;
+  title?: unknown;
+  sectionHeading?: unknown;
   summary?: unknown;
   content?: unknown;
+  metadata?: unknown;
 }
 
 interface LoreMatchCandidate extends RecordLike {
@@ -86,6 +94,7 @@ interface BuildRerankCacheKeyInput {
   selfLoreScopes?: unknown;
   relatedLoreScopes?: unknown;
   selfEntityId?: unknown;
+  retrievalFilters?: unknown;
   artifactVersion: unknown;
   modelVersion: unknown;
 }
@@ -108,6 +117,7 @@ interface RerankLoreMatchesInput {
 
 interface EvaluateRetrievalQualityInput {
   query: unknown;
+  interpretation?: unknown;
   mode: unknown;
   queryType: unknown;
   routeIntent: unknown;
@@ -123,6 +133,7 @@ interface EvidenceEntryLike {
   verificationStatus?: unknown;
   provenance?: unknown;
   entityIds?: unknown;
+  anchorTerms?: unknown;
   selfAttributed?: unknown;
 }
 
@@ -137,6 +148,7 @@ interface EvidenceItem {
   verificationStatus: string;
   provenance?: RecordLike;
   entityIds: string[];
+  anchorTerms?: string[];
   selfAttributed: boolean;
   confidence: number;
 }
@@ -325,10 +337,39 @@ function isPickEvidenceForIntentRankedEntry(value: unknown): value is PickEviden
   return true;
 }
 
-function candidateText(candidate: LoreMatchCandidate): string {
+function candidateSemanticText(candidate: LoreMatchCandidate): string {
   const chunk = isRecord(candidate.chunk) ? candidate.chunk as MatchChunk : null;
   return normalizeEvidenceTextForPlan(
-    `${normalizeOptionalString(chunk?.summary) ?? ''} ${normalizeOptionalString(chunk?.content) ?? ''}`,
+    [
+      normalizeOptionalString(chunk?.title) ?? '',
+      normalizeOptionalString(chunk?.sectionHeading) ?? '',
+      normalizeOptionalString(chunk?.summary) ?? '',
+      normalizeOptionalString(chunk?.content) ?? '',
+    ].join(' '),
+  );
+}
+
+function candidateCoverageText(candidate: LoreMatchCandidate): string {
+  const chunk = isRecord(candidate.chunk) ? candidate.chunk as MatchChunk : null;
+  const metadata = isRecord(chunk?.metadata) ? chunk.metadata as RecordLike : null;
+  // Coverage should consider the same identity-bearing surface that raw retrieval uses.
+  // Otherwise proper-noun lore hits can be retrieved, then falsely rejected as coverage_low.
+  return normalizeEvidenceTextForPlan(
+    [
+      normalizeOptionalString(chunk?.title) ?? '',
+      normalizeOptionalString(chunk?.sectionHeading) ?? '',
+      normalizeOptionalString(metadata?.title) ?? '',
+      normalizeOptionalString(chunk?.pageId) ?? '',
+      normalizeOptionalString(chunk?.chunkId) ?? '',
+      normalizeOptionalString(metadata?.id) ?? '',
+      ...normalizeStringArray(metadata?.tags),
+      ...normalizeStringArray(metadata?.entity_ids),
+      ...normalizeStringArray(metadata?.location_ids),
+      ...normalizeStringArray(metadata?.faction_ids),
+      ...normalizeStringArray(metadata?.beat_ids),
+      normalizeOptionalString(chunk?.summary) ?? '',
+      normalizeOptionalString(chunk?.content) ?? '',
+    ].join(' '),
   );
 }
 
@@ -445,6 +486,7 @@ export function inferEvidenceOwnerType(entry: unknown, selfEntityId: unknown, np
   if (sourceType === 'player_fact' || sourceType === 'session_fact') ownerType = 'player';
   else if (sourceType === 'self_profile') ownerType = 'npc';
   else if (sourceType === 'beat_fact') ownerType = 'beat';
+  else if (sourceType === 'routine_state') ownerType = isRecord(entry) && entry.selfAttributed === true ? 'npc' : 'world';
   else if (sourceType === 'lore_chunk') {
     if (isRecord(entry) && entry.selfAttributed === true) ownerType = 'npc';
     else {
@@ -684,6 +726,18 @@ function normalizeScopesForCache(scopes: unknown): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
+function normalizeRetrievalFiltersForCache(filters: unknown): string {
+  const value = isRecord(filters) ? filters : {};
+  const entityIds = normalizeStringArray(value.entityIds).map((entry) => entry.toLowerCase());
+  const locationIds = normalizeStringArray(value.locationIds).map((entry) => entry.toLowerCase());
+  const factionIds = normalizeStringArray(value.factionIds).map((entry) => entry.toLowerCase());
+  return [
+    `e=${entityIds.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
+    `l=${locationIds.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
+    `f=${factionIds.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
+  ].join(';');
+}
+
 export function buildRerankCacheKey(input: BuildRerankCacheKeyInput): string {
   const normalizedQuery = tokenizeForPlan(input.query).join(' ');
   const scopes = [
@@ -692,6 +746,7 @@ export function buildRerankCacheKey(input: BuildRerankCacheKeyInput): string {
     ...normalizeScopesForCache(input.relatedLoreScopes),
   ].join(',');
   const selfEntity = normalizeOptionalString(input.selfEntityId)?.toLowerCase() ?? 'none';
+  const filters = normalizeRetrievalFiltersForCache(input.retrievalFilters);
   return [
     `q=${normalizedQuery}`,
     `qt=${String(input.queryType ?? 'conversation')}`,
@@ -700,21 +755,27 @@ export function buildRerankCacheKey(input: BuildRerankCacheKeyInput): string {
     `tier=${String(input.budgetTier ?? 'standard')}`,
     `scope=${scopes || 'none'}`,
     `self=${selfEntity}`,
+    `filters=${filters}`,
     `artifact=${String(input.artifactVersion ?? 'unknown')}`,
     `model=${String(input.modelVersion ?? 'unknown')}`,
   ].join('|');
 }
 
 function computeRerankEntryScore(input: ComputeRerankEntryScoreInput): number {
-  const baseScore = typeof input.candidate.score === 'number' && Number.isFinite(input.candidate.score)
-    ? Math.max(0, Math.min(1, input.candidate.score / 4))
-    : 0.3;
-  const overlap = lexicalOverlapScore(input.query, candidateText(input.candidate));
+  const lexicalBaseScore = typeof input.candidate.lexicalScore === 'number' && Number.isFinite(input.candidate.lexicalScore)
+    ? Math.max(0, Math.min(1, input.candidate.lexicalScore / 4))
+    : typeof input.candidate.score === 'number' && Number.isFinite(input.candidate.score)
+      ? Math.max(0, Math.min(1, input.candidate.score / 4))
+      : 0.3;
+  const vectorBoost = typeof input.candidate.vectorScore === 'number' && Number.isFinite(input.candidate.vectorScore)
+    ? Math.max(0, Math.min(0.22, input.candidate.vectorScore * 0.22))
+    : 0;
+  const overlap = lexicalOverlapScore(input.query, candidateCoverageText(input.candidate));
   let poolBoost = 0;
   if (input.candidate.pool === 'self') poolBoost += 0.18;
   if (input.candidate.pool === 'related') poolBoost += normalizeQueryType(input.queryType) === 'other_query' ? 0.12 : 0.02;
   if (input.candidate.pool === 'ambient') poolBoost += normalizeQueryType(input.queryType) === 'world_query' ? 0.1 : 0.03;
-  const rerankScore = (baseScore * 0.48) + (overlap * 0.42) + poolBoost;
+  const rerankScore = (lexicalBaseScore * 0.4) + (overlap * 0.34) + vectorBoost + poolBoost;
   return Number(Math.max(0, Math.min(1, rerankScore)).toFixed(4));
 }
 
@@ -782,8 +843,8 @@ function computeEvidenceConflictRisk(matches: unknown): number {
     for (let j = i + 1; j < selected.length; j += 1) {
       const left = isRecord(selected[i]) ? selected[i] as LoreMatchCandidate : {};
       const right = isRecord(selected[j]) ? selected[j] as LoreMatchCandidate : {};
-      const leftText = candidateText(left);
-      const rightText = candidateText(right);
+      const leftText = candidateSemanticText(left);
+      const rightText = candidateSemanticText(right);
       const overlap = lexicalOverlapScore(leftText, rightText);
       if (overlap < 0.22) continue;
       comparablePairs += 1;
@@ -799,19 +860,22 @@ function computeEvidenceConflictRisk(matches: unknown): number {
 }
 
 function computeEvidenceCoverageScore(query: unknown, matches: unknown): number {
-  const queryTokens = tokenizeForPlan(query);
+  const queryTokens = extractFacetQueryTokens(query);
   if (queryTokens.length === 0) return 1;
   const evidenceTokens = new Set<string>();
   for (const entry of Array.isArray(matches) ? matches : []) {
     const candidate = isRecord(entry) ? entry as LoreMatchCandidate : {};
-    for (const token of tokenizeForPlan(candidateText(candidate))) {
+    for (const token of tokenizeForPlan(candidateCoverageText(candidate))) {
       evidenceTokens.add(token);
     }
   }
   if (evidenceTokens.size === 0) return 0;
   let covered = 0;
   for (const token of queryTokens) {
-    if (evidenceTokens.has(token)) covered += 1;
+    const variants = expandFacetQueryTokenVariants(token);
+    if ([...variants].some((variant) => evidenceTokens.has(variant))) {
+      covered += 1;
+    }
   }
   return Number((covered / queryTokens.length).toFixed(4));
 }
@@ -842,7 +906,13 @@ export function evaluateRetrievalQuality(input: EvaluateRetrievalQualityInput): 
 } {
   const queryType = normalizeQueryType(input.queryType);
   const routeIntent = normalizeRoutingIntent(input.routeIntent);
-  const knowledgeTurn = isKnowledgeSeekingQueryType(queryType)
+  const interpretationRequestsKnowledge = Boolean(
+    input.interpretation
+    && isRecord(input.interpretation)
+    && input.interpretation.lane === 'knowledge',
+  );
+  const knowledgeTurn = interpretationRequestsKnowledge
+    || isKnowledgeSeekingQueryType(queryType)
     || routeIntent === 'identity_self'
     || routeIntent === 'lore_world'
     || routeIntent === 'lore_other'
@@ -868,7 +938,7 @@ export function evaluateRetrievalQuality(input: EvaluateRetrievalQualityInput): 
     };
   }
   const thresholds = resolveRetrievalQualityThreshold(input.mode);
-  const coverage = computeEvidenceCoverageScore(input.query, input.selectedMatches);
+  const coverage = computeEvidenceCoverageScore(input.interpretation ?? input.query, input.selectedMatches);
   const conflictRisk = computeEvidenceConflictRisk(input.selectedMatches);
   const supportConfidence = computeSupportConfidence(input.selectedMatches);
 
@@ -1004,6 +1074,9 @@ export function buildEvidencePack(input: BuildEvidencePackInput): {
       provenance: isRecord(typedEntry.provenance) ? typedEntry.provenance : undefined,
       entityIds: Array.isArray(typedEntry.entityIds)
         ? typedEntry.entityIds.filter((value): value is string => typeof value === 'string')
+        : [],
+      anchorTerms: Array.isArray(typedEntry.anchorTerms)
+        ? typedEntry.anchorTerms.filter((value): value is string => typeof value === 'string')
         : [],
       selfAttributed: typedEntry.selfAttributed === true,
       confidence: Number(confidence.toFixed(4)),

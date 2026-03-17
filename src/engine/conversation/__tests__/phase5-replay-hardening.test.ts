@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ConversationHost } from '../ConversationHost';
+import { createDefaultNPCInteractionCapabilities } from '../interactionCapabilities';
 import type {
   ConversationProvider,
   ConversationSession,
@@ -50,7 +51,7 @@ function createStubProvider(id: string, priority: number, canHandleFn?: (npcId: 
 const SELECTION_CTX: ProviderSelectionContext = {
   hasQuestDialogue: false,
   hasBehaviorTree: false,
-  npcInteractionMode: 'scripted',
+  npcInteractionCapabilities: createDefaultNPCInteractionCapabilities(),
 };
 
 // ---------------------------------------------------------------------------
@@ -235,6 +236,11 @@ describe('pedagogyContext on PluginAgentContext', () => {
         targetLanguage: 'es',
         supportLanguage: 'en',
         correctionPosture: 'delayed',
+        deliveryContract: {
+          detailLevel: 'concise',
+          maxKnowledgeClaims: 2,
+          maxKnowledgeParts: 2,
+        },
         responseContract: { mode: 'short_text' },
         groundingScope: [{ lexicalEntryId: 'object.suitcase', targetForm: 'maleta' }],
       },

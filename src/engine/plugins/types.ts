@@ -1,6 +1,7 @@
 import type { ObjectiveType } from '../quests/types';
 import type { NearbyInteractable } from '../systems';
 import type { StateChange } from '../state';
+import type { DeliveryContract } from '../conversation/deliveryContract';
 
 export const PLUGIN_API_VERSION = 1;
 
@@ -63,6 +64,7 @@ export interface PluginPedagogyContext {
   targetLanguage?: string;
   supportLanguage?: string;
   correctionPosture?: string;
+  deliveryContract?: DeliveryContract;
   /** Response contract the provider should aim to satisfy. */
   responseContract?: {
     mode: string;
@@ -98,6 +100,7 @@ export interface PluginPedagogyContext {
 export interface PluginAgentContext {
   gameId?: string;
   regionPath?: string;
+  regionName?: string;
   episodeId?: string;
   interactionMode?: 'scripted' | 'agent' | 'hybrid';
   interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
@@ -140,6 +143,29 @@ export type PluginAgentValidationSource = 'none' | 'npc_output' | 'progression_g
 export type PluginAgentBeatEvaluationStatus = 'passed' | 'failed' | 'not_applicable';
 
 export interface PluginAgentTurnDiagnostics {
+  routing?: {
+    routeIntent?: string;
+    queryType?: string;
+    policyPath?: string;
+    semantic?: {
+      exemplarEnabled?: boolean;
+      exemplarAttempted?: boolean;
+      exemplarChanged?: boolean;
+      degradedReason?: string;
+    };
+    interpretation?: {
+      lane?: string;
+      target?: string;
+      facet?: string;
+      timeframe?: string;
+      focusText?: string;
+      confidence?: number;
+      margin?: number;
+      ambiguous?: boolean;
+      referentCount?: number;
+      topReferent?: string;
+    };
+  };
   mode?: PluginAgentConversationMode;
   modeReason?: string;
   modeResolution?: {
@@ -192,9 +218,22 @@ export interface PluginAgentTurnDiagnostics {
     attempted?: boolean;
     candidateCount?: number;
     selectedCount?: number;
+    lexicalCandidateCount?: number;
+    vectorCandidateCount?: number;
+    mergedCandidateCount?: number;
     qualityPath?: string;
     qualityReason?: string;
+    qualityGatePassed?: boolean;
     correctiveAttempted?: boolean;
+    embeddingAvailable?: boolean;
+    degradedReason?: string;
+    vectorModelId?: string;
+  };
+  authoring?: {
+    available?: boolean;
+    path?: string;
+    missingGameBundle?: boolean;
+    errorMessage?: string;
   };
   validation?: {
     decision?: PluginAgentValidationDecision;
@@ -215,17 +254,35 @@ export interface PluginAgentTurnDiagnostics {
     replyParts?: {
       attempted?: boolean;
       success?: boolean;
+      attemptCount?: number;
+      repairAttempted?: boolean;
       partCount?: number;
       groundedPartCount?: number;
       failureReason?: string;
       skippedReason?: string;
       rawResponsePreview?: string;
       rawPartsPreview?: Array<{
-        kind: 'social' | 'grounded' | 'uncertain' | 'close';
+        kind: 'social' | 'grounded' | 'inferred' | 'rumor' | 'uncertain' | 'close';
         text: string;
         support?: string[];
       }>;
+      auditAttempted?: boolean;
+      auditSuccess?: boolean;
+      auditFailureReason?: string;
+      auditRawResponsePreview?: string;
+      auditPartsPreview?: Array<{
+        partIndex: number;
+        role: 'social' | 'knowledge' | 'uncertain' | 'close' | 'unsupported';
+        claimOrdinals: number[];
+        hedgeSufficient?: boolean;
+        notes?: string;
+      }>;
       allowedSupportSlots?: string[];
+      allowedClaimOrdinals?: number[];
+      acceptedClaimOrdinals?: number[];
+      verificationMode?: 'generator_auditor';
+      estimatedLanguage?: string;
+      mismatchSuspected?: boolean;
     };
   };
   beatEvaluator?: {

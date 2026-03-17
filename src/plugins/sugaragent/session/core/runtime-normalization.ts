@@ -31,6 +31,7 @@ interface TurnTopicCoverage {
 interface TurnContext {
   gameId?: string;
   regionPath?: string;
+  regionName?: string;
   episodeId?: string;
   interactionMode?: 'scripted' | 'agent' | 'hybrid';
   interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
@@ -151,6 +152,7 @@ export function normalizeTurnContext(value: unknown): TurnContext | null {
   if (!isRecord(value)) return null;
   const gameId = normalizeOptionalString(value.gameId);
   const regionPath = normalizeOptionalString(value.regionPath);
+  const regionName = normalizeOptionalString(value.regionName);
   const episodeId = normalizeOptionalString(value.episodeId);
   const interactionMode = value.interactionMode === 'scripted'
     || value.interactionMode === 'agent'
@@ -215,6 +217,7 @@ export function normalizeTurnContext(value: unknown): TurnContext | null {
   const normalized: TurnContext = {};
   if (gameId) normalized.gameId = gameId;
   if (regionPath) normalized.regionPath = regionPath;
+  if (regionName) normalized.regionName = regionName;
   if (episodeId) normalized.episodeId = episodeId;
   if (interactionMode) normalized.interactionMode = interactionMode;
   if (interactionPolicy) normalized.interactionPolicy = interactionPolicy;

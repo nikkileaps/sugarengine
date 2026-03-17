@@ -40,10 +40,15 @@ import {
   artifactPaths,
   deserializeContentBundle,
   getLexiconPlanningStatus,
+  serializeBandPolicies,
   serializeLexiconPack,
   serializeContentBundle,
   validateContentBundle,
 } from '../../../plugins/sugarlang/content/artifacts';
+import {
+  DEFAULT_BAND_ORDER,
+  resolveBandPolicyDefaults,
+} from '../../../plugins/sugarlang/content/band-policy-defaults';
 import {
   generateDraftScaffold,
   type ScaffoldProjectInput,
@@ -209,6 +214,33 @@ function ensureBundleLexicons(
   }
 
   return { bundle: nextBundle, repairedLexicons };
+}
+
+function ensureBundleBandPolicies(
+  bundle: SugarlangContentBundle,
+): {
+  bundle: SugarlangContentBundle;
+  repairedBands: LearnerBandId[];
+  createdBandPolicies: boolean;
+} {
+  const nextBundle = cloneBundle(bundle);
+  const currentPolicies = new Map(
+    nextBundle.bandPolicies.policies.map((policy) => [policy.bandId, policy] as const),
+  );
+  const repairedBands: LearnerBandId[] = [];
+  const createdBandPolicies = nextBundle.bandPolicies.policies.length === 0;
+
+  nextBundle.bandPolicies = {
+    policies: DEFAULT_BAND_ORDER.map((bandId) => {
+      const resolved = resolveBandPolicyDefaults(currentPolicies.get(bandId), bandId);
+      if (resolved.usedDefaultPolicy || resolved.filledDeliveryContract) {
+        repairedBands.push(bandId);
+      }
+      return resolved.policy;
+    }),
+  };
+
+  return { bundle: nextBundle, repairedBands, createdBandPolicies };
 }
 
 function getScenarioTurnCount(packEntries: Array<[string, SceneLanguagePack]>): number {
@@ -494,7 +526,12 @@ export function SugarlangPanel({
       const artifactMap = await loadAllSugarlangArtifacts(gameRootPath, gameId);
       const { bundle, errors, warnings } = deserializeContentBundle(artifactMap);
       const bundleLanguages = getBundleLanguagesFromArtifacts(files, bundle);
-      const { bundle: repairedBundle, repairedLexicons } = ensureBundleLexicons(bundle, bundleLanguages);
+      const { bundle: lexiconRepairedBundle, repairedLexicons } = ensureBundleLexicons(bundle, bundleLanguages);
+      const {
+        bundle: repairedBundle,
+        repairedBands,
+        createdBandPolicies,
+      } = ensureBundleBandPolicies(lexiconRepairedBundle);
 
       if (repairedLexicons.length > 0) {
         for (const repaired of repairedLexicons) {
@@ -506,6 +543,16 @@ export function SugarlangPanel({
             serializeLexiconPack(repaired.lexicon, 'draft'),
           );
         }
+      }
+
+      if (createdBandPolicies || repairedBands.length > 0) {
+        await writePluginArtifact(
+          gameRootPath,
+          gameId,
+          'sugarlang',
+          artifactPaths.bandPolicies(),
+          serializeBandPolicies(repairedBundle.bandPolicies, 'draft'),
+        );
       }
 
       // Merge any new explicit entries from the code seed into persisted lexicons.
@@ -534,6 +581,7 @@ export function SugarlangPanel({
         ...files,
         ...repairedLexicons.map((repaired) => artifactPaths.lexicon(repaired.language)),
         ...mergedLanguages.map((lang) => artifactPaths.lexicon(lang)),
+        ...(createdBandPolicies || repairedBands.length > 0 ? [artifactPaths.bandPolicies()] : []),
       ])).sort();
       const validation = validateContentBundle(repairedBundle);
 
@@ -558,6 +606,12 @@ export function SugarlangPanel({
             : []),
           ...(mergedLanguages.length > 0
             ? [`Merged new explicit lexicon entries for ${mergedLanguages.join(', ')} from code.`]
+            : []),
+          ...(createdBandPolicies
+            ? ['Created missing band policies artifact from Sugarlang defaults.']
+            : []),
+          ...(repairedBands.length > 0
+            ? [`Filled missing delivery contracts for band policies: ${Array.from(new Set(repairedBands)).join(', ')}.`]
             : []),
         ],
         loading: false,

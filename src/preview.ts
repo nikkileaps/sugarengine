@@ -146,22 +146,25 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   const debugInfoInterval = window.setInterval(updateAgentDebugInfo, 500);
   window.addEventListener('beforeunload', () => window.clearInterval(debugInfoInterval), { once: true });
 
-  // Sugarlang preview controls
-  const slControls = new SugarlangPreviewControls(container);
-  slControlsInstance = slControls;
+  // Sugarlang preview controls — only show when the plugin is active
+  const hasSugarlang = runtimePlugins.some((p) => p.descriptor.id === 'sugarlang');
+  if (hasSugarlang) {
+    const slControls = new SugarlangPreviewControls(container);
+    slControlsInstance = slControls;
 
-  // Extract installed languages from project artifacts (lexicon-XX.json keys)
-  const slLangs = extractSugarlangLanguages(projectData);
-  if (slLangs.length > 0) {
-    slControls.setLanguages(slLangs);
+    // Extract installed languages from project artifacts (lexicon-XX.json keys)
+    const slLangs = extractSugarlangLanguages(projectData);
+    if (slLangs.length > 0) {
+      slControls.setLanguages(slLangs);
+    }
+
+    slControls.setOnChange((config) => {
+      game.setSugarlangContext(config.targetLanguage, config.supportLanguage, config.bandOverride);
+    });
+    // Apply default config immediately
+    const defaultSLConfig = slControls.getConfig();
+    game.setSugarlangContext(defaultSLConfig.targetLanguage, defaultSLConfig.supportLanguage, defaultSLConfig.bandOverride);
   }
-
-  slControls.setOnChange((config) => {
-    game.setSugarlangContext(config.targetLanguage, config.supportLanguage, config.bandOverride);
-  });
-  // Apply default config immediately
-  const defaultSLConfig = slControls.getConfig();
-  game.setSugarlangContext(defaultSLConfig.targetLanguage, defaultSLConfig.supportLanguage, defaultSLConfig.bandOverride);
 
   // Free camera controller for positioning title screen camera (F2 to toggle)
   const freeCam = new FreeCameraController(game.engine.getCamera(), container);

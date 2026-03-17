@@ -36,7 +36,14 @@ import type {
 import { ConversationHost } from '../conversation/ConversationHost';
 import { ScriptedDialogueProvider } from '../conversation/ScriptedDialogueProvider';
 import { SugarAgentProviderAdapter } from '../conversation/SugarAgentProviderAdapter';
+import {
+  DEFAULT_NPC_INTERACTION_CAPABILITIES,
+  normalizeNPCInteractionCapabilities,
+  type ConversationEngagementOption,
+  type NPCInteractionCapabilities,
+} from '../conversation';
 import type { ProviderSelectionContext } from '../conversation/types';
+import { NPCInteractionChooserUI } from '../ui/NPCInteractionChooserUI';
 
 export interface TitleScreenConfig {
   /** Camera position for title screen (world coordinates) */
@@ -93,16 +100,6 @@ export interface GameEventHandlers {
   onSugarlangTurnProduced?: (envelope: import('../conversation/types').ConversationTurnEnvelope) => void;
 }
 
-type NPCInteractionMode = 'scripted' | 'agent' | 'hybrid';
-type AgentInteractionPolicy = 'scripted-first' | 'agent-first' | 'fallback';
-
-function normalizeNPCInteractionMode(raw: unknown): NPCInteractionMode {
-  if (raw === 'agent' || raw === 'hybrid') {
-    return raw;
-  }
-  return 'scripted';
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -133,9 +130,11 @@ export class Game {
   private playerCasterConfig: PlayerCasterConfig | null = null;
   private casterSystem: CasterSystem;
   private resonancePointDefinitions: Map<string, ResonancePointConfig> = new Map();
-  private npcInteractionModes: Map<string, NPCInteractionMode> = new Map();
+  private npcInteractionCapabilities: Map<string, NPCInteractionCapabilities> = new Map();
   private fadeOverlay: FadeOverlay;
+  private npcInteractionChooser: NPCInteractionChooserUI;
   private pluginManager: PluginManager | null = null;
+  private hasAgentTurnProvider = false;
   private contentBasePath: string;
   private lastAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
   private readonly dialoguePresenter: DialoguePresenter;
@@ -192,6 +191,7 @@ export class Game {
     this.ambient = new AmbientController(this.audio);
     this.caster = new CasterManager();
     this.fadeOverlay = new FadeOverlay(container);
+    this.npcInteractionChooser = new NPCInteractionChooserUI(container);
 
     // Create caster system and add to ECS world
     this.casterSystem = new CasterSystem();
@@ -219,6 +219,10 @@ export class Game {
         executeIntent: (intent) => this.executePluginIntent(intent),
       }, config.plugins);
 
+      this.hasAgentTurnProvider = this.pluginManager.getPlugins().some((plugin) => (
+        typeof plugin.runAgentTurn === 'function'
+      ));
+
       // Run plugin updates within ECS update ordering.
       this.engine.world.addSystem(new PluginSystem(this.pluginManager));
     }
@@ -236,14 +240,14 @@ export class Game {
     );
 
     // Register SugarAgent provider adapter (priority 100 — agent/hybrid conversations).
-    if (this.pluginManager) {
+    if (this.pluginManager && this.hasAgentTurnProvider) {
       this.conversationHost.registerProvider(
         new SugarAgentProviderAdapter(this.pluginManager, {
           gameId: config.gameId,
           getCurrentRegion: () => this.engine.getCurrentRegion(),
+          getCurrentRegionInfo: () => this.getRegionInfo(),
           getCurrentEpisode: () => this.config.currentEpisode,
-          getNpcInteractionMode: (npcId) => this.getNpcInteractionMode(npcId),
-          getNpcInteractionPolicy: (npcId) => this.getNpcInteractionPolicy(npcId),
+          getNpcInteractionCapabilities: (npcId) => this.getNpcInteractionCapabilities(npcId),
           buildQuestSnapshot: () => this.buildPluginQuestSnapshot(),
           serializeFlags: () => this.flags.serializeFlags(),
         }),
@@ -354,7 +358,7 @@ export class Game {
         model?: string;
         modelHeight?: number;
         animations?: Record<string, string>;
-        interactionMode?: NPCInteractionMode;
+        interactionCapabilities?: NPCInteractionCapabilities;
         agentProfile?: unknown;
       }[];
       items?: { id: string; name: string; model?: string; modelScale?: number; modelColor?: string; view?: import('../inventory/types').ItemView }[];
@@ -409,13 +413,13 @@ export class Game {
       }
     }
 
-    // Register NPCs and optional interaction routing mode.
-    this.npcInteractionModes.clear();
+    // Register NPCs and authored interaction capabilities.
+    this.npcInteractionCapabilities.clear();
     if (project.npcs) {
       for (const npc of project.npcs) {
-        this.npcInteractionModes.set(
+        this.npcInteractionCapabilities.set(
           npc.id,
-          normalizeNPCInteractionMode(npc.interactionMode),
+          normalizeNPCInteractionCapabilities(npc.interactionCapabilities),
         );
         this.engine.registerNPC(npc.id, npc.name, npc.defaultDialogue, npc.behaviorTree, npc.behaviorMode, npc.model, npc.modelHeight, npc.animations);
       }
@@ -597,12 +601,12 @@ export class Game {
 
   isAgentConversationActive(): boolean {
     const session = this.conversationHost.getActiveSession();
-    return session !== null && session.providerId === 'sugaragent';
+    return session !== null && session.presentationKind === 'chat_panel';
   }
 
   getActiveAgentConversation(): { npcId: string; npcName?: string } | null {
     const session = this.conversationHost.getActiveSession();
-    if (!session || session.providerId !== 'sugaragent') return null;
+    if (!session || session.presentationKind !== 'chat_panel') return null;
     return { npcId: session.npcId, npcName: session.npcName };
   }
 
@@ -613,7 +617,7 @@ export class Game {
 
   async submitAgentConversationTurn(playerMessage: string): Promise<PluginAgentTurnResult> {
     const session = this.conversationHost.getActiveSession();
-    if (!session || session.providerId !== 'sugaragent') {
+    if (!session || session.presentationKind !== 'chat_panel') {
       return {
         utterance: 'I cannot continue this conversation right now.',
         emotion: 'neutral',
@@ -676,7 +680,7 @@ export class Game {
    */
   async submitSugarlangTurn(input: import('../conversation/types').PlayerInput): Promise<void> {
     const session = this.conversationHost.getActiveSession();
-    if (!session || session.providerId !== 'sugarlang-scripted') return;
+    if (!session || session.presentationKind !== 'dialogue_panel' || session.driverKind !== 'host_turn_driven') return;
 
     const envelope = await this.conversationHost.submitTurn(input);
     if (envelope) {
@@ -698,19 +702,88 @@ export class Game {
 
   closeSugarlangConversation(): void {
     const session = this.conversationHost.getActiveSession();
-    if (!session || session.providerId !== 'sugarlang-scripted') return;
+    if (!session || session.presentationKind !== 'dialogue_panel' || session.driverKind !== 'host_turn_driven') return;
     void this.conversationHost.endConversation();
   }
 
-  private getNpcInteractionMode(npcId: string): NPCInteractionMode {
-    return this.npcInteractionModes.get(npcId) ?? 'scripted';
+  private getNpcInteractionCapabilities(npcId: string): NPCInteractionCapabilities {
+    return this.npcInteractionCapabilities.get(npcId) ?? DEFAULT_NPC_INTERACTION_CAPABILITIES;
   }
 
-  private getNpcInteractionPolicy(npcId: string): AgentInteractionPolicy {
-    const mode = this.getNpcInteractionMode(npcId);
-    if (mode === 'hybrid') return 'scripted-first';
-    if (mode === 'agent') return 'agent-first';
-    return 'fallback';
+  private buildConversationSelectionContext(options: {
+    npcId: string;
+    npcName?: string;
+    hasQuestDialogue: boolean;
+    hasBehaviorTree: boolean;
+    dialogueId?: string;
+    selectedEngagement?: ConversationEngagementOption;
+  }): ProviderSelectionContext {
+    return {
+      hasQuestDialogue: options.hasQuestDialogue,
+      hasBehaviorTree: options.hasBehaviorTree,
+      npcInteractionCapabilities: this.getNpcInteractionCapabilities(options.npcId),
+      npcName: options.npcName,
+      dialogueId: options.dialogueId,
+      selectedEngagement: options.selectedEngagement,
+    };
+  }
+
+  private listNpcEngagementOptions(
+    npcId: string,
+    npcName: string | undefined,
+    hasBehaviorTree: boolean,
+    scriptedDialogueId?: string,
+  ): ConversationEngagementOption[] {
+    const capabilities = this.getNpcInteractionCapabilities(npcId);
+    const providerOptions = this.conversationHost.listEngagementOptions(
+      npcId,
+      this.buildConversationSelectionContext({
+        npcId,
+        npcName,
+        hasQuestDialogue: false,
+        hasBehaviorTree,
+      }),
+    );
+    const hasScenarioOption = providerOptions.some((option) => option.kind === 'scenario');
+
+    if (!capabilities.scenario.enabled || hasScenarioOption || !scriptedDialogueId) {
+      return providerOptions;
+    }
+
+    const defaultOptions = this.conversationHost.listEngagementOptions(
+      npcId,
+      this.buildConversationSelectionContext({
+        npcId,
+        npcName,
+        hasQuestDialogue: false,
+        hasBehaviorTree,
+        dialogueId: scriptedDialogueId,
+      }),
+    ).filter((option) => option.kind === 'default');
+
+    return [...providerOptions, ...defaultOptions];
+  }
+
+  private async startConversationForOption(
+    npcId: string,
+    npcName: string | undefined,
+    hasBehaviorTree: boolean,
+    option: ConversationEngagementOption,
+    scriptedDialogueId?: string,
+  ): Promise<boolean> {
+    const session = await this.conversationHost.startConversation(
+      npcId,
+      npcName,
+      this.buildConversationSelectionContext({
+        npcId,
+        npcName,
+        hasQuestDialogue: false,
+        hasBehaviorTree,
+        dialogueId: option.kind === 'default' ? scriptedDialogueId : undefined,
+        selectedEngagement: option,
+      }),
+    );
+    return session !== null;
   }
 
   private buildPluginQuestSnapshot(): Array<{
@@ -751,24 +824,21 @@ export class Game {
 
     // For NPCs, available if there's dialogue, a behavior tree, or a conversation provider.
     if (type === 'npc') {
-      const interactionMode = this.getNpcInteractionMode(id);
+      const capabilities = this.getNpcInteractionCapabilities(id);
       const npcInfo = this.engine.getNPCInfo(id);
       const hasQuestDialogue = this.quests.getQuestDialogueForNpc(id) !== null;
-      const hasDefaultDialogue = !!dialogueId;
-      const hasBehaviorTree = this.engine.hasNPCBehaviorTree(id);
-      const canUsePlugin = this.pluginManager !== null
-        && (interactionMode === 'agent' || interactionMode === 'hybrid');
-      const hasConversationProvider = this.conversationHost.hasProviderFor(id, {
-        hasQuestDialogue: false,
+      const hasBehaviorTree = capabilities.scenario.enabled && this.engine.hasNPCBehaviorTree(id);
+      const engagementOptions = this.listNpcEngagementOptions(
+        id,
+        npcInfo?.name,
         hasBehaviorTree,
-        npcInteractionMode: interactionMode,
-        npcName: npcInfo?.name,
-      });
+        capabilities.scenario.enabled ? dialogueId : undefined,
+      );
       return {
         type,
         id,
         promptText,
-        available: hasQuestDialogue || hasDefaultDialogue || hasBehaviorTree || canUsePlugin || hasConversationProvider,
+        available: hasQuestDialogue || hasBehaviorTree || engagementOptions.length > 0,
       };
     }
 
@@ -793,6 +863,7 @@ export class Game {
       this.sceneManager.isBlocking() ||
       this.dialogue.isDialogueActive() ||
       this.inspection.isInspectionActive() ||
+      this.npcInteractionChooser.isVisible() ||
       this.conversationHost.isActive()
     );
   }
@@ -836,7 +907,7 @@ export class Game {
 
       // End the ConversationHost scripted session when the DialogueManager finishes.
       const hostSession = this.conversationHost.getActiveSession();
-      if (hostSession?.providerId === 'scripted-dialogue') {
+      if (hostSession?.driverKind === 'dialogue_manager_driven') {
         void this.conversationHost.endConversation();
       }
     });
@@ -896,12 +967,12 @@ export class Game {
     // ========================================
     this.conversationHost.setEventHandlers({
       onSessionStart: (session) => {
-        if (session.providerId === 'sugaragent') {
+        if (session.presentationKind === 'chat_panel') {
           this.eventHandlers.onAgentConversationStart?.({
             npcId: session.npcId,
             npcName: session.npcName,
           });
-        } else if (session.providerId === 'sugarlang-scripted') {
+        } else if (session.presentationKind === 'dialogue_panel' && session.driverKind === 'host_turn_driven') {
           this.eventHandlers.onSugarlangSessionStart?.({
             npcId: session.npcId,
             npcName: session.npcName,
@@ -915,9 +986,9 @@ export class Game {
         }
       },
       onSessionEnd: (session) => {
-        if (session.providerId === 'sugaragent') {
+        if (session.presentationKind === 'chat_panel') {
           this.eventHandlers.onAgentConversationEnd?.();
-        } else if (session.providerId === 'sugarlang-scripted') {
+        } else if (session.presentationKind === 'dialogue_panel' && session.driverKind === 'host_turn_driven') {
           this.eventHandlers.onSugarlangSessionEnd?.();
         }
       },
@@ -1701,10 +1772,10 @@ export class Game {
     if (this.isUIBlocking()) return;
     this.audio.play('interact');
     this.emitPluginEvent({ type: 'interactionAttempt', npcId, npcDefaultDialogue });
-    const interactionMode = this.getNpcInteractionMode(npcId);
+    const capabilities = this.getNpcInteractionCapabilities(npcId);
     const npcInfo = this.engine.getNPCInfo(npcId);
     const npcName = npcInfo?.name;
-    const hasBehaviorTree = this.engine.hasNPCBehaviorTree(npcId);
+    const hasBehaviorTree = capabilities.scenario.enabled && this.engine.hasNPCBehaviorTree(npcId);
 
     // 1) Quest-specific dialogue takes absolute priority.
     const questDialogue = this.quests.getQuestDialogueForNpc(npcId);
@@ -1714,76 +1785,92 @@ export class Game {
         objectiveId: questDialogue.objectiveId,
         completeOn: questDialogue.completeOn,
       };
-      const ctx: ProviderSelectionContext = {
-        hasQuestDialogue: true,
-        hasBehaviorTree,
-        npcInteractionMode: interactionMode,
+      await this.conversationHost.startConversation(
+        npcId,
         npcName,
-        dialogueId: questDialogue.dialogue,
-      };
-      await this.conversationHost.startConversation(npcId, npcName, ctx);
+        this.buildConversationSelectionContext({
+          npcId,
+          npcName,
+          hasQuestDialogue: true,
+          hasBehaviorTree,
+          dialogueId: questDialogue.dialogue,
+          selectedEngagement: {
+            kind: 'default',
+            providerId: 'scripted-dialogue',
+            label: 'Quest',
+            presentationKind: 'dialogue_panel',
+            driverKind: 'dialogue_manager_driven',
+            priority: 0,
+          },
+        }),
+      );
       this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'quest' });
       return;
     }
 
     // 2) Scripted behavior tree interaction (existing ADR-017 path).
-    //    "agent" mode bypasses BT to prioritize plugin free-form interaction.
-    if (interactionMode !== 'agent') {
+    let scriptedDialogueId = capabilities.scenario.enabled ? npcDefaultDialogue : undefined;
+    if (capabilities.scenario.enabled) {
       const btAction = this.engine.evaluateNPCBehavior(npcId);
       if (btAction) {
         // If BT produces a dialogue action, route through the ConversationHost.
         if (btAction.type === 'dialogue') {
-          const ctx: ProviderSelectionContext = {
-            hasQuestDialogue: false,
-            hasBehaviorTree: true,
-            npcInteractionMode: interactionMode,
-            npcName,
-            dialogueId: btAction.dialogueId,
-          };
-          await this.conversationHost.startConversation(npcId, npcName, ctx);
-          this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
+          scriptedDialogueId = btAction.dialogueId;
         } else {
           // Non-dialogue BT actions (setFlag, moveTo, etc.) are not conversations.
           this.executeBTAction(btAction, npcId);
           this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'behaviorTree' });
+          return;
         }
-        return;
       }
     }
 
-    // 3) Plugin-provided conversation (sugarlang, SugarAgent, etc.).
-    //    Try the host with no dialogueId — any registered provider may handle it.
-    //    SugarlangScriptedProvider picks up NPCs with sugarlang scenarios.
-    //    SugarAgentProviderAdapter picks up agent/hybrid mode NPCs.
-    {
-      const ctx: ProviderSelectionContext = {
-        hasQuestDialogue: false,
-        hasBehaviorTree,
-        npcInteractionMode: interactionMode,
-        npcName,
-      };
-      const session = await this.conversationHost.startConversation(npcId, npcName, ctx);
-      if (session) {
-        this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'plugin' });
-        return;
-      }
-    }
-
-    // 4) Scripted fallback — default dialogue.
-    this.quests.triggerObjective('talk', npcId);
-    if (npcDefaultDialogue) {
-      const ctx: ProviderSelectionContext = {
-        hasQuestDialogue: false,
-        hasBehaviorTree: false,
-        npcInteractionMode: interactionMode,
-        npcName,
-        dialogueId: npcDefaultDialogue,
-      };
-      await this.conversationHost.startConversation(npcId, npcName, ctx);
-      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'defaultDialogue' });
-    } else {
+    // 3) Engine-owned engagement discovery and chooser.
+    const engagementOptions = this.listNpcEngagementOptions(
+      npcId,
+      npcName,
+      hasBehaviorTree,
+      scriptedDialogueId,
+    );
+    if (engagementOptions.length === 0) {
       this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'none' });
+      return;
     }
+
+    const chosenOption = engagementOptions.length === 1
+      ? engagementOptions[0]
+      : await this.npcInteractionChooser.choose({
+          npcId,
+          npcName,
+          options: engagementOptions,
+        });
+
+    if (!chosenOption) {
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'none' });
+      return;
+    }
+
+    const started = await this.startConversationForOption(
+      npcId,
+      npcName,
+      hasBehaviorTree,
+      chosenOption,
+      scriptedDialogueId,
+    );
+    if (!started) {
+      this.emitPluginEvent({ type: 'interactionHandled', npcId, source: 'none' });
+      return;
+    }
+
+    if (chosenOption.kind !== 'chat') {
+      this.quests.triggerObjective('talk', npcId);
+    }
+
+    this.emitPluginEvent({
+      type: 'interactionHandled',
+      npcId,
+      source: chosenOption.kind === 'default' ? 'defaultDialogue' : 'plugin',
+    });
   }
 
   /**

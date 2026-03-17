@@ -77,7 +77,7 @@ describe('reply-parts-validator', () => {
     });
 
     expect(result.valid).toBe(false);
-    expect(buildReplyPartsValidationRepairReason(result)).toContain('knowledge_turn_requires_grounded_or_uncertain');
+    expect(buildReplyPartsValidationRepairReason(result)).toContain('knowledge_turn_requires_knowledge_or_uncertain');
   });
 
   it('accepts explicit uncertainty for knowledge turns', () => {
@@ -113,5 +113,27 @@ describe('reply-parts-validator', () => {
     expect(result.valid).toBe(false);
     expect(result.summary.ownershipViolations).toBe(1);
     expect(buildReplyPartsValidationRepairReason(result)).toContain('self_query_ownership');
+  });
+
+  it('accepts inferred and rumor parts when support slots are valid', () => {
+    const result = validateReplyPartsContract({
+      parts: [
+        {
+          kind: 'inferred',
+          text: 'The resort is just outside Earendale.',
+          support: ['E1'],
+        },
+        {
+          kind: 'rumor',
+          text: 'The old tunnel is used by smugglers.',
+          support: ['E1'],
+        },
+      ],
+      supportSlots,
+      queryType: 'other_query',
+      intent: 'answer',
+    });
+
+    expect(result.valid).toBe(true);
   });
 });

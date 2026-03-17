@@ -22,6 +22,7 @@ interface RuntimeBridgeResponse {
   jsonText?: string;
   attempts?: number;
   usedFallback?: boolean;
+  fallbackKind?: 'provider_unavailable' | 'validation_fallback' | 'deterministic_runtime';
   validationErrors?: string[];
   diagnostics?: Record<string, unknown>;
   vectors?: number[][];
@@ -89,6 +90,11 @@ export class HttpLocalRuntimeBridge implements LocalRuntimeBridge {
       jsonText: typeof result.jsonText === 'string' ? result.jsonText : '{}',
       attempts: Number.isFinite(result.attempts) ? Number(result.attempts) : undefined,
       usedFallback: result.usedFallback === true,
+      fallbackKind: result.fallbackKind === 'provider_unavailable'
+        || result.fallbackKind === 'validation_fallback'
+        || result.fallbackKind === 'deterministic_runtime'
+        ? result.fallbackKind
+        : undefined,
       validationErrors: Array.isArray(result.validationErrors)
         ? result.validationErrors.filter((entry): entry is string => typeof entry === 'string')
         : undefined,

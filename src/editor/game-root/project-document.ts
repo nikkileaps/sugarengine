@@ -3,6 +3,10 @@
  * @description Shared authored game-project document model and normalization helpers.
  */
 
+import {
+  normalizeNPCInteractionCapabilitiesFromDocument,
+  type NPCInteractionCapabilities,
+} from '../../engine/conversation';
 import type {
   DialogueData,
   EpisodeData,
@@ -108,6 +112,27 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
   return Object.fromEntries(entries);
 }
 
+function normalizeNpcDocument(value: unknown): NPCData | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const id = normalizeString(record.id);
+  const name = normalizeString(record.name);
+  if (!id || !name) return null;
+
+  const normalized = {
+    ...(record as Record<string, unknown>),
+    id,
+    name,
+    interactionCapabilities: normalizeNPCInteractionCapabilitiesFromDocument(
+      record.interactionCapabilities as NPCInteractionCapabilities | undefined,
+      record.interactionMode,
+    ),
+  } as unknown as NPCData;
+
+  delete (normalized as unknown as Record<string, unknown>).interactionMode;
+  return normalized;
+}
+
 export function normalizeAuthoredContentBasePath(value: unknown): string {
   const raw = normalizeString(value);
   if (!raw) return AUTHORED_CONTENT_BASE_PATH;
@@ -195,7 +220,11 @@ export function normalizeLoadedProjectDocument(
     seasons,
     episodes,
     plugins: Array.isArray(value.plugins) ? value.plugins as PluginConfigData[] : [],
-    npcs: Array.isArray(value.npcs) ? value.npcs as NPCData[] : [],
+    npcs: Array.isArray(value.npcs)
+      ? value.npcs
+          .map((entry) => normalizeNpcDocument(entry))
+          .filter((entry): entry is NPCData => entry !== null)
+      : [],
     dialogues: Array.isArray(value.dialogues) ? value.dialogues as DialogueData[] : [],
     quests: Array.isArray(value.quests) ? value.quests as QuestData[] : [],
     items: Array.isArray(value.items) ? value.items as ItemData[] : [],

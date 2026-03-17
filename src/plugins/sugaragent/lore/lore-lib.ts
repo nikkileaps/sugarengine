@@ -350,6 +350,18 @@ function firstSentence(text) {
   return sentenceMatch ? sentenceMatch[0].trim() : trimmed;
 }
 
+function clampVectorValue(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Number(Number(value).toFixed(8));
+}
+
+function normalizeVector(vector) {
+  if (!Array.isArray(vector)) return [];
+  return vector
+    .map((value) => clampVectorValue(value))
+    .filter((value) => Number.isFinite(value));
+}
+
 function normalizeStringArray(values) {
   if (!Array.isArray(values)) return [];
   return values
@@ -504,6 +516,14 @@ function matchesLoreScope(chunk, scopeFilters) {
     }
   }
   return false;
+}
+
+function shouldIncludeChunkForRetrieval(chunk, identityConfig) {
+  if (matchesLoreScope(chunk, identityConfig.scopeFilters)) return true;
+  const isSelfQuery = identityConfig.queryType === 'self_query';
+  if (!isSelfQuery || !identityConfig.selfEntityId) return false;
+  const chunkEntityIds = collectChunkEntityIds(chunk);
+  return chunkEntityIds.includes(identityConfig.selfEntityId);
 }
 
 export function ingestLoreDirectory({
@@ -739,6 +759,93 @@ export function ingestLoreDirectory({
   };
 }
 
+export function buildChunkEmbeddingText(chunk) {
+  if (!chunk || typeof chunk !== 'object') return '';
+  const metadata = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+  const title = normalizeOptionalString(chunk.title ?? metadata.title) ?? '';
+  const heading = normalizeOptionalString(chunk.sectionHeading) ?? '';
+  const summary = normalizeOptionalString(chunk.summary) ?? '';
+  const content = normalizeOptionalString(chunk.content) ?? '';
+  const tags = normalizeStringArray(metadata.tags).join(' ');
+  const entityIds = normalizeStringArray(metadata.entity_ids).join(' ');
+  const locationIds = normalizeStringArray(metadata.location_ids).join(' ');
+  const factionIds = normalizeStringArray(metadata.faction_ids).join(' ');
+  return normalizeWhitespace([
+    title,
+    heading,
+    summary,
+    content,
+    tags,
+    entityIds,
+    locationIds,
+    factionIds,
+  ].filter(Boolean).join(' '));
+}
+
+export async function augmentLoreArtifactsWithVectors({
+  artifacts,
+  embedTexts,
+  embeddingModelId = 'unknown-embedding-model',
+}) {
+  if (!artifacts || typeof artifacts !== 'object') return artifacts;
+  if (typeof embedTexts !== 'function') {
+    return {
+      ...artifacts,
+      vectorManifest: null,
+      chunkVectors: [],
+    };
+  }
+
+  const chunks = Array.isArray(artifacts.chunks) ? artifacts.chunks : [];
+  if (chunks.length === 0) {
+    return {
+      ...artifacts,
+      vectorManifest: null,
+      chunkVectors: [],
+    };
+  }
+
+  const embeddingTexts = chunks.map((chunk) => buildChunkEmbeddingText(chunk));
+  const vectors = await embedTexts(embeddingTexts);
+  const normalizedVectors = chunks
+    .map((chunk, index) => {
+      const chunkId = normalizeOptionalString(chunk?.chunkId);
+      const vector = normalizeVector(vectors[index]);
+      if (!chunkId || vector.length === 0) return null;
+      return {
+        chunkId,
+        vector,
+      };
+    })
+    .filter(Boolean);
+  const embeddingDimension = normalizedVectors[0]?.vector?.length ?? 0;
+  const artifactVersion = normalizeOptionalString(artifacts?.manifest?.loreArtifactVersion) ?? null;
+
+  return {
+    ...artifacts,
+    manifest: {
+      ...(typeof artifacts.manifest === 'object' && artifacts.manifest !== null ? artifacts.manifest : {}),
+      embeddings: embeddingDimension > 0
+        ? {
+            modelId: embeddingModelId,
+            dimension: embeddingDimension,
+            artifact: 'chunk-vectors.json',
+          }
+        : undefined,
+    },
+    vectorManifest: embeddingDimension > 0
+      ? {
+          schemaVersion: 1,
+          embeddingModelId,
+          embeddingDimension,
+          artifactVersion,
+          generatedAt: new Date().toISOString(),
+        }
+      : null,
+    chunkVectors: normalizedVectors,
+  };
+}
+
 function normalizeExistingFactRecord(raw) {
   if (typeof raw !== 'object' || raw === null) return null;
   const factId = normalizeOptionalString(raw.factId);
@@ -879,6 +986,7 @@ export function writeLoreArtifacts(outputDir, artifacts) {
   const chunksPath = path.join(absoluteOutputDir, 'chunks.json');
   const factsPath = path.join(absoluteOutputDir, 'facts.json');
   const migrationsPath = path.join(absoluteOutputDir, 'migrations.json');
+  const chunkVectorsPath = path.join(absoluteOutputDir, 'chunk-vectors.json');
 
   fs.writeFileSync(manifestPath, `${JSON.stringify(artifacts.manifest, null, 2)}\n`, 'utf8');
   fs.writeFileSync(chunksPath, `${JSON.stringify(artifacts.chunks, null, 2)}\n`, 'utf8');
@@ -899,12 +1007,23 @@ export function writeLoreArtifacts(outputDir, artifacts) {
     }, null, 2)}\n`,
     'utf8',
   );
+  if (artifacts?.vectorManifest && Array.isArray(artifacts?.chunkVectors)) {
+    fs.writeFileSync(
+      chunkVectorsPath,
+      `${JSON.stringify({
+        manifest: artifacts.vectorManifest,
+        vectors: artifacts.chunkVectors,
+      }, null, 2)}\n`,
+      'utf8',
+    );
+  }
 
   return {
     manifestPath,
     chunksPath,
     factsPath,
     migrationsPath,
+    chunkVectorsPath: artifacts?.vectorManifest ? chunkVectorsPath : null,
   };
 }
 
@@ -914,6 +1033,7 @@ export function loadLoreArtifacts(outputDir) {
   const chunksPath = path.join(absoluteOutputDir, 'chunks.json');
   const factsPath = path.join(absoluteOutputDir, 'facts.json');
   const migrationsPath = path.join(absoluteOutputDir, 'migrations.json');
+  const chunkVectorsPath = path.join(absoluteOutputDir, 'chunk-vectors.json');
 
   if (!fs.existsSync(manifestPath) || !fs.existsSync(chunksPath)) {
     return null;
@@ -935,9 +1055,13 @@ export function loadLoreArtifacts(outputDir) {
       mappings: [],
       unresolvedOldFacts: [],
     };
+  const vectorBundle = fs.existsSync(chunkVectorsPath)
+    ? JSON.parse(fs.readFileSync(chunkVectorsPath, 'utf8'))
+    : null;
   const safeFacts = Array.isArray(facts) ? facts : [];
   const factById = {};
   const factsByChunkId = {};
+  const chunkById = {};
   for (const fact of safeFacts) {
     const factId = normalizeOptionalString(fact?.factId);
     if (!factId) continue;
@@ -950,14 +1074,39 @@ export function loadLoreArtifacts(outputDir) {
       factsByChunkId[chunkId].push(fact);
     }
   }
+  for (const chunk of chunks) {
+    const chunkId = normalizeOptionalString(chunk?.chunkId);
+    if (!chunkId) continue;
+    chunkById[chunkId] = chunk;
+  }
+  const chunkVectors = Array.isArray(vectorBundle?.vectors)
+    ? vectorBundle.vectors
+        .map((entry) => {
+          const chunkId = normalizeOptionalString(entry?.chunkId);
+          const vector = normalizeVector(entry?.vector);
+          if (!chunkId || vector.length === 0) return null;
+          return { chunkId, vector };
+        })
+        .filter(Boolean)
+    : [];
+  const chunkVectorById = {};
+  for (const entry of chunkVectors) {
+    if (entry?.chunkId) {
+      chunkVectorById[entry.chunkId] = entry.vector;
+    }
+  }
 
   return {
     manifest,
     chunks,
     facts: safeFacts,
     migrations,
+    vectorManifest: vectorBundle?.manifest ?? null,
+    chunkVectors,
     factById,
     factsByChunkId,
+    chunkById,
+    chunkVectorById,
   };
 }
 
@@ -1080,7 +1229,7 @@ export function retrieveLoreChunks(artifacts, query, options = {}) {
   if (queryTokens.length === 0) return [];
 
   return artifacts.chunks
-    .filter((chunk) => matchesLoreScope(chunk, scopeFilters))
+    .filter((chunk) => shouldIncludeChunkForRetrieval(chunk, identityConfig))
     .map((chunk) => {
       const chunkIdentity = classifyChunkIdentity(chunk, identityConfig);
       return {
@@ -1098,6 +1247,64 @@ export function retrieveLoreChunks(artifacts, query, options = {}) {
     .filter((entry) => entry.score > 0)
     .sort((a, b) => (
       b.score - a.score
+      || a.poolRank - b.poolRank
+      || a.chunk.chunkId.localeCompare(b.chunk.chunkId)
+    ))
+    .slice(0, maxResults);
+}
+
+export function retrieveLoreChunksByVector(artifacts, queryVector, options = {}) {
+  if (!artifacts || !Array.isArray(artifacts.chunks) || !Array.isArray(artifacts.chunkVectors)) return [];
+  if (!Array.isArray(queryVector) || queryVector.length === 0) return [];
+
+  const maxResults = Math.max(1, options.maxResults ?? 6);
+  const minVectorScore = Number.isFinite(options.minVectorScore) ? Math.max(0, Number(options.minVectorScore)) : 0.08;
+  const identityConfig = buildIdentityRetrievalConfig(options);
+  const chunkVectorById = {};
+  for (const entry of artifacts.chunkVectors) {
+    const chunkId = normalizeOptionalString(entry?.chunkId);
+    if (!chunkId || !Array.isArray(entry?.vector)) continue;
+    chunkVectorById[chunkId] = entry.vector;
+  }
+
+  const cosineSimilarity = (left, right) => {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length === 0 || right.length === 0) return 0;
+    const dimension = Math.min(left.length, right.length);
+    let dot = 0;
+    let leftMagnitude = 0;
+    let rightMagnitude = 0;
+    for (let index = 0; index < dimension; index += 1) {
+      const leftValue = Number.isFinite(left[index]) ? Number(left[index]) : 0;
+      const rightValue = Number.isFinite(right[index]) ? Number(right[index]) : 0;
+      dot += leftValue * rightValue;
+      leftMagnitude += leftValue * leftValue;
+      rightMagnitude += rightValue * rightValue;
+    }
+    if (leftMagnitude <= 0 || rightMagnitude <= 0) return 0;
+    return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+  };
+
+  return artifacts.chunks
+    .filter((chunk) => shouldIncludeChunkForRetrieval(chunk, identityConfig))
+    .map((chunk) => {
+      const chunkId = normalizeOptionalString(chunk?.chunkId);
+      const vector = chunkId ? chunkVectorById[chunkId] : null;
+      if (!vector) return null;
+      const vectorScore = Number(Math.max(0, Math.min(1, cosineSimilarity(queryVector, vector))).toFixed(4));
+      if (vectorScore < minVectorScore) return null;
+      const chunkIdentity = classifyChunkIdentity(chunk, identityConfig);
+      return {
+        chunk,
+        score: Number((vectorScore * 2.5).toFixed(4)),
+        vectorScore,
+        pool: chunkIdentity.pool,
+        poolRank: chunkIdentity.poolRank,
+        selfEntityMatch: chunkIdentity.selfEntityMatch,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (
+      b.vectorScore - a.vectorScore
       || a.poolRank - b.poolRank
       || a.chunk.chunkId.localeCompare(b.chunk.chunkId)
     ))

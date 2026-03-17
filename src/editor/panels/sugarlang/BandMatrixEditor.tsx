@@ -2,7 +2,8 @@
  * BandMatrixEditor — matrix view of band policies (B0–B4).
  *
  * Editable fields per band: supportLanguagePolicy (mixingLevel, showSupportStrip,
- * showGlosses), groundingIntensity, correctionPosture, allowedResponseModes.
+ * showGlosses), groundingIntensity, correctionPosture, allowedResponseModes,
+ * and the generic deliveryContract budget used for NPC chat shaping.
  */
 
 import { useCallback } from 'react';
@@ -16,8 +17,11 @@ import {
   Checkbox,
   Badge,
   ScrollArea,
+  NumberInput,
+  Divider,
 } from '@mantine/core';
 import type { BandPolicy, BandPolicyPack, LearnerBandId } from '../../../plugins/sugarlang/types';
+import { createDefaultDeliveryContract } from '../../../plugins/sugarlang/content/band-policy-defaults';
 
 const MIXING_LEVELS = [
   { value: 'full_support', label: 'Full Support' },
@@ -39,6 +43,12 @@ const CORRECTION_POSTURES = [
   { value: 'delayed', label: 'Delayed' },
   { value: 'on_request', label: 'On Request' },
   { value: 'none', label: 'None' },
+];
+
+const DELIVERY_DETAIL_LEVELS = [
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'concise', label: 'Concise' },
+  { value: 'expanded', label: 'Expanded' },
 ];
 
 const ALL_RESPONSE_MODES = [
@@ -106,6 +116,16 @@ function BandPolicyCard({
   policy: BandPolicy;
   onUpdate: (patch: Partial<BandPolicy>) => void;
 }) {
+  const deliveryContract = policy.deliveryContract ?? createDefaultDeliveryContract(policy.bandId);
+  const updateDeliveryContract = (patch: Partial<BandPolicy['deliveryContract']>) => {
+    onUpdate({
+      deliveryContract: {
+        ...deliveryContract,
+        ...patch,
+      },
+    });
+  };
+
   return (
     <Paper p="sm" withBorder>
       <Group gap="xs" mb="sm">
@@ -200,6 +220,91 @@ function BandPolicyCard({
             ))}
           </Group>
         </div>
+
+        <Divider />
+
+        <Stack gap="xs">
+          <Text size="xs" fw={500}>Delivery Contract</Text>
+          <Group gap="md" grow>
+            <Select
+              label="Detail Level"
+              size="xs"
+              data={DELIVERY_DETAIL_LEVELS}
+              value={deliveryContract.detailLevel ?? 'concise'}
+              onChange={(val) => {
+                if (!val) return;
+                updateDeliveryContract({
+                  detailLevel: val as NonNullable<BandPolicy['deliveryContract']['detailLevel']>,
+                });
+              }}
+            />
+            <NumberInput
+              label="Max Knowledge Claims"
+              size="xs"
+              min={1}
+              value={deliveryContract.maxKnowledgeClaims ?? 1}
+              onChange={(value) => updateDeliveryContract({ maxKnowledgeClaims: Number(value) || 1 })}
+            />
+            <NumberInput
+              label="Max Knowledge Parts"
+              size="xs"
+              min={1}
+              value={deliveryContract.maxKnowledgeParts ?? 1}
+              onChange={(value) => updateDeliveryContract({ maxKnowledgeParts: Number(value) || 1 })}
+            />
+          </Group>
+
+          <Group gap="md" grow>
+            <NumberInput
+              label="Max Sentences"
+              size="xs"
+              min={1}
+              value={deliveryContract.maxSentences ?? 1}
+              onChange={(value) => updateDeliveryContract({ maxSentences: Number(value) || 1 })}
+            />
+            <NumberInput
+              label="Max Sentence Length"
+              size="xs"
+              min={1}
+              value={deliveryContract.maxSentenceLength ?? 8}
+              onChange={(value) => updateDeliveryContract({ maxSentenceLength: Number(value) || 1 })}
+            />
+            <NumberInput
+              label="Max Clause Depth"
+              size="xs"
+              min={1}
+              value={deliveryContract.maxClauseDepth ?? 1}
+              onChange={(value) => updateDeliveryContract({ maxClauseDepth: Number(value) || 1 })}
+            />
+          </Group>
+
+          <Group gap="md" style={{ flexWrap: 'wrap' }}>
+            <Checkbox
+              label="Allow Exact Numbers"
+              size="xs"
+              checked={deliveryContract.allowExactNumbers ?? false}
+              onChange={(e) => updateDeliveryContract({ allowExactNumbers: e.currentTarget.checked })}
+            />
+            <Checkbox
+              label="Allow Enrichment Facts"
+              size="xs"
+              checked={deliveryContract.allowEnrichmentFacts ?? false}
+              onChange={(e) => updateDeliveryContract({ allowEnrichmentFacts: e.currentTarget.checked })}
+            />
+            <Checkbox
+              label="Prefer Concrete Facts"
+              size="xs"
+              checked={deliveryContract.preferConcreteFacts ?? false}
+              onChange={(e) => updateDeliveryContract({ preferConcreteFacts: e.currentTarget.checked })}
+            />
+            <Checkbox
+              label="Prefer High-Frequency Lexicon"
+              size="xs"
+              checked={deliveryContract.preferHighFrequencyLexicon ?? false}
+              onChange={(e) => updateDeliveryContract({ preferHighFrequencyLexicon: e.currentTarget.checked })}
+            />
+          </Group>
+        </Stack>
       </Stack>
     </Paper>
   );

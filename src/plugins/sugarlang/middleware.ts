@@ -36,6 +36,7 @@ import type {
   TurnEvidence,
 } from './types';
 import type { LearnerStateManager } from './learner';
+import { resolveBandPolicyDefaults } from './content/band-policy-defaults';
 
 export interface SugarlangMiddlewareConfig {
   contentBundle: SugarlangContentBundle;
@@ -70,6 +71,7 @@ export function createSugarlangMiddleware(
   config: SugarlangMiddlewareConfig,
 ): ConversationMiddleware {
   const { contentBundle } = config;
+  const emittedWarnings = new Set<string>();
 
   const descriptor: ConversationMiddlewareDescriptor = {
     id: 'sugarlang',
@@ -97,6 +99,17 @@ export function createSugarlangMiddleware(
 
   function findBandPolicy(bandId: LearnerBandId): BandPolicy | undefined {
     return contentBundle.bandPolicies.policies.find((p) => p.bandId === bandId);
+  }
+
+  function resolveBandPolicy(bandId: LearnerBandId): BandPolicy {
+    const resolved = resolveBandPolicyDefaults(findBandPolicy(bandId), bandId);
+    for (const warning of resolved.warnings) {
+      const key = `${bandId}:${warning}`;
+      if (emittedWarnings.has(key)) continue;
+      emittedWarnings.add(key);
+      console.warn(`[Sugarlang] ${warning}`);
+    }
+    return resolved.policy;
   }
 
   function buildAvailableTrackedLexicalEntryIds(
@@ -241,30 +254,28 @@ export function createSugarlangMiddleware(
     constraints: ProviderConstraintBundle,
   ): void {
     const state = getState(session);
-    if (!state.scenarioId) return;
-
     const bandId = resolveBand(session);
-    const policy = findBandPolicy(bandId);
+    const policy = resolveBandPolicy(bandId);
 
     state.resolvedBand = bandId;
     state.bandPolicy = policy;
     setState(session, state);
 
     constraints.learnerBand = bandId;
-    if (policy) {
-      constraints.supportLanguagePolicy = policy.supportLanguagePolicy.mixingLevel;
-    }
+    constraints.supportLanguagePolicy = policy.supportLanguagePolicy.mixingLevel;
 
     // Expose provider policy from the band realization so the adapter and
     // tests can observe whether this band prefers agent-assisted interaction.
-    const targetLang = session.targetLanguage ?? 'es';
-    const bandRealization = findBandRealization(state.scenarioId, bandId, targetLang);
-    if (bandRealization?.providerPolicy) {
-      constraints.advisoryPreferences['providerPolicy'] = bandRealization.providerPolicy;
-      console.log(
-        `[SL·P5] providerPolicy=${bandRealization.providerPolicy} band=${bandId}` +
-        ` scenario=${state.scenarioId} lang=${targetLang}`,
-      );
+    if (state.scenarioId) {
+      const targetLang = session.targetLanguage ?? 'es';
+      const bandRealization = findBandRealization(state.scenarioId, bandId, targetLang);
+      if (bandRealization?.providerPolicy) {
+        constraints.advisoryPreferences['providerPolicy'] = bandRealization.providerPolicy;
+        console.log(
+          `[SL·P5] providerPolicy=${bandRealization.providerPolicy} band=${bandId}` +
+          ` scenario=${state.scenarioId} lang=${targetLang}`,
+        );
+      }
     }
   }
 
@@ -273,56 +284,57 @@ export function createSugarlangMiddleware(
     constraints: ProviderConstraintBundle,
   ): void {
     const state = getState(session);
-    if (!state.scenarioId) return;
-
-    // Resolve band-filtered grounding scope.
     const bandId = state.resolvedBand ?? 'B0';
-    const questBindingsForScenario = contentBundle.questBindings.get(state.scenarioId);
     const targetLang = session.targetLanguage ?? 'es';
     const lexicon = contentBundle.lexicons.get(targetLang);
     constraints.availableTrackedLexicalEntryIds = buildAvailableTrackedLexicalEntryIds(lexicon, bandId);
 
-    const scope = resolveGroundingScopeForBand(
-      state.groundingMap,
-      questBindingsForScenario,
-      bandId,
-      lexicon,
-    );
-    if (scope) {
-      constraints.groundingScope = scope;
-      console.log(
-        `[SL·P2] grounding → band=${bandId} objects=[${scope.map((r) => r.worldObjectId).join(', ')}]` +
-        ` (${scope.length}/${state.groundingMap?.entries.length ?? 0} entries passed filter)`,
+    if (state.scenarioId) {
+      // Resolve band-filtered grounding scope.
+      const questBindingsForScenario = contentBundle.questBindings.get(state.scenarioId);
+      const scope = resolveGroundingScopeForBand(
+        state.groundingMap,
+        questBindingsForScenario,
+        bandId,
+        lexicon,
       );
+      if (scope) {
+        constraints.groundingScope = scope;
+        console.log(
+          `[SL·P2] grounding → band=${bandId} objects=[${scope.map((r) => r.worldObjectId).join(', ')}]` +
+          ` (${scope.length}/${state.groundingMap?.entries.length ?? 0} entries passed filter)`,
+        );
+      }
+
+      const bandRealization = findBandRealization(state.scenarioId, bandId, targetLang);
+      const providerState = session.middlewareState['sugarlang-provider'] as
+        | { turns?: Array<SceneBandRealization['turns'][number]>; turnCursor?: number }
+        | undefined;
+      const activeTurn = providerState?.turns
+        ? providerState.turns[
+          providerState.turnCursor && providerState.turnCursor > 0
+            ? Math.max(0, providerState.turnCursor - 1)
+            : 0
+        ]
+        : bandRealization?.turns[0];
+
+      constraints.teachingSubset = buildTeachingSubset(activeTurn);
+      constraints.ambientHaloAllowance = buildAmbientHaloAllowance(activeTurn);
     }
-
-    const bandRealization = findBandRealization(state.scenarioId, bandId, targetLang);
-    const providerState = session.middlewareState['sugarlang-provider'] as
-      | { turns?: Array<SceneBandRealization['turns'][number]>; turnCursor?: number }
-      | undefined;
-    const activeTurn = providerState?.turns
-      ? providerState.turns[
-        providerState.turnCursor && providerState.turnCursor > 0
-          ? Math.max(0, providerState.turnCursor - 1)
-          : 0
-      ]
-      : bandRealization?.turns[0];
-
-    constraints.teachingSubset = buildTeachingSubset(activeTurn);
-    constraints.ambientHaloAllowance = buildAmbientHaloAllowance(activeTurn);
 
     // Apply band-specific constraints.
-    if (state.bandPolicy) {
-      // Set grounding intensity as a hard constraint.
-      constraints.hardConstraints['groundingIntensity'] = state.bandPolicy.groundingIntensity;
-      // Set correction posture as a hard constraint.
-      constraints.hardConstraints['correctionPosture'] = state.bandPolicy.correctionPosture;
-      // Set allowed response modes as an advisory preference.
-      constraints.advisoryPreferences['allowedResponseModes'] = state.bandPolicy.allowedResponseModes;
-      // Set support language visibility.
-      constraints.advisoryPreferences['showSupportStrip'] = state.bandPolicy.supportLanguagePolicy.showSupportStrip;
-      constraints.advisoryPreferences['showGlosses'] = state.bandPolicy.supportLanguagePolicy.showGlosses;
-    }
+    if (!state.bandPolicy) return;
+
+    constraints.deliveryContract = state.bandPolicy.deliveryContract;
+    // Set grounding intensity as a hard constraint.
+    constraints.hardConstraints['groundingIntensity'] = state.bandPolicy.groundingIntensity;
+    // Set correction posture as a hard constraint.
+    constraints.hardConstraints['correctionPosture'] = state.bandPolicy.correctionPosture;
+    // Set allowed response modes as an advisory preference.
+    constraints.advisoryPreferences['allowedResponseModes'] = state.bandPolicy.allowedResponseModes;
+    // Set support language visibility.
+    constraints.advisoryPreferences['showSupportStrip'] = state.bandPolicy.supportLanguagePolicy.showSupportStrip;
+    constraints.advisoryPreferences['showGlosses'] = state.bandPolicy.supportLanguagePolicy.showGlosses;
   }
 
   function postProvider(
@@ -330,7 +342,7 @@ export function createSugarlangMiddleware(
     envelope: ConversationTurnEnvelope,
   ): void {
     const state = getState(_session);
-    if (!state.scenarioId) return;
+    if (!state.resolvedBand && !state.bandPolicy && !state.scenarioId) return;
 
     // Extract support text from the provider diagnostics.
     const providerDiag = envelope.providerDiagnostics as
@@ -353,6 +365,7 @@ export function createSugarlangMiddleware(
       showGlosses: state.bandPolicy?.supportLanguagePolicy.showGlosses ?? false,
       supportText: providerDiag?.supportText,
       turnId: providerDiag?.turnId,
+      deliveryContract: state.bandPolicy?.deliveryContract,
       availableTrackedLexicalEntryIds: providerDiag?.availableTrackedLexicalEntryIds,
       teachingSubset: providerDiag?.teachingSubset,
       ambientHaloAllowance: providerDiag?.ambientHaloAllowance,

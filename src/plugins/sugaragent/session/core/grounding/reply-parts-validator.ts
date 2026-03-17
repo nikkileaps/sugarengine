@@ -21,11 +21,11 @@
 import type { SupportSlotEntry, ReplyPart } from './reply-parts';
 
 type ReplyPartsValidationIssueCode =
-  | 'grounded_part_requires_support'
+  | 'knowledge_part_requires_support'
   | 'invalid_support_slot'
-  | 'non_grounded_part_has_support'
+  | 'non_knowledge_part_has_support'
   | 'self_query_ownership'
-  | 'knowledge_turn_requires_grounded_or_uncertain';
+  | 'knowledge_turn_requires_knowledge_or_uncertain';
 
 interface ReplyPartsValidationIssue {
   partIndex: number;
@@ -86,6 +86,10 @@ function isKnowledgeSeekingQueryType(queryType: string): boolean {
     || queryType === 'mixed_query';
 }
 
+function isKnowledgeReplyPartKind(kind: ReplyPart['kind'] | undefined): boolean {
+  return kind === 'grounded' || kind === 'inferred' || kind === 'rumor';
+}
+
 export function validateReplyPartsContract(input: {
   parts?: unknown;
   supportSlots?: unknown;
@@ -102,7 +106,7 @@ export function validateReplyPartsContract(input: {
 
   const issues: ReplyPartsValidationIssue[] = [];
   const partChecks: ReplyPartsValidationCheck[] = [];
-  let totalGroundedParts = 0;
+  let totalKnowledgeParts = 0;
 
   parts.forEach((part, partIndex) => {
     const support = normalizeStringArray(part?.support);
@@ -111,14 +115,14 @@ export function validateReplyPartsContract(input: {
     const text = normalizeOptionalString(part?.text) ?? '';
     const kind = part?.kind;
 
-    if (kind === 'grounded') {
-      totalGroundedParts += 1;
+    if (isKnowledgeReplyPartKind(kind)) {
+      totalKnowledgeParts += 1;
       if (support.length === 0) {
-        issueCodes.push('grounded_part_requires_support');
+        issueCodes.push('knowledge_part_requires_support');
         issues.push({
           partIndex,
-          code: 'grounded_part_requires_support',
-          message: 'Grounded reply part must include at least one support slot.',
+          code: 'knowledge_part_requires_support',
+          message: 'Knowledge-bearing reply part must include at least one support slot.',
           text,
         });
       }
@@ -157,11 +161,11 @@ export function validateReplyPartsContract(input: {
         }
       }
     } else if (support.length > 0) {
-      issueCodes.push('non_grounded_part_has_support');
+      issueCodes.push('non_knowledge_part_has_support');
       issues.push({
         partIndex,
-        code: 'non_grounded_part_has_support',
-        message: 'Only grounded reply parts may include support slots.',
+        code: 'non_knowledge_part_has_support',
+        message: 'Only knowledge-bearing reply parts may include support slots.',
         text,
         support,
       });
@@ -169,7 +173,7 @@ export function validateReplyPartsContract(input: {
 
     partChecks.push({
       partIndex,
-      kind: kind === 'grounded' || kind === 'social' || kind === 'uncertain' || kind === 'close'
+      kind: kind === 'grounded' || kind === 'inferred' || kind === 'rumor' || kind === 'social' || kind === 'uncertain' || kind === 'close'
         ? kind
         : 'social',
       text,
@@ -181,25 +185,26 @@ export function validateReplyPartsContract(input: {
   });
 
   const hasUncertainPart = parts.some((part) => part?.kind === 'uncertain');
-  const validGroundedParts = partChecks.filter((entry) => entry.kind === 'grounded' && entry.valid).length;
+  const validKnowledgeParts = partChecks.filter((entry) => isKnowledgeReplyPartKind(entry.kind) && entry.valid).length;
+  const validGroundedParts = validKnowledgeParts;
   if (
     isKnowledgeSeekingQueryType(normalizedQueryType)
     && normalizedIntent !== 'uncertain'
-    && validGroundedParts === 0
+    && validKnowledgeParts === 0
     && !hasUncertainPart
   ) {
     issues.push({
       partIndex: -1,
-      code: 'knowledge_turn_requires_grounded_or_uncertain',
-      message: 'Knowledge turn must contain a grounded part or explicit uncertainty.',
+      code: 'knowledge_turn_requires_knowledge_or_uncertain',
+      message: 'Knowledge turn must contain a supported knowledge part or explicit uncertainty.',
     });
   }
 
-  const invalidSupportRefs = issues.filter((issue) => issue.code === 'invalid_support_slot' || issue.code === 'grounded_part_requires_support').length;
+  const invalidSupportRefs = issues.filter((issue) => issue.code === 'invalid_support_slot' || issue.code === 'knowledge_part_requires_support').length;
   const ownershipViolations = issues.filter((issue) => issue.code === 'self_query_ownership').length;
   const invalidGroundedParts = Math.max(
-    totalGroundedParts - validGroundedParts,
-    issues.some((issue) => issue.code === 'knowledge_turn_requires_grounded_or_uncertain') ? 1 : 0,
+    totalKnowledgeParts - validGroundedParts,
+    issues.some((issue) => issue.code === 'knowledge_turn_requires_knowledge_or_uncertain') ? 1 : 0,
   );
 
   return {
@@ -207,7 +212,7 @@ export function validateReplyPartsContract(input: {
     issues,
     partChecks,
     summary: {
-      totalGroundedParts,
+      totalGroundedParts: totalKnowledgeParts,
       validGroundedParts,
       invalidGroundedParts,
       invalidSupportRefs,

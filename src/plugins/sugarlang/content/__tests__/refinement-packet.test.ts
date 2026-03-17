@@ -107,6 +107,18 @@ function makeBandPolicies(): BandPolicyPack {
         groundingIntensity: 'always',
         allowedResponseModes: ['object_selection', 'yes_no'],
         correctionPosture: 'immediate',
+        deliveryContract: {
+          detailLevel: 'minimal',
+          maxKnowledgeClaims: 1,
+          maxKnowledgeParts: 1,
+          maxSentences: 1,
+          maxSentenceLength: 8,
+          maxClauseDepth: 1,
+          allowExactNumbers: false,
+          allowEnrichmentFacts: false,
+          preferConcreteFacts: true,
+          preferHighFrequencyLexicon: true,
+        },
       },
     ],
   };

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ingestLoreDirectory, writeLoreArtifacts } from './lore-lib';
+import { augmentLoreArtifactsWithVectors, ingestLoreDirectory, loadLoreArtifacts, writeLoreArtifacts } from './lore-lib';
 import { createSugarAgentSession } from '../session/runtime';
 
 function createTempDir(prefix: string): string {
@@ -89,6 +89,34 @@ describe('SugarAgent lore ingestion and retrieval flow', () => {
     expect(facts.every((fact) => typeof fact.factId === 'string' && fact.factId.startsWith('fact.'))).toBe(true);
     expect(facts.every((fact) => typeof fact.provenance?.offsets?.start === 'number')).toBe(true);
     expect(facts.every((fact) => typeof fact.provenance?.anchor?.signatureHash === 'string')).toBe(true);
+  });
+
+  it('writes and reloads chunk vector artifacts when embeddings are available', async () => {
+    const sourceDir = createTempDir('sugaragent-lore-source-');
+    const outputDir = createTempDir('sugaragent-lore-output-');
+    writeLorePage(sourceDir);
+
+    const artifacts = await augmentLoreArtifactsWithVectors({
+      artifacts: ingestLoreDirectory({
+        sourceDir,
+        commit: 'vec123',
+      }),
+      embedTexts: async (texts) => texts.map((_text, index) => [1, index + 1, 0]),
+      embeddingModelId: 'test-embedding-model',
+    });
+    const written = writeLoreArtifacts(outputDir, artifacts);
+
+    expect(fs.existsSync(path.join(outputDir, 'chunk-vectors.json'))).toBe(true);
+    expect(written.chunkVectorsPath).toContain('chunk-vectors.json');
+
+    const loaded = loadLoreArtifacts(outputDir) as {
+      vectorManifest?: { embeddingModelId?: string; embeddingDimension?: number } | null;
+      chunkVectors?: Array<{ chunkId: string; vector: number[] }>;
+    } | null;
+    expect(loaded?.vectorManifest?.embeddingModelId).toBe('test-embedding-model');
+    expect(loaded?.vectorManifest?.embeddingDimension).toBe(3);
+    expect(Array.isArray(loaded?.chunkVectors)).toBe(true);
+    expect((loaded?.chunkVectors ?? []).length).toBeGreaterThan(0);
   });
 
   it('loads repo/commit/source defaults from lore lock file', () => {

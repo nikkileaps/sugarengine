@@ -133,6 +133,7 @@ export {
   FadeOverlay,
   ControlsHint,
   AgentConversationUI,
+  NPCInteractionChooserUI,
   ResponseModeUI,
   SupportStrip,
   SugarlangConversationUI,
@@ -190,6 +191,12 @@ export type {
   ConversationHostEventHandlers,
   LanguageContext,
   SugarAgentAdapterContext,
+  ConversationDriverKind,
+  ConversationEngagementKind,
+  ConversationPresentationKind,
+  NPCInteractionCapabilities,
+  LegacyNPCInteractionMode,
+  AgentInteractionPolicy,
   ConversationSession,
   ResponseContract,
   ResponseContractMode,
@@ -199,6 +206,7 @@ export type {
   ConversationTurnEnvelope,
   ConversationProvider,
   ConversationProviderDescriptor,
+  ConversationEngagementOption,
   ProviderSelectionContext,
   PlayerInput,
   ProviderTurnOutput,
@@ -206,6 +214,16 @@ export type {
   ConversationMiddlewareDescriptor,
   ConversationMiddlewareStage,
   ConversationCapability,
+} from './conversation';
+export {
+  DEFAULT_NPC_INTERACTION_CAPABILITIES,
+  createDefaultNPCInteractionCapabilities,
+  buildInteractionCapabilitiesFromLegacyMode,
+  normalizeNPCInteractionCapabilities,
+  normalizeNPCInteractionCapabilitiesFromDocument,
+  deriveLegacySugarAgentInteraction,
+  supportsScenarioEngagement,
+  supportsChatEngagement,
 } from './conversation';
 
 // Plugins (ADR-024)

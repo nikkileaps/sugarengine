@@ -19,6 +19,7 @@ import type {
   LearnerBandId,
   SugarlangContentBundle,
 } from '../types';
+import { DEFAULT_BAND_ORDER, resolveBandPolicyDefaults } from './band-policy-defaults';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -346,6 +347,18 @@ export function validateContentBundle(bundle: SugarlangContentBundle): ArtifactV
 
   for (const [lang, lex] of bundle.lexicons) {
     lexiconEntryIdsByLanguage.set(lang, new Set(lex.entries.map((entry) => entry.lexicalEntryId)));
+  }
+
+  if (bundle.bandPolicies.policies.length === 0) {
+    warnings.push('Band policies are missing; Sugarlang will fall back to default band policies at runtime.');
+  } else {
+    for (const bandId of DEFAULT_BAND_ORDER) {
+      const policy = bundle.bandPolicies.policies.find((entry) => entry.bandId === bandId);
+      const resolved = resolveBandPolicyDefaults(policy, bandId);
+      for (const warning of resolved.warnings) {
+        warnings.push(`BandPolicies: ${warning}`);
+      }
+    }
   }
 
   // Check scene language packs reference valid scenarios

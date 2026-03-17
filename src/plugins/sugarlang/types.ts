@@ -6,6 +6,9 @@
  * and language content model docs for product-level definitions.
  */
 
+import type { DeliveryContract } from '../../engine/conversation/deliveryContract';
+import type { ResponseContractMode } from '../../engine/conversation/types';
+
 // ---------------------------------------------------------------------------
 // Lexicon
 // ---------------------------------------------------------------------------
@@ -71,6 +74,8 @@ export interface BandPolicy {
   allowedResponseModes: string[];
   /** Correction posture. */
   correctionPosture: 'immediate' | 'delayed' | 'on_request' | 'none';
+  /** Generic NPC delivery budget for this band. */
+  deliveryContract: DeliveryContract;
 }
 
 /** Shared band policy defaults. */
@@ -173,8 +178,6 @@ export interface GroundingMap {
 // ---------------------------------------------------------------------------
 // Scene Language Pack
 // ---------------------------------------------------------------------------
-
-import type { ResponseContractMode } from '../../engine/conversation/types';
 
 // ---------------------------------------------------------------------------
 // Repair Options

@@ -1,5 +1,6 @@
 import type { DialogueManager } from '../dialogue/DialogueManager';
 import type {
+  ConversationEngagementOption,
   ConversationProvider,
   ConversationProviderDescriptor,
   ConversationSession,
@@ -23,9 +24,27 @@ export class ScriptedDialogueProvider implements ConversationProvider {
     // Scripted has highest priority (lowest number) — quest/default dialogue
     // takes precedence over agent conversation.
     priority: 10,
+    supportsEngagementKinds: ['default'],
   };
 
   constructor(private dialogueManager: DialogueManager) {}
+
+  getEngagementOptions(
+    _npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationEngagementOption[] {
+    if (!context.dialogueId) return [];
+    return [
+      {
+        kind: 'default',
+        providerId: this.descriptor.id,
+        label: 'Talk',
+        presentationKind: 'dialogue_panel',
+        driverKind: 'dialogue_manager_driven',
+        priority: this.descriptor.priority,
+      },
+    ];
+  }
 
   canHandle(_npcId: string, context: ProviderSelectionContext): boolean {
     // Handle any interaction where a pre-resolved dialogueId is provided.

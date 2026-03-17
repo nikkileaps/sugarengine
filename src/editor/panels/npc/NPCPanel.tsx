@@ -4,6 +4,8 @@
 
 import { useState, ReactNode } from 'react';
 import type { BTNode } from '../../../engine/behavior/types';
+import type { NPCInteractionCapabilities } from '../../../engine/conversation';
+import { createDefaultNPCInteractionCapabilities } from '../../../engine/conversation';
 import {
   Stack,
   TextInput,
@@ -15,6 +17,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useEditorStore } from '../../store';
+import type { PluginConfigData } from '../../store/useEditorStore';
 import { NPCDetail } from './NPCDetail';
 import { generateUUID, shortId } from '../../utils';
 
@@ -27,7 +30,7 @@ export interface NPCEntry {
   faction?: string;
   behaviorTree?: BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
-  interactionMode?: 'scripted' | 'agent' | 'hybrid';
+  interactionCapabilities?: NPCInteractionCapabilities;
   agentProfile?: {
     persona?: string;
     tone?: string;
@@ -55,10 +58,11 @@ interface NPCPanelProps {
   dialogues?: { id: string; name?: string; nodes?: { speaker?: string }[] }[];
   quests?: { id: string; name: string; stages: { id: string; description: string; objectives: { id: string; type: string; target: string; description: string }[] }[] }[];
   items?: { id: string; name: string }[];
+  plugins?: PluginConfigData[];
   children: (result: NPCPanelResult) => ReactNode;
 }
 
-export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], items = [], children }: NPCPanelProps) {
+export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], items = [], plugins = [], children }: NPCPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const setDirty = useEditorStore((s) => s.setDirty);
@@ -72,13 +76,15 @@ export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], item
 
   const validateNPC = (npc: NPCEntry): string[] => {
     const warnings: string[] = [];
-    if (!npc.defaultDialogue) {
+    const scenarioEnabled = npc.interactionCapabilities?.scenario.enabled !== false;
+    if (scenarioEnabled && !npc.defaultDialogue) {
       warnings.push('No default dialogue assigned');
-    } else if (dialogues.length > 0 && !dialogues.some((d) => d.id === npc.defaultDialogue)) {
+    } else if (scenarioEnabled && dialogues.length > 0 && !dialogues.some((d) => d.id === npc.defaultDialogue)) {
       warnings.push(`Default dialogue "${npc.defaultDialogue}" not found`);
     }
 
-    const usesSugarAgent = npc.interactionMode === 'agent' || npc.interactionMode === 'hybrid';
+    const usesSugarAgent = npc.interactionCapabilities?.chat.enabled === true
+      || npc.interactionCapabilities?.scenario.agentAssist === 'allow';
     const profile = npc.agentProfile;
     const selfEntityId = typeof profile?.selfEntityId === 'string' ? profile.selfEntityId.trim() : '';
     const loreScopesCount = Array.isArray(profile?.loreScopes) ? profile.loreScopes.filter(Boolean).length : 0;
@@ -103,7 +109,11 @@ export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], item
 
   const handleCreate = () => {
     const id = generateUUID();
-    const newNPC: NPCEntry = { id, name: 'New NPC' };
+    const newNPC: NPCEntry = {
+      id,
+      name: 'New NPC',
+      interactionCapabilities: createDefaultNPCInteractionCapabilities(),
+    };
     onNPCsChange([...npcs, newNPC]);
     setSelectedId(id);
     setDirty(true);
@@ -179,6 +189,7 @@ export function NPCPanel({ npcs, onNPCsChange, dialogues = [], quests = [], item
         dialogues={dialogues}
         quests={quests}
         items={items}
+        plugins={plugins}
         onChange={handleUpdate}
         onDelete={() => handleDelete(selectedNPC.id)}
       />

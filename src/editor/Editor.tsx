@@ -873,7 +873,7 @@ export function Editor() {
     setReingestingSugarAgentLore(true);
     setSugarAgentRuntimeMessage({
       kind: 'info',
-      text: 'Re-ingesting lore and clearing runtime cache...',
+      text: 'Re-ingesting lore, clearing runtime cache, and removing persisted NPC sessions...',
     });
     try {
       const response = await fetch('/__sugaragent/runtime', {
@@ -891,14 +891,22 @@ export function Editor() {
       const payload = await response.json().catch(() => ({} as {
         detail?: string;
         counts?: { chunks?: number; files?: number };
+        removedSessions?: string[];
       }));
       const chunkCount = typeof payload.counts?.chunks === 'number'
         ? payload.counts.chunks
         : null;
-      const detail = payload.detail ?? 'Lore re-ingested and runtime cache cleared.';
+      const removedSessionCount = Array.isArray(payload.removedSessions)
+        ? payload.removedSessions.length
+        : null;
+      const detail = payload.detail ?? 'Lore re-ingested, runtime cache cleared, and persisted NPC sessions removed.';
       setSugarAgentRuntimeMessage({
         kind: 'success',
-        text: chunkCount !== null ? `${detail} (${chunkCount} chunks)` : detail,
+        text: [
+          detail,
+          chunkCount !== null ? `${chunkCount} chunks` : null,
+          removedSessionCount !== null ? `${removedSessionCount} sessions removed` : null,
+        ].filter(Boolean).join(' | '),
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -992,6 +1000,7 @@ export function Editor() {
                 dialogues={dialogues}
                 quests={quests}
                 items={itemList}
+                plugins={plugins}
               >
                 {(npcPanel) => (
                   <ItemPanel
@@ -1418,7 +1427,7 @@ export function Editor() {
                 loading={reingestingSugarAgentLore}
                 disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
               >
-                Re-ingest Lore + Reset
+                Re-ingest Lore + Clear Sessions
               </Button>
               <Button
                 size="xs"

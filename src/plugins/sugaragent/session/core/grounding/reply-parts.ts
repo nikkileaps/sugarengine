@@ -36,7 +36,7 @@ import {
   normalizeEvidenceTextForPlan,
 } from '../retrieval-text';
 
-export type ReplyPartKind = 'social' | 'grounded' | 'uncertain' | 'close';
+export type ReplyPartKind = 'social' | 'grounded' | 'inferred' | 'rumor' | 'uncertain' | 'close';
 
 export interface ReplyPart {
   kind: ReplyPartKind;
@@ -77,7 +77,7 @@ export const REPLY_PARTS_JSON_SCHEMA = JSON.stringify({
         properties: {
           kind: {
             type: 'string',
-            enum: ['social', 'grounded', 'uncertain', 'close'],
+            enum: ['social', 'grounded', 'inferred', 'rumor', 'uncertain', 'close'],
           },
           text: { type: 'string' },
           support: {
@@ -204,15 +204,19 @@ function parseReplyPart(value: unknown): ReplyPart | null {
   if (
     kind !== 'social'
     && kind !== 'grounded'
+    && kind !== 'inferred'
+    && kind !== 'rumor'
     && kind !== 'uncertain'
     && kind !== 'close'
   ) {
     return null;
   }
   const support = normalizeStringArray(value.support);
-  return support.length > 0
-    ? { kind, text, support }
-    : { kind, text };
+  const part: ReplyPart = { kind, text };
+  if (support.length > 0) {
+    part.support = support;
+  }
+  return part;
 }
 
 function parseBeatEvidence(value: unknown): SugarAgentBeatEvidence | undefined {
@@ -353,7 +357,7 @@ export function normalizeReplyPartsForValidation(input: {
       .sort((left, right) => right.score - left.score || left.slotId.localeCompare(right.slotId));
 
     if (scored.length === 0) return [];
-    const topScore = scored[0].score;
+    const topScore = scored[0]?.score ?? 0;
     if (topScore < 0.68) return [];
     const cutoff = Math.max(0.68, topScore - 0.08);
     return scored
@@ -361,26 +365,32 @@ export function normalizeReplyPartsForValidation(input: {
       .map((entry) => entry.slotId);
   };
 
+  const isKnowledgePartKind = (kind: ReplyPartKind) => (
+    kind === 'grounded' || kind === 'inferred' || kind === 'rumor'
+  );
+
   return {
     ...turn,
     parts: turn.parts.map((part) => {
-      if (part.kind !== 'grounded') return part;
+      if (!isKnowledgePartKind(part.kind)) return part;
       const support = normalizeStringArray(part.support);
       const validSupport = support.filter((slotId) => supportSlots.some((slot) => slot.slotId === slotId));
       if (validSupport.length > 0) {
-        return validSupport.length === support.length
-          ? part
+        const nextPart: ReplyPart = validSupport.length === support.length
+          ? { ...part }
           : {
             ...part,
             support: validSupport,
           };
+        return nextPart;
       }
       const inferredSupport = inferSupportSlots(part.text);
       if (inferredSupport.length === 0) return part;
-      return {
+      const nextPart: ReplyPart = {
         ...part,
         support: inferredSupport,
       };
+      return nextPart;
     }),
   };
 }
@@ -402,9 +412,11 @@ export function buildReplyPartsPrompt(input: {
     `Return a short NPC reply for ${npcName} as ordered reply parts.`,
     'Return ONLY one JSON object. No markdown. No explanation.',
     'Use 1 to 3 parts total.',
-    'Allowed part kinds: social, grounded, uncertain, close.',
+    'Allowed part kinds: social, grounded, inferred, rumor, uncertain, close.',
     'social: greetings, empathy, clarifying chatter, acknowledgements. No support field.',
     'grounded: factual statement backed by support slot ids. Must include support with one or more slot ids.',
+    'inferred: a bounded inference from support slots. Must include support and soft hedge wording such as "I think" or "it seems".',
+    'rumor: hearsay from support slots. Must include support and strong hedge wording such as "I heard" or "people say".',
     'uncertain: explicit uncertainty when support is insufficient. No support field.',
     'close: graceful ending. No support field.',
     'Do not mention slot ids in the visible text.',
@@ -412,6 +424,8 @@ export function buildReplyPartsPrompt(input: {
     'If the player asked for knowledge and support is insufficient, use an uncertain part instead of guessing.',
     'Output shape:',
     '{"parts":[{"kind":"social","text":"Sure."},{"kind":"grounded","text":"The resort is just outside Earendale.","support":["E1"]}],"emotion":"warm","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}',
+    '{"parts":[{"kind":"inferred","text":"I think the bridge is watched after dark.","support":["E1","E2"]}],"emotion":"guarded","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}',
+    '{"parts":[{"kind":"rumor","text":"I heard that smugglers use the old tunnel.","support":["E3"]}],"emotion":"uncertain","intent":"answer","proposedIntents":[],"beatEvidence":{"coveredFacts":[],"uncoveredFacts":[],"completionSignal":"none","confidence":0}}',
     `Query type: ${queryType}`,
     `Route intent: ${routeIntent}`,
     `Player message: ${playerMessage || '(none)'}`,
@@ -525,9 +539,12 @@ export function materializeTurnOutputFromReplyParts(input: {
     .trim();
   const citations: SugarAgentCitation[] = [];
   const seenSourceIds = new Set<string>();
+  const isKnowledgePartKind = (kind: ReplyPartKind) => (
+    kind === 'grounded' || kind === 'inferred' || kind === 'rumor'
+  );
 
   for (const part of parts) {
-    if (part.kind !== 'grounded') continue;
+    if (!isKnowledgePartKind(part.kind)) continue;
     const support = Array.isArray(part.support) ? part.support : [];
     for (const slotId of support) {
       const slot = supportBySlot.get(slotId);

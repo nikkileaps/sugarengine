@@ -21,6 +21,11 @@ declare module 'node:fs' {
   export default fs;
 }
 
+declare module 'node:fs/promises' {
+  const fsPromises: any;
+  export default fsPromises;
+}
+
 declare module 'node:path' {
   const path: any;
   export default path;
@@ -44,3 +49,7 @@ declare module 'node:os' {
   const os: any;
   export default os;
 }
+
+declare const process: {
+  env: Record<string, string | undefined>;
+};

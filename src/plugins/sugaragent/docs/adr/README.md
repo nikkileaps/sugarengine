@@ -30,23 +30,17 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - [022-evaluation-stack-and-deployment-gate-governance.md](./022-evaluation-stack-and-deployment-gate-governance.md)
 - [023-two-lane-conversation-and-llm-claim-span-tagging.md](./023-two-lane-conversation-and-llm-claim-span-tagging.md)
 - [024-runtime-owned-reply-parts-grounding-contract.md](./024-runtime-owned-reply-parts-grounding-contract.md)
+- [025-canonical-live-evidence-first-turn-pipeline.md](./025-canonical-live-evidence-first-turn-pipeline.md)
+- [026-npc-epistemology-and-disclosure-model.md](./026-npc-epistemology-and-disclosure-model.md)
+- [027-multi-strength-claim-and-reply-contract.md](./027-multi-strength-claim-and-reply-contract.md)
+- [028-semantic-verification-and-social-lane-factual-boundaries.md](./028-semantic-verification-and-social-lane-factual-boundaries.md)
+- [029-retrieval-hardening-and-evidence-governance-cutover.md](./029-retrieval-hardening-and-evidence-governance-cutover.md)
+- [030-memory-provenance-and-contamination-control.md](./030-memory-provenance-and-contamination-control.md)
+- [031-cross-plugin-language-adaptation-boundary.md](./031-cross-plugin-language-adaptation-boundary.md)
+- [032-shared-query-interpretation-and-semantic-routing-layer.md](./032-shared-query-interpretation-and-semantic-routing-layer.md)
+- [033-local-embedding-runtime-and-vector-artifact-contract.md](./033-local-embedding-runtime-and-vector-artifact-contract.md)
 
-## Mapping to Implementation Phases
 
-- Phase 0 -> ADR-001
-- Phase 1 -> ADR-002
-- Phase 2 -> ADR-004
-- Phase 3 -> ADR-003
-- Phase 4 -> ADR-005 (intent gating + authored beat contract enforcement)
-- Phase 5-6 -> ADR-006
-- Phase 7 -> ADR-008
-- Phase 8 -> ADR-007
-- Phase 9 -> ADR-010 (in-game integration + creator-facing NPC authoring surface)
-- Deferred post-phase hardening -> ADR-009
-- Dialogue architecture hardening and v2 pipeline -> ADR-011..016
-- Strategic dual-mode and governance contracts -> ADR-017..022
-- Two-lane conversational grounding refinement -> ADR-023
-- Runtime-owned grounded reply contract -> ADR-024
 
 ## Deferred Backlog
 
@@ -59,3 +53,5 @@ SugarAgent is responsible for free-form conversational delivery and structured e
 
 ADR-023 remains historical context for the rejected exact quote claim-tag contract.
 ADR-024 is the active grounded-turn contract: runtime-owned reply parts with turn-local support slots and deterministic validation.
+ADR-025..031 define the intended cutover from model-first factual generation to a fully live evidence-first pipeline, plus the epistemology, memory, and optional SugarLang interoperability contracts required to support it cleanly.
+ADR-032..033 are now the active contracts for the shared semantic interpretation layer and real local embedding/vector support that replaced the old stubbed semantic path.

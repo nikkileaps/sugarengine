@@ -25,6 +25,8 @@ export function buildRuntimePluginsFromProject(projectData: unknown): RuntimePlu
   const conversationMiddleware: ConversationMiddleware[] = [];
   const conversationProviders: ConversationProvider[] = [];
 
+  // Preview/game runtime builds SugarAgent authoring directly from the loaded project document.
+  // Do not route preview behavior through packed authoring.bundle.json files; those are export artifacts.
   const sugarAgent = createSugarAgentPluginFromProject(projectData);
   if (sugarAgent) {
     plugins.push(sugarAgent);

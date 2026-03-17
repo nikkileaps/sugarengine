@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import type { EnvironmentAnimationEntry } from '../../engine/shaders';
+import type { NPCInteractionCapabilities } from '../../engine/conversation';
 
 export type EditorTab = 'dialogues' | 'quests' | 'npcs' | 'items' | 'inspections' | 'regions' | 'spells' | 'player' | 'resonance' | 'vfx' | 'sugarlang';
 
@@ -24,7 +25,7 @@ export interface NPCData {
   faction?: string;
   behaviorTree?: import('../../engine/behavior/types').BTNode;
   behaviorMode?: 'onInteraction' | 'continuous';
-  interactionMode?: 'scripted' | 'agent' | 'hybrid';
+  interactionCapabilities?: NPCInteractionCapabilities;
   agentProfile?: {
     persona?: string;
     tone?: string;

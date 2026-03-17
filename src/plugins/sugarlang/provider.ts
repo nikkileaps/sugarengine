@@ -16,6 +16,7 @@
  */
 
 import type {
+  ConversationEngagementOption,
   ConversationProvider,
   ConversationProviderDescriptor,
   ConversationSession,
@@ -382,27 +383,34 @@ export function createSugarlangScriptedProvider(
     // Below scripted dialogue (10) so sugarlang wins when it has content.
     // Above SugarAgent (100). NPCs without a scenario fall through to scripted dialogue.
     priority: 5,
+    supportsEngagementKinds: ['scenario'],
   };
 
+  function getEngagementOptions(
+    npcId: string,
+    context: ProviderSelectionContext,
+  ): ConversationEngagementOption[] {
+    if (!context.npcInteractionCapabilities.scenario.enabled) return [];
+    const scenarioId = config.getScenarioForNpc(npcId, context.npcName);
+    if (!scenarioId) return [];
+    return [
+      {
+        kind: 'scenario',
+        providerId: descriptor.id,
+        label: 'Scenario',
+        description: 'Structured language encounter.',
+        presentationKind: 'dialogue_panel',
+        driverKind: 'host_turn_driven',
+        priority: descriptor.priority,
+      },
+    ];
+  }
+
   function canHandle(npcId: string, context: ProviderSelectionContext): boolean {
+    if (!context.npcInteractionCapabilities.scenario.enabled) return false;
+    if (context.selectedEngagement && context.selectedEngagement.kind !== 'scenario') return false;
     const scenarioId = config.getScenarioForNpc(npcId, context.npcName);
     if (!scenarioId) return false;
-
-    // If the NPC supports agent mode and the active band prefers agent interaction,
-    // decline so SugarAgentProviderAdapter can handle it instead.
-    if (context.npcInteractionMode === 'agent' || context.npcInteractionMode === 'hybrid') {
-      const bandId = (context.learnerBandOverride ?? 'B0') as LearnerBandId;
-      const targetLang = context.targetLanguage ?? 'es';
-      const bandContent = resolveSceneBandContent(contentBundle, scenarioId, targetLang, bandId);
-      if (bandContent?.providerPolicy === 'agent_preferred') {
-        console.log(
-          `[SL·provider] declining NPC "${npcId}" — band=${bandId} providerPolicy=agent_preferred` +
-          ` mode=${context.npcInteractionMode}, deferring to SugarAgent`,
-        );
-        return false;
-      }
-    }
-
     return true;
   }
 
@@ -815,6 +823,7 @@ export function createSugarlangScriptedProvider(
 
   return {
     descriptor,
+    getEngagementOptions,
     canHandle,
     startSession,
     produceTurn,

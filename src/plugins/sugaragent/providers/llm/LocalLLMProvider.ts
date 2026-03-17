@@ -140,6 +140,11 @@ export class LocalLLMProvider implements LLMProvider {
         ? Math.max(1, Number(runtimeResponse.attempts))
         : attempt;
       const runtimeUsedFallback = runtimeResponse.usedFallback === true;
+      const runtimeFallbackKind = runtimeResponse.fallbackKind === 'provider_unavailable'
+        || runtimeResponse.fallbackKind === 'validation_fallback'
+        || runtimeResponse.fallbackKind === 'deterministic_runtime'
+        ? runtimeResponse.fallbackKind
+        : undefined;
 
       let parsed: unknown;
       try {
@@ -161,7 +166,7 @@ export class LocalLLMProvider implements LLMProvider {
         continue;
       }
 
-      if (runtimeUsedFallback) {
+      if (runtimeUsedFallback && runtimeFallbackKind !== 'deterministic_runtime') {
         const mergedValidationErrors = [
           ...validationErrors,
           ...runtimeValidationErrors,
@@ -170,7 +175,7 @@ export class LocalLLMProvider implements LLMProvider {
           output,
           attempts: runtimeAttempts,
           usedFallback: true,
-          fallbackKind: 'validation_fallback',
+          fallbackKind: runtimeFallbackKind ?? 'validation_fallback',
           validationErrors: mergedValidationErrors,
           rawResponses,
           diagnostics: latestDiagnostics,
@@ -181,6 +186,7 @@ export class LocalLLMProvider implements LLMProvider {
         output,
         attempts: runtimeAttempts,
         usedFallback: false,
+        fallbackKind: runtimeFallbackKind,
         validationErrors: [
           ...validationErrors,
           ...runtimeValidationErrors,

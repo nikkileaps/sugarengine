@@ -1,5 +1,23 @@
 export { ConversationHost } from './ConversationHost';
 export type {
+  ConversationDriverKind,
+  ConversationEngagementKind,
+  ConversationPresentationKind,
+  NPCInteractionCapabilities,
+  LegacyNPCInteractionMode,
+  AgentInteractionPolicy,
+} from './interactionCapabilities';
+export {
+  DEFAULT_NPC_INTERACTION_CAPABILITIES,
+  createDefaultNPCInteractionCapabilities,
+  buildInteractionCapabilitiesFromLegacyMode,
+  normalizeNPCInteractionCapabilities,
+  normalizeNPCInteractionCapabilitiesFromDocument,
+  deriveLegacySugarAgentInteraction,
+  supportsScenarioEngagement,
+  supportsChatEngagement,
+} from './interactionCapabilities';
+export type {
   ConversationHostContext,
   ConversationHostEventHandlers,
   LanguageContext,
@@ -22,6 +40,7 @@ export type {
   ConversationTurnEnvelope,
   ConversationProvider,
   ConversationProviderDescriptor,
+  ConversationEngagementOption,
   ProviderSelectionContext,
   PlayerInput,
   ProviderTurnOutput,
