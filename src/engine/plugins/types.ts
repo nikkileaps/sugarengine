@@ -98,6 +98,7 @@ export interface PluginPedagogyContext {
 }
 
 export interface PluginAgentContext {
+  traceId?: string;
   gameId?: string;
   regionPath?: string;
   regionName?: string;

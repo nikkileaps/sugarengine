@@ -14,6 +14,7 @@ import {
   getLocalEmbeddingRuntimeHealth,
   LOCAL_EMBEDDING_MODEL_ID,
 } from './src/plugins/sugaragent/runtime/local-embedding-runtime';
+import type { SugarAgentSessionRuntime } from './packages/sugaragent-runtime-core/src';
 
 export default defineConfig({
   plugins: [
@@ -23,37 +24,7 @@ export default defineConfig({
       configureServer(server) {
         const projectRoot = process.cwd();
         const defaultLoreDir = resolve(projectRoot, 'src', 'plugins', 'sugaragent', 'lore', 'generated');
-        const sessionCache = new Map<string, Promise<{
-          runTurn: (
-            playerMessage: string,
-            turnOptions?: {
-              npcName?: string;
-              npcProfileOverride?: Record<string, unknown>;
-              globalSafetyBoundsOverride?: string[];
-              context?: Record<string, unknown>;
-            },
-          ) => Promise<{
-            output: Record<string, unknown>;
-            usedFallback?: boolean;
-            fallbackKind?: string;
-            validationErrors?: string[];
-            routing?: Record<string, unknown>;
-            pipeline?: Record<string, unknown>;
-            grounding?: Record<string, unknown>;
-            loreMatches?: Array<Record<string, unknown>>;
-          }>;
-          startup?: {
-            runtime?: { health?: { detail?: string } };
-            lore?: {
-              loaded?: boolean;
-              dir?: string;
-            };
-            session?: {
-              loaded?: boolean;
-              pathToFile?: string;
-            };
-          };
-        }>>();
+        const sessionCache = new Map<string, Promise<SugarAgentSessionRuntime>>();
         const registeredGameRoots = new Map<string, string>();
         const loreResolutionWarnings = new Set<string>();
 
@@ -97,6 +68,20 @@ export default defineConfig({
             manifestsPath: join(normalizedRoot, 'manifests'),
             publishedAssetsManifestPath: join(normalizedRoot, 'manifests', 'published-assets.json'),
             exportsPath: join(normalizedRoot, 'exports'),
+            webExportPath: join(normalizedRoot, 'exports', 'web'),
+            webExportClientPath: join(normalizedRoot, 'exports', 'web', 'client'),
+            releasePath: join(normalizedRoot, 'release'),
+            releaseTargetsPath: join(normalizedRoot, 'release', 'targets'),
+            webReleaseTargetPath: join(normalizedRoot, 'release', 'targets', 'web'),
+            webGameApiPath: join(normalizedRoot, 'release', 'targets', 'web', 'game-api'),
+            webProfileStagingPath: join(normalizedRoot, 'release', 'targets', 'web', 'profile.staging.json'),
+            webProfileProductionPath: join(normalizedRoot, 'release', 'targets', 'web', 'profile.production.json'),
+            webTargetReadmePath: join(normalizedRoot, 'release', 'targets', 'web', 'README.md'),
+            webTargetGitignorePath: join(normalizedRoot, 'release', 'targets', 'web', '.gitignore'),
+            webTargetScriptsPath: join(normalizedRoot, 'release', 'targets', 'web', 'scripts'),
+            webTargetArtifactsPath: join(normalizedRoot, 'release', 'targets', 'web', '.artifacts'),
+            githubPath: join(normalizedRoot, '.github'),
+            githubWorkflowsPath: join(normalizedRoot, '.github', 'workflows'),
           };
         };
 
@@ -148,19 +133,59 @@ export default defineConfig({
           stringifyProjectDocument: (project: Record<string, unknown>) => string;
           createStarterGameConfig: (gameId: string) => Record<string, unknown>;
           createEmptyPublishedAssetsManifest: () => Record<string, unknown>;
+          buildWebReleaseTargetScaffold: (
+            rootPaths: ReturnType<typeof resolveGameRootPaths>,
+            options: { gameId: string; gameName: string },
+          ) => {
+            directories: string[];
+            files: Array<{ path: string; content: string; overwrite: 'never' }>;
+          };
         }> | null = null;
 
         const getGameRootModule = () => {
           if (!gameRootModulePromise) {
-            gameRootModulePromise = server.ssrLoadModule('/src/editor/game-root/project-document.ts') as Promise<{
-              createStarterProjectDocument: (options: { gameId: string; name: string }) => Record<string, unknown>;
-              normalizeLoadedProjectDocument: (raw: unknown, options?: { fallbackName?: string; fallbackGameId?: string }) => Record<string, unknown>;
-              stringifyProjectDocument: (project: Record<string, unknown>) => string;
-              createStarterGameConfig: (gameId: string) => Record<string, unknown>;
-              createEmptyPublishedAssetsManifest: () => Record<string, unknown>;
-            }>;
+            gameRootModulePromise = (async () => {
+              const projectModule = await server.ssrLoadModule('/src/editor/game-root/project-document.ts') as {
+                createStarterProjectDocument: (options: { gameId: string; name: string }) => Record<string, unknown>;
+                normalizeLoadedProjectDocument: (raw: unknown, options?: { fallbackName?: string; fallbackGameId?: string }) => Record<string, unknown>;
+                stringifyProjectDocument: (project: Record<string, unknown>) => string;
+                createStarterGameConfig: (gameId: string) => Record<string, unknown>;
+                createEmptyPublishedAssetsManifest: () => Record<string, unknown>;
+              };
+              const scaffoldModule = await server.ssrLoadModule('/src/editor/game-root/release-target-scaffold.ts') as {
+                buildWebReleaseTargetScaffold: (
+                  rootPaths: ReturnType<typeof resolveGameRootPaths>,
+                  options: { gameId: string; gameName: string },
+                ) => {
+                  directories: string[];
+                  files: Array<{ path: string; content: string; overwrite: 'never' }>;
+                };
+              };
+              return {
+                ...projectModule,
+                buildWebReleaseTargetScaffold: scaffoldModule.buildWebReleaseTargetScaffold,
+              };
+            })();
           }
           return gameRootModulePromise;
+        };
+
+        const ensureScaffoldedGameRepo = async (
+          rootPaths: ReturnType<typeof resolveGameRootPaths>,
+          project: Record<string, unknown>,
+          module: Awaited<ReturnType<typeof getGameRootModule>>,
+        ) => {
+          const webTargetScaffold = module.buildWebReleaseTargetScaffold(rootPaths, {
+            gameId: normalizeOptionalString((project as { meta?: { gameId?: string } }).meta?.gameId) ?? 'unknown-game',
+            gameName: normalizeOptionalString((project as { meta?: { name?: string } }).meta?.name) ?? 'Untitled Game',
+          });
+          for (const directory of webTargetScaffold.directories) {
+            await fs.mkdir(directory, { recursive: true });
+          }
+          for (const file of webTargetScaffold.files) {
+            if (file.overwrite === 'never' && fsSync.existsSync(file.path)) continue;
+            await fs.writeFile(file.path, file.content, 'utf8');
+          }
         };
 
         const contentTypeForPath = (filePath: string): string => {
@@ -850,6 +875,7 @@ export default defineConfig({
                 paths.configPath,
                 paths.manifestsPath,
                 paths.exportsPath,
+                paths.webExportPath,
               ];
               for (const directory of directories) {
                 await fs.mkdir(directory, { recursive: true });
@@ -867,6 +893,7 @@ export default defineConfig({
                 `${JSON.stringify(module.createEmptyPublishedAssetsManifest(), null, 2)}\n`,
                 'utf8',
               );
+              await ensureScaffoldedGameRepo(paths, project, module);
               registerGameRoot(slug, paths.rootPath);
               writeJson(res, 200, {
                 ok: true,
@@ -930,6 +957,73 @@ export default defineConfig({
                 rootPath,
                 projectFilePath,
                 project,
+              });
+              return;
+            }
+
+            if (op === 'publish-web') {
+              const rootPathInput = normalizeOptionalString(body.rootPath);
+              const projectFilePathInput = normalizeOptionalString(body.projectFilePath);
+              const gameId = normalizeOptionalString(body.gameId);
+              if (!rootPathInput || !projectFilePathInput || !gameId || !isValidSlug(gameId)) {
+                writeJson(res, 400, { ok: false, error: 'Missing publish-web payload' });
+                return;
+              }
+
+              const rootPath = resolveAbsoluteInputPath(rootPathInput);
+              const projectFilePath = resolveAbsoluteInputPath(projectFilePathInput);
+              const rootPaths = resolveGameRootPaths(rootPath);
+              if (!fsSync.existsSync(projectFilePath)) {
+                writeJson(res, 404, { ok: false, error: `No project.sgrgame found at ${projectFilePath}` });
+                return;
+              }
+
+              const raw = await fs.readFile(projectFilePath, 'utf8');
+              const project = module.normalizeLoadedProjectDocument(JSON.parse(raw), {
+                fallbackName: rootPath,
+                fallbackGameId: gameId,
+              });
+              await ensureScaffoldedGameRepo(rootPaths, project, module);
+              await fs.mkdir(rootPaths.webExportPath, { recursive: true });
+
+              const env = {
+                ...process.env,
+                GAME_SLUG: gameId,
+                GAME_ROOT: rootPath,
+                GAME_PROJECT: projectFilePath,
+                VITE_GAME_SLUG: gameId,
+              };
+              const buildResult = spawnSync('npm', ['run', 'game:build'], {
+                cwd: projectRoot,
+                env,
+                stdio: 'inherit',
+              });
+              if (buildResult.status !== 0) {
+                writeJson(res, 500, {
+                  ok: false,
+                  error: `Web publish build failed with exit code ${buildResult.status ?? 1}.`,
+                });
+                return;
+              }
+
+              const builtClientPath = join(projectRoot, 'dist-game');
+              if (!fsSync.existsSync(builtClientPath)) {
+                writeJson(res, 500, { ok: false, error: 'Expected dist-game output was not produced.' });
+                return;
+              }
+
+              if (fsSync.existsSync(rootPaths.webExportClientPath)) {
+                await fs.rm(rootPaths.webExportClientPath, { recursive: true, force: true });
+              }
+              await fs.mkdir(rootPaths.webExportPath, { recursive: true });
+              await fs.cp(builtClientPath, rootPaths.webExportClientPath, { recursive: true });
+
+              registerGameRoot(gameId, rootPath);
+              writeJson(res, 200, {
+                ok: true,
+                rootPath,
+                projectFilePath,
+                exportPath: rootPaths.webExportClientPath,
               });
               return;
             }
@@ -1350,39 +1444,7 @@ export default defineConfig({
           if (!pending) {
             pending = (async () => {
               const { createSugarAgentSession } = await server.ssrLoadModule('/src/plugins/sugaragent/session/runtime.ts') as {
-                createSugarAgentSession: (options: Record<string, unknown>) => Promise<{
-                  runTurn: (
-                    playerMessage: string,
-                    turnOptions?: {
-                      npcName?: string;
-                      npcProfileOverride?: Record<string, unknown>;
-                      globalSafetyBoundsOverride?: string[];
-                      context?: Record<string, unknown>;
-                      attempt?: number;
-                      repair?: boolean;
-                    },
-                  ) => Promise<{
-                    output: Record<string, unknown>;
-                    usedFallback?: boolean;
-                    fallbackKind?: string;
-                    validationErrors?: string[];
-                    routing?: Record<string, unknown>;
-                    pipeline?: Record<string, unknown>;
-                    grounding?: Record<string, unknown>;
-                    loreMatches?: Array<Record<string, unknown>>;
-                  }>;
-                  startup?: {
-                    runtime?: { health?: { detail?: string } };
-                    lore?: {
-                      loaded?: boolean;
-                      dir?: string;
-                    };
-                    session?: {
-                      loaded?: boolean;
-                      pathToFile?: string;
-                    };
-                  };
-                }>;
+                createSugarAgentSession: (options: Record<string, unknown>) => Promise<SugarAgentSessionRuntime>;
               };
 
               const sessionId = buildPreviewSessionId(slug, npcId);

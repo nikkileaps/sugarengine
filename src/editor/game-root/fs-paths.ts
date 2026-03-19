@@ -22,6 +22,20 @@ export interface GameRootPaths {
   manifestsPath: string;
   publishedAssetsManifestPath: string;
   exportsPath: string;
+  webExportPath: string;
+  webExportClientPath: string;
+  releasePath: string;
+  releaseTargetsPath: string;
+  webReleaseTargetPath: string;
+  webGameApiPath: string;
+  webProfileStagingPath: string;
+  webProfileProductionPath: string;
+  webTargetReadmePath: string;
+  webTargetGitignorePath: string;
+  webTargetScriptsPath: string;
+  webTargetArtifactsPath: string;
+  githubPath: string;
+  githubWorkflowsPath: string;
 }
 
 export function detectPathSeparator(value: string): '/' | '\\' {
@@ -78,6 +92,20 @@ export function resolveGameRootPaths(rootPath: string): GameRootPaths {
     manifestsPath: joinFsPath(normalizedRoot, 'manifests'),
     publishedAssetsManifestPath: joinFsPath(normalizedRoot, 'manifests', PUBLISHED_ASSETS_MANIFEST_FILE),
     exportsPath: joinFsPath(normalizedRoot, 'exports'),
+    webExportPath: joinFsPath(normalizedRoot, 'exports', 'web'),
+    webExportClientPath: joinFsPath(normalizedRoot, 'exports', 'web', 'client'),
+    releasePath: joinFsPath(normalizedRoot, 'release'),
+    releaseTargetsPath: joinFsPath(normalizedRoot, 'release', 'targets'),
+    webReleaseTargetPath: joinFsPath(normalizedRoot, 'release', 'targets', 'web'),
+    webGameApiPath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', 'game-api'),
+    webProfileStagingPath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', 'profile.staging.json'),
+    webProfileProductionPath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', 'profile.production.json'),
+    webTargetReadmePath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', 'README.md'),
+    webTargetGitignorePath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', '.gitignore'),
+    webTargetScriptsPath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', 'scripts'),
+    webTargetArtifactsPath: joinFsPath(normalizedRoot, 'release', 'targets', 'web', '.artifacts'),
+    githubPath: joinFsPath(normalizedRoot, '.github'),
+    githubWorkflowsPath: joinFsPath(normalizedRoot, '.github', 'workflows'),
   };
 }
 

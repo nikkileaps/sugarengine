@@ -47,6 +47,7 @@ import {
 } from '../../../plugins/sugarlang/content/artifacts';
 import {
   DEFAULT_BAND_ORDER,
+  createDefaultBandPolicyPack,
   resolveBandPolicyDefaults,
 } from '../../../plugins/sugarlang/content/band-policy-defaults';
 import {
@@ -1394,12 +1395,19 @@ export function SugarlangPanel({
     console.log(`[SL·Editor] installing language "${language}"`);
     const lexicon = getSharedLexicon(language);
     setState((current) => {
-      if (!current.editBundle) return current;
-      const nextLexicons = new Map(current.editBundle.lexicons);
+      const bundle: SugarlangContentBundle = current.editBundle ?? {
+        scenarios: new Map(),
+        groundingMaps: new Map(),
+        lexicons: new Map(),
+        bandPolicies: createDefaultBandPolicyPack(),
+        sceneLanguagePacks: new Map(),
+        questBindings: new Map(),
+      };
+      const nextLexicons = new Map(bundle.lexicons);
       nextLexicons.set(language, lexicon);
       return {
         ...current,
-        editBundle: { ...current.editBundle, lexicons: nextLexicons },
+        editBundle: { ...bundle, lexicons: nextLexicons },
       };
     });
     setActionFeedback(`Installed language "${language}" with ${lexicon.entries.length} lexicon entries. Save to persist.`);

@@ -58,4 +58,76 @@ describe('buildRuntimePluginsFromProject', () => {
 
     expect(plugins).toHaveLength(0);
   });
+
+  it('passes explicit SugarAgent bridge options through the runtime plugin builder', async () => {
+    let capturedRequest: unknown;
+    const hostedBridge = {
+      async health() {
+        return { ok: true, detail: 'hosted-ready' };
+      },
+      async loadModel() {},
+      async generateStructured(request: unknown) {
+        capturedRequest = request;
+        return {
+          jsonText: JSON.stringify({
+            utterance: 'Hosted hello.',
+            emotion: 'warm',
+            intent: 'conversation',
+            proposedIntents: [],
+            citations: [],
+            beatEvidence: {
+              coveredFacts: [],
+              uncoveredFacts: [],
+              completionSignal: 'none',
+              confidence: 0,
+            },
+          }),
+          diagnostics: {},
+        };
+      },
+      async embed() {
+        return [];
+      },
+      async unloadModel() {},
+    };
+
+    const { plugins } = buildRuntimePluginsFromProject(
+      { plugins: ['sugaragent'] },
+      {
+        sugarAgent: {
+          runtimeBridge: hostedBridge,
+        },
+      },
+    );
+
+    expect(plugins).toHaveLength(1);
+    const plugin = plugins[0];
+    await plugin?.init({
+      getNearbyInteraction: () => null,
+      getNearbyInteractable: () => null,
+      getNPCInfo: () => undefined,
+      getPlayerPosition: () => null,
+      getRegionInfo: () => null,
+      executeIntent: async () => ({ success: true }),
+      emit: () => {},
+      subscribe: () => () => {},
+    });
+
+    const turn = await plugin?.runAgentTurn?.({
+      npcId: 'npc-1',
+      npcName: 'Rick',
+      playerMessage: 'hello',
+      context: {
+        traceId: 'trace_session_1',
+        interactionPolicy: 'agent-first',
+      },
+    });
+
+    expect(turn?.utterance).toBe('Hosted hello.');
+    expect(capturedRequest).toMatchObject({
+      context: {
+        traceId: 'trace_session_1',
+      },
+    });
+  });
 });

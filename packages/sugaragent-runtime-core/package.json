@@ -1,0 +1,47 @@
+{
+  "name": "@sugarengine/sugaragent-runtime-core",
+  "version": "0.0.1",
+  "private": false,
+  "description": "SugarAgent shared session runtime core for local preview and hosted game backends.",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nikkileaps/sugarengine.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./session/runtime": {
+      "types": "./dist/session/runtime.d.ts",
+      "import": "./dist/session/runtime.js"
+    },
+    "./runtime/local-embedding-runtime": {
+      "types": "./dist/runtime/local-embedding-runtime.d.ts",
+      "import": "./dist/runtime/local-embedding-runtime.js"
+    },
+    "./runtime/model-profiles": {
+      "types": "./dist/runtime/model-profiles.d.ts",
+      "import": "./dist/runtime/model-profiles.js"
+    },
+    "./contracts/turn": {
+      "types": "./dist/contracts/turn.d.ts",
+      "import": "./dist/contracts/turn.js"
+    }
+  },
+  "scripts": {
+    "build": "node ./scripts/build.mjs"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.24.3"
+  }
+}

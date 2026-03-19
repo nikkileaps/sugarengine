@@ -8,6 +8,12 @@
 import { Game } from './engine';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
 import { buildRuntimePluginsFromProject } from './plugins/runtime';
+import { HttpGameApiRuntimeBridge } from './plugins/sugaragent/runtime';
+import { ensureHostedPlayerSession } from './release-targets/web/hostedAuth';
+import {
+  isHostedWebRuntimeConfig,
+  resolvePublishedWebRuntimeConfig,
+} from './release-targets/web/runtimeConfig';
 
 interface GameData {
   meta?: {
@@ -61,9 +67,31 @@ async function loadGameData(slug: string): Promise<GameData> {
 
 async function runGame(gameData: GameData, gameSlug: string) {
   const container = document.getElementById('app')!;
-  const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(gameData);
+  const runtimeConfig = resolvePublishedWebRuntimeConfig(import.meta.env);
   const gameId = gameData.meta?.gameId || gameSlug;
   const contentBasePath = gameData.meta?.contentBasePath || `games/${gameSlug}/assets/`;
+
+  if (isHostedWebRuntimeConfig(runtimeConfig)) {
+    await ensureHostedPlayerSession({
+      runtime: runtimeConfig,
+      gameTitle: gameData.meta?.name || gameData.title || gameSlug,
+    });
+  }
+
+  const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(
+    gameData,
+    isHostedWebRuntimeConfig(runtimeConfig)
+      ? {
+        sugarAgent: {
+          runtimeBridge: new HttpGameApiRuntimeBridge({
+            baseUrl: runtimeConfig.gameApiBaseUrl,
+            credentials: runtimeConfig.credentials,
+            gameId,
+          }),
+        },
+      }
+      : undefined,
+  );
 
   // Determine start region from default episode
   const episodeId = gameData.defaultEpisode || gameData.episodes?.[0]?.id;

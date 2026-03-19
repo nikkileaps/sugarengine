@@ -17,6 +17,7 @@ import {
   resolveGameRootPaths,
   type GameRootPaths,
 } from './fs-paths';
+import { buildWebReleaseTargetScaffold } from './release-target-scaffold';
 
 const GAME_ROOT_ENDPOINT = '/__sugarengine/game-root';
 const GAME_ROOT_PICKER_ENDPOINT = '/__sugarengine/pick-directory';
@@ -26,6 +27,7 @@ interface GameRootResponse {
   rootPath?: string;
   projectFilePath?: string;
   project?: unknown;
+  exportPath?: string;
   error?: string;
 }
 
@@ -53,6 +55,18 @@ export interface CreateGameInput {
   rootPath: string;
   name: string;
   slug: string;
+}
+
+export interface PublishWebTargetInput {
+  rootPath: string;
+  projectFilePath: string;
+  gameId: string;
+}
+
+export interface PublishWebTargetResult {
+  rootPath: string;
+  projectFilePath: string;
+  exportPath: string;
 }
 
 function isTauriEnvironment(): boolean {
@@ -104,6 +118,7 @@ async function writeScaffoldFiles(
     rootPaths.configPath,
     rootPaths.manifestsPath,
     rootPaths.exportsPath,
+    rootPaths.webExportPath,
   ];
 
   for (const directory of directories) {
@@ -119,6 +134,18 @@ async function writeScaffoldFiles(
     rootPaths.publishedAssetsManifestPath,
     `${JSON.stringify(createEmptyPublishedAssetsManifest(), null, 2)}\n`,
   );
+
+  const webTargetScaffold = buildWebReleaseTargetScaffold(rootPaths, {
+    gameId: project.meta.gameId,
+    gameName: project.meta.name,
+  });
+  for (const directory of webTargetScaffold.directories) {
+    await fsApi.mkdir(directory, { recursive: true });
+  }
+  for (const file of webTargetScaffold.files) {
+    if (file.overwrite === 'never' && await fsApi.exists(file.path)) continue;
+    await fsApi.writeTextFile(file.path, file.content);
+  }
 }
 
 async function createGameWithTauri(input: CreateGameInput): Promise<OpenGameResult> {
@@ -232,6 +259,29 @@ export async function saveGame(result: OpenGameResult): Promise<void> {
     projectFilePath: result.projectFilePath,
     project: result.project,
   });
+}
+
+export async function publishWebTarget(input: PublishWebTargetInput): Promise<PublishWebTargetResult> {
+  if (isTauriEnvironment()) {
+    throw new Error('Web target publishing is not wired for the desktop build yet. Use the local editor/dev host for now.');
+  }
+
+  const response = await postGameRootOperation({
+    op: 'publish-web',
+    rootPath: input.rootPath,
+    projectFilePath: input.projectFilePath,
+    gameId: input.gameId,
+  });
+
+  if (!response.rootPath || !response.projectFilePath || !response.exportPath) {
+    throw new Error('Publish web target did not return the export path.');
+  }
+
+  return {
+    rootPath: response.rootPath,
+    projectFilePath: response.projectFilePath,
+    exportPath: response.exportPath,
+  };
 }
 
 export async function registerGameRoot(gameId: string, rootPath: string): Promise<void> {

@@ -19,6 +19,7 @@ export interface LLMGenerateRequest {
   };
   globalSafetyBounds?: string[];
   context?: {
+    traceId?: string;
     gameId?: string;
     regionPath?: string;
     regionName?: string;

@@ -26,6 +26,11 @@ describe('fs-paths', () => {
     const paths = resolveGameRootPaths('C:\\Games\\Wordlark');
     expect(paths.projectFilePath).toBe('C:\\Games\\Wordlark\\project.sgrgame');
     expect(joinFsPath('C:\\Games\\Wordlark', 'assets', 'audio')).toBe('C:\\Games\\Wordlark\\assets\\audio');
+    expect(paths.webGameApiPath).toBe('C:\\Games\\Wordlark\\release\\targets\\web\\game-api');
+    expect(paths.webExportClientPath).toBe('C:\\Games\\Wordlark\\exports\\web\\client');
+    expect(paths.webTargetScriptsPath).toBe('C:\\Games\\Wordlark\\release\\targets\\web\\scripts');
+    expect(paths.webTargetArtifactsPath).toBe('C:\\Games\\Wordlark\\release\\targets\\web\\.artifacts');
+    expect(paths.githubWorkflowsPath).toBe('C:\\Games\\Wordlark\\.github\\workflows');
     expect(dirnameFsPath('C:\\Games\\Wordlark\\project.sgrgame')).toBe('C:\\Games\\Wordlark');
     expect(basenameFsPath('C:\\Games\\Wordlark\\project.sgrgame')).toBe('project.sgrgame');
     expect(isProjectFilePath('C:\\Games\\Wordlark\\project.sgrgame')).toBe(true);

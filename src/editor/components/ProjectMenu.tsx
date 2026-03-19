@@ -72,7 +72,7 @@ export function ProjectMenu({
           onClick={onExportJson}
           disabled={!projectLoaded}
         >
-          Export JSON
+          Publish
         </Menu.Item>
         <Menu.Divider />
         <Menu.Item

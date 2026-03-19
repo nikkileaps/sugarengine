@@ -8,9 +8,11 @@ import {
   type SugarAgentPluginOptions,
 } from './plugin';
 
+export type SugarAgentProjectPluginOptions = Omit<SugarAgentPluginOptions, 'authoringBundle' | 'runtimeMode'>;
+
 export function createSugarAgentPluginFromProject(
   projectData: unknown,
-  options: Omit<SugarAgentPluginOptions, 'authoringBundle' | 'runtimeMode'> = {},
+  options: SugarAgentProjectPluginOptions = {},
 ): EnginePlugin | null {
   // This is the authoritative preview/game path for SugarAgent authoring.
   // We synthesize the runtime bundle from the in-memory project data so editor preview stays in sync

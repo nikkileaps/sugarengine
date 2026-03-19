@@ -31,7 +31,7 @@ import { EpisodeDetailsDialog } from './components/EpisodeDetailsDialog';
 import { PreviewManager } from './PreviewManager';
 import type { ProjectData as PreviewProjectData } from './PreviewManager';
 import type { PluginConfigData } from './store/useEditorStore';
-import { createGame, openGame, pickGameProjectFile, pickGameRootDirectory, saveGame } from './game-root/service';
+import { createGame, openGame, pickGameProjectFile, pickGameRootDirectory, publishWebTarget, saveGame } from './game-root/service';
 import { loadAllSugarlangArtifacts } from './game-root/plugin-artifacts';
 import {
   buildPreviewProjectDocument,
@@ -705,11 +705,36 @@ export function Editor() {
   };
 
   const handlePublish = async () => {
-    // Build game data for publishing
-    const jsonContent = JSON.stringify(buildRuntimeExportDocument(buildCurrentProjectDocument()), null, 2);
-
     try {
-      // Optional export of a runtime game.json snapshot.
+      if (gameRootPath && projectFilePath && resolvedGameId) {
+        setGameLifecycleBusy(true);
+        setGameLifecycleError(null);
+        if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
+          await sugarlangSaveHandlerRef.current();
+        }
+        const project = buildCurrentProjectDocument();
+        await saveGame({
+          rootPath: gameRootPath,
+          projectFilePath,
+          project,
+        });
+        const publishResult = await publishWebTarget({
+          rootPath: gameRootPath,
+          projectFilePath,
+          gameId: resolvedGameId,
+        });
+        setSugarlangDirty(false);
+        setDirty(false);
+        console.log(`[Editor] Published web client to ${publishResult.exportPath}`);
+        alert(
+          `Published web client into the game repository.\n\n` +
+          `Export path:\n${publishResult.exportPath}\n\n` +
+          `The game repo workflows can now deploy that artifact.`
+        );
+        return;
+      }
+
+      const jsonContent = JSON.stringify(buildRuntimeExportDocument(buildCurrentProjectDocument()), null, 2);
       if ('showSaveFilePicker' in window) {
         const handle = await (window as Window & {
           showSaveFilePicker: (options: {
@@ -732,7 +757,6 @@ export function Editor() {
           'Use this for runtime inspection or downstream build tooling.'
         );
       } else {
-        // Fallback to download
         const blob = new Blob([jsonContent], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -746,8 +770,12 @@ export function Editor() {
         );
       }
     } catch (err) {
-      // User cancelled or error
       console.error('Publish failed:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      setGameLifecycleError(message);
+      alert(`Publish failed: ${message}`);
+    } finally {
+      setGameLifecycleBusy(false);
     }
   };
 

@@ -151,6 +151,7 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
       npcName: session.npcName,
       playerMessage: message,
       context: {
+        traceId: session.traceId,
         gameId: this.adapterContext.gameId,
         regionPath: regionInfo?.path ?? this.adapterContext.getCurrentRegion(),
         regionName: regionInfo?.name,

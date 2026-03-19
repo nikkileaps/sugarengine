@@ -1619,6 +1619,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     );
     const npcProfile = resolveSugarAgentProfile(authoringBundle, request.npcId);
     const runtimeContext = {
+      traceId: request.context?.traceId,
       gameId: request.context?.gameId,
       regionPath: request.context?.regionPath,
       regionName: request.context?.regionName,

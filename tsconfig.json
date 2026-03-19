@@ -19,7 +19,7 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["src"],
+  "include": ["src", "packages"],
   "exclude": [
     "src/**/*.test.ts",
     "src/**/*.test.mts",
