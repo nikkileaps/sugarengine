@@ -73,16 +73,16 @@ jobs:
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
-          scope: '@sugarengine'
+          scope: '@nikkileaps'
 
       - name: Install workspace dependencies
         run: npm install
 
       - name: Build runtime core package
-        run: npm run build --workspace @sugarengine/sugaragent-runtime-core
+        run: npm run build --workspace @nikkileaps/sugaragent-runtime-core
 
       - name: Publish runtime core package
-        run: npm publish --workspace @sugarengine/sugaragent-runtime-core --tag "${{ steps.publish_meta.outputs.dist_tag }}"
+        run: npm publish --workspace @nikkileaps/sugaragent-runtime-core --tag "${{ steps.publish_meta.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

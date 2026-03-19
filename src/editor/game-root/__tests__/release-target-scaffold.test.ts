@@ -122,7 +122,7 @@ describe('release-target-scaffold', () => {
     const sugaragentService = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/game-api/src/services/sugaragent/index.ts'));
     const sugaragentRuntimeServices = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/game-api/src/services/sugaragent/runtime-services.ts'));
 
-    expect(sugaragentRoute?.content).toContain("from '@sugarengine/sugaragent-runtime-core'");
+    expect(sugaragentRoute?.content).toContain("from '@nikkileaps/sugaragent-runtime-core'");
     expect(sugaragentRoute?.content).toContain('getSugarAgentRuntimeServices().health');
     expect(sugaragentRoute?.content).toContain('getSugarAgentRuntimeServices().generateStructured');
     expect(sugaragentRoute?.content).toContain('getSugarAgentRuntimeServices().embed');

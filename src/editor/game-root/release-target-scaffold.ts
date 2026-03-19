@@ -64,7 +64,7 @@ The web workflows deploy that exported artifact directly. They do not rebuild th
 
 ## SugarAgent Runtime Assets
 
-- The published \`@sugarengine/sugaragent-runtime-core\` package is code-only and does not carry native binaries or model payloads.
+- The published \`@nikkileaps/sugaragent-runtime-core\` package is code-only and does not carry native binaries or model payloads.
 - Local preview resolves SugarAgent runtime assets from explicit environment variables first, then from the SugarEngine workspace when available.
 - The scaffolded \`web\` target assembles Linux SugarAgent runtime assets during the \`game-api\` container build using URLs from the deployment profile.
 
@@ -166,7 +166,7 @@ function buildGameApiPackageJson(gameId: string): string {
       fastify: '^5.6.1',
       '@fastify/cookie': '^11.0.2',
       jose: '^6.1.0',
-      '@sugarengine/sugaragent-runtime-core': '0.0.1',
+      '@nikkileaps/sugaragent-runtime-core': '0.0.1',
     },
     devDependencies: {
       '@types/node': '^22.13.10',
@@ -707,7 +707,7 @@ function buildSugarAgentRoute(): string {
     }
   });`,
     `import { requireSession, enforceSugarAgentSessionRateLimit } from '../services/auth/middleware.js';
-import type { RuntimeGenerateStructuredRequest, RuntimeHealthRequest } from '@sugarengine/sugaragent-runtime-core';
+import type { RuntimeGenerateStructuredRequest, RuntimeHealthRequest } from '@nikkileaps/sugaragent-runtime-core';
 import { buildSugarAgentTransportError } from '../services/sugaragent/index.js';
 import { getSugarAgentRuntimeServices } from '../services/sugaragent/runtime-services.js';
 `,
@@ -990,7 +990,7 @@ function buildSugarAgentRuntimeServices(): string {
   return `import {
   createHostedSugarAgentRuntimeServices,
   type HostedSugarAgentRuntimeServices,
-} from '@sugarengine/sugaragent-runtime-core';
+} from '@nikkileaps/sugaragent-runtime-core';
 
 import type { AppConfig } from '../../types.js';
 
