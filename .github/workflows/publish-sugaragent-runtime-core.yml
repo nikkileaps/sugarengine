@@ -2,6 +2,19 @@ name: Publish SugarAgent Runtime Core
 
 on:
   workflow_dispatch:
+    inputs:
+      release_channel:
+        description: Stable for main/release publishing; prerelease for branch RC packages; auto picks based on ref/event.
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - stable
+          - prerelease
+  push:
+    branches-ignore:
+      - main
   release:
     types: [published]
 
@@ -12,9 +25,48 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      PACKAGE_DIR: packages/sugaragent-runtime-core
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Resolve publish version and dist-tag
+        id: publish_meta
+        shell: bash
+        env:
+          RELEASE_CHANNEL_INPUT: ${{ github.event.inputs.release_channel || 'auto' }}
+        run: |
+          set -euo pipefail
+
+          base_version="$(node -p "require('./${PACKAGE_DIR}/package.json').version")"
+          ref_name="${GITHUB_REF_NAME}"
+          ref_slug="$(printf '%s' "$ref_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-24)"
+          if [ -z "$ref_slug" ]; then
+            ref_slug="branch"
+          fi
+
+          channel="$RELEASE_CHANNEL_INPUT"
+          if [ "$channel" = "auto" ]; then
+            if [ "${GITHUB_EVENT_NAME}" = "release" ] || [ "$ref_name" = "main" ]; then
+              channel="stable"
+            else
+              channel="prerelease"
+            fi
+          fi
+
+          if [ "$channel" = "stable" ]; then
+            publish_version="$base_version"
+            dist_tag="latest"
+          else
+            publish_version="${base_version}-${ref_slug}.${GITHUB_RUN_NUMBER}"
+            dist_tag="$ref_slug"
+            npm pkg set version="$publish_version" --prefix "$PACKAGE_DIR"
+          fi
+
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "publish_version=$publish_version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$dist_tag" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -30,6 +82,17 @@ jobs:
         run: npm run build --workspace @sugarengine/sugaragent-runtime-core
 
       - name: Publish runtime core package
-        run: npm publish --workspace @sugarengine/sugaragent-runtime-core
+        run: npm publish --workspace @sugarengine/sugaragent-runtime-core --tag "${{ steps.publish_meta.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write publish summary
+        run: |
+          {
+            echo "## SugarAgent Runtime Core Publish"
+            echo ""
+            echo "- Channel: \`${{ steps.publish_meta.outputs.channel }}\`"
+            echo "- Version: \`${{ steps.publish_meta.outputs.publish_version }}\`"
+            echo "- Dist-tag: \`${{ steps.publish_meta.outputs.dist_tag }}\`"
+            echo "- Ref: \`${GITHUB_REF_NAME}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
