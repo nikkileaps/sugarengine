@@ -164,7 +164,7 @@ Edit `release/targets/web/profile.staging.json` and `profile.production.json`:
 ## Gotchas
 
 - `npm ci` in CI requires `package-lock.json` — run `npm install` in `release/targets/web/game-api/` before first push
-- `@sugarengine/sugaragent-runtime-core` is not yet published to a registry — for now it is vendored as a tarball in `release/targets/web/game-api/vendor/`. Regenerate it with `npm pack` from `packages/sugaragent-runtime-core/` in the sugarengine repo when the package changes. This will be replaced by a GitHub Packages dependency once published.
+- `@nikkileaps/sugaragent-runtime-core` is not yet published to a registry — for now it is vendored as a tarball in `release/targets/web/game-api/vendor/`. Regenerate it with `npm pack` from `packages/sugaragent-runtime-core/` in the sugarengine repo when the package changes. This will be replaced by a GitHub Packages dependency once published.
 - The `exports/` directory must not be fully gitignored — the web client build needs to be committed
 - Bcrypt hashes contain `$` — always use single quotes when passing them to shell commands
 - Passwords containing `!` will be interpreted by zsh — use single quotes around the whole command

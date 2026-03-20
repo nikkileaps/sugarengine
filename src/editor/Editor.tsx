@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select } from '@mantine/core';
+import { MantineProvider, createTheme, AppShell, Group, Tabs, Text, Stack, Button, Modal, Textarea, ActionIcon, ScrollArea, Switch, Select, TextInput } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { useEditorStore } from './store';
 import type { EditorTab } from './store/useEditorStore';
@@ -31,12 +31,16 @@ import { EpisodeDetailsDialog } from './components/EpisodeDetailsDialog';
 import { PreviewManager } from './PreviewManager';
 import type { ProjectData as PreviewProjectData } from './PreviewManager';
 import type { PluginConfigData } from './store/useEditorStore';
-import { createGame, openGame, pickGameProjectFile, pickGameRootDirectory, publishWebTarget, saveGame } from './game-root/service';
+import { createGame, loadWebPublishProfile, openGame, pickGameProjectFile, pickGameRootDirectory, publishWebTarget, saveGame } from './game-root/service';
 import { loadAllSugarlangArtifacts } from './game-root/plugin-artifacts';
+import type {
+  WebPublishCredentials,
+  WebPublishEnvironment,
+  WebPublishTarget,
+} from './game-root/web-publish-profile';
 import {
   buildPreviewProjectDocument,
   buildProjectDocumentFromSnapshot,
-  buildRuntimeExportDocument,
   type EditorProjectDocument,
 } from './game-root/project-document';
 
@@ -76,6 +80,21 @@ const SUGARAGENT_RUNTIME_MODE_OPTIONS = [
   { value: 'mock', label: 'mock (testing only)' },
 ] as const;
 type SugarAgentRuntimeMode = (typeof SUGARAGENT_RUNTIME_MODE_OPTIONS)[number]['value'];
+
+const WEB_PUBLISH_TARGET_OPTIONS = [
+  { value: 'web', label: 'web' },
+] as const;
+
+const WEB_PUBLISH_ENVIRONMENT_OPTIONS = [
+  { value: 'production', label: 'production' },
+  { value: 'staging', label: 'staging' },
+] as const;
+
+const WEB_PUBLISH_CREDENTIAL_OPTIONS = [
+  { value: 'include', label: 'include' },
+  { value: 'same-origin', label: 'same-origin' },
+  { value: 'omit', label: 'omit' },
+] as const;
 
 const theme = createTheme({
   primaryColor: 'blue',
@@ -271,6 +290,14 @@ export function Editor() {
   const [gameLifecycleBusy, setGameLifecycleBusy] = useState(false);
   const [gameLifecycleError, setGameLifecycleError] = useState<string | null>(null);
   const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishTarget, setPublishTarget] = useState<WebPublishTarget>('web');
+  const [publishEnvironment, setPublishEnvironment] = useState<WebPublishEnvironment>('production');
+  const [publishProfilePath, setPublishProfilePath] = useState('');
+  const [publishGameApiBaseUrl, setPublishGameApiBaseUrl] = useState('');
+  const [publishBackendRequired, setPublishBackendRequired] = useState(true);
+  const [publishCredentials, setPublishCredentials] = useState<WebPublishCredentials>('include');
+  const [publishProfileLoading, setPublishProfileLoading] = useState(false);
   const [sugarAgentSettingsOpen, setSugarAgentSettingsOpen] = useState(false);
   const [resettingSugarAgentRuntime, setResettingSugarAgentRuntime] = useState(false);
   const [resettingSugarAgentSessions, setResettingSugarAgentSessions] = useState(false);
@@ -445,6 +472,54 @@ export function Editor() {
   const handleSugarlangOpenSettingsHandlerChange = useCallback((handler: (() => void) | null) => {
     sugarlangOpenSettingsHandlerRef.current = handler;
   }, []);
+
+  const loadPublishProfileSettings = useCallback(async (environment: WebPublishEnvironment) => {
+    if (!gameRootPath) {
+      throw new Error('Open a game repository before publishing a web target.');
+    }
+
+    setPublishProfileLoading(true);
+    try {
+      const profile = await loadWebPublishProfile({
+        rootPath: gameRootPath,
+        environment,
+      });
+      setPublishTarget(profile.target);
+      setPublishEnvironment(profile.environment);
+      setPublishProfilePath(profile.profilePath);
+      setPublishGameApiBaseUrl(profile.frontend.gameApiBaseUrl);
+      setPublishBackendRequired(profile.frontend.backendRequired);
+      setPublishCredentials(profile.frontend.credentials);
+    } finally {
+      setPublishProfileLoading(false);
+    }
+  }, [gameRootPath]);
+
+  const openPublishDialog = useCallback(async () => {
+    try {
+      setGameLifecycleError(null);
+      setPublishDialogOpen(true);
+      await loadPublishProfileSettings('production');
+    } catch (error) {
+      setPublishDialogOpen(false);
+      const message = error instanceof Error ? error.message : String(error);
+      setGameLifecycleError(message);
+      alert(`Could not load publish settings: ${message}`);
+    }
+  }, [loadPublishProfileSettings]);
+
+  const handlePublishEnvironmentChange = useCallback(async (value: string | null) => {
+    const nextEnvironment: WebPublishEnvironment = value === 'staging' ? 'staging' : 'production';
+    try {
+      setGameLifecycleError(null);
+      setPublishEnvironment(nextEnvironment);
+      await loadPublishProfileSettings(nextEnvironment);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setGameLifecycleError(message);
+      alert(`Could not load publish settings: ${message}`);
+    }
+  }, [loadPublishProfileSettings]);
 
   // Open preview
   const handlePreview = async () => {
@@ -706,69 +781,46 @@ export function Editor() {
 
   const handlePublish = async () => {
     try {
-      if (gameRootPath && projectFilePath && resolvedGameId) {
-        setGameLifecycleBusy(true);
-        setGameLifecycleError(null);
-        if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
-          await sugarlangSaveHandlerRef.current();
-        }
-        const project = buildCurrentProjectDocument();
-        await saveGame({
-          rootPath: gameRootPath,
-          projectFilePath,
-          project,
-        });
-        const publishResult = await publishWebTarget({
-          rootPath: gameRootPath,
-          projectFilePath,
-          gameId: resolvedGameId,
-        });
-        setSugarlangDirty(false);
-        setDirty(false);
-        console.log(`[Editor] Published web client to ${publishResult.exportPath}`);
-        alert(
-          `Published web client into the game repository.\n\n` +
-          `Export path:\n${publishResult.exportPath}\n\n` +
-          `The game repo workflows can now deploy that artifact.`
-        );
-        return;
+      if (!gameRootPath || !projectFilePath || !resolvedGameId) {
+        throw new Error('Open a game repository before publishing a web target.');
+      }
+      if (!publishGameApiBaseUrl.trim()) {
+        throw new Error('Game API base URL is required for the hosted web publish target.');
       }
 
-      const jsonContent = JSON.stringify(buildRuntimeExportDocument(buildCurrentProjectDocument()), null, 2);
-      if ('showSaveFilePicker' in window) {
-        const handle = await (window as Window & {
-          showSaveFilePicker: (options: {
-            suggestedName?: string;
-            types: { description: string; accept: Record<string, string[]> }[];
-          }) => Promise<FileSystemFileHandle>;
-        }).showSaveFilePicker({
-          suggestedName: 'game.json',
-          types: [{
-            description: 'Game Data',
-            accept: { 'application/json': ['.json'] },
-          }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(jsonContent);
-        await writable.close();
-        console.log('[Editor] Published game.json');
-        alert(
-          'Exported game.json snapshot.\n\n' +
-          'Use this for runtime inspection or downstream build tooling.'
-        );
-      } else {
-        const blob = new Blob([jsonContent], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'game.json';
-        a.click();
-        URL.revokeObjectURL(url);
-        alert(
-          'Downloaded game.json snapshot.\n\n' +
-          'Use this for runtime inspection or downstream build tooling.'
-        );
+      setGameLifecycleBusy(true);
+      setGameLifecycleError(null);
+      if (sugarlangDirty && sugarlangSaveHandlerRef.current) {
+        await sugarlangSaveHandlerRef.current();
       }
+      const project = buildCurrentProjectDocument();
+      await saveGame({
+        rootPath: gameRootPath,
+        projectFilePath,
+        project,
+      });
+      const publishResult = await publishWebTarget({
+        rootPath: gameRootPath,
+        projectFilePath,
+        gameId: resolvedGameId,
+        target: publishTarget,
+        environment: publishEnvironment,
+        frontend: {
+          gameApiBaseUrl: publishGameApiBaseUrl,
+          backendRequired: publishBackendRequired,
+          credentials: publishCredentials,
+        },
+      });
+      setSugarlangDirty(false);
+      setDirty(false);
+      setPublishDialogOpen(false);
+      console.log(`[Editor] Published web client to ${publishResult.exportPath}`);
+      alert(
+        `Published ${publishTarget} client (${publishEnvironment}) into the game repository.\n\n` +
+        `Profile:\n${publishProfilePath}\n\n` +
+        `Export path:\n${publishResult.exportPath}\n\n` +
+        `The game repo workflows can now deploy that artifact.`
+      );
     } catch (err) {
       console.error('Publish failed:', err);
       const message = err instanceof Error ? err.message : String(err);
@@ -1136,7 +1188,7 @@ export function Editor() {
                                         onNewGame={openNewGameDialog}
                                         onOpenGame={openOpenGameDialog}
                                         onSaveGame={handleSaveGame}
-                                        onExportJson={handlePublish}
+                                        onExportJson={openPublishDialog}
                                         onManagePlugins={() => setPluginsDialogOpen(true)}
                                         projectLoaded={projectLoaded}
                                       />
@@ -1352,6 +1404,99 @@ export function Editor() {
       />
 
       {/* Plugins Dialog */}
+      <Modal
+        opened={publishDialogOpen}
+        onClose={() => setPublishDialogOpen(false)}
+        title="Publish"
+        centered
+        size="lg"
+        styles={{
+          header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
+          title: { color: '#cdd6f4', fontWeight: 600 },
+          body: { background: '#1e1e2e', padding: '20px' },
+          content: { background: '#1e1e2e' },
+          close: { color: '#6c7086', '&:hover': { background: '#313244' } },
+        }}
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            SugarEngine will publish the prebuilt frontend artifact into <code>exports/web/client</code> using the
+            selected target profile, then the game repo workflows can deploy that exact export.
+          </Text>
+          <Group grow align="flex-start">
+            <Select
+              label="Target"
+              data={WEB_PUBLISH_TARGET_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+              value={publishTarget}
+              onChange={(value) => setPublishTarget((value as WebPublishTarget) ?? 'web')}
+              allowDeselect={false}
+              disabled
+            />
+            <Select
+              label="Profile"
+              description="Load defaults from the game repository profile before publishing."
+              data={WEB_PUBLISH_ENVIRONMENT_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+              value={publishEnvironment}
+              onChange={(value) => {
+                void handlePublishEnvironmentChange(value);
+              }}
+              allowDeselect={false}
+              disabled={publishProfileLoading || gameLifecycleBusy}
+            />
+          </Group>
+          <Text size="xs" c="dimmed">
+            Profile path: {publishProfilePath || 'Loading...'}
+          </Text>
+          <TextInput
+            label="VITE_GAME_API_BASE_URL"
+            description="Hosted game-api base URL baked into the exported frontend bundle."
+            value={publishGameApiBaseUrl}
+            onChange={(event) => setPublishGameApiBaseUrl(event.currentTarget.value)}
+            placeholder="https://wordlark-api.example.run.app"
+            disabled={publishProfileLoading || gameLifecycleBusy}
+          />
+          <Group grow align="flex-start">
+            <Select
+              label="VITE_GAME_API_CREDENTIALS"
+              data={WEB_PUBLISH_CREDENTIAL_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+              value={publishCredentials}
+              onChange={(value) => setPublishCredentials((value as WebPublishCredentials) ?? 'include')}
+              allowDeselect={false}
+              disabled={publishProfileLoading || gameLifecycleBusy}
+            />
+            <Stack gap={6} style={{ paddingTop: 24 }}>
+              <Switch
+                label="VITE_GAME_API_REQUIRED"
+                checked={publishBackendRequired}
+                onChange={(event) => setPublishBackendRequired(event.currentTarget.checked)}
+                disabled={publishProfileLoading || gameLifecycleBusy}
+              />
+              <Text size="xs" c="dimmed">
+                Require the hosted backend bridge instead of falling back to local preview.
+              </Text>
+            </Stack>
+          </Group>
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={() => setPublishDialogOpen(false)}
+              disabled={gameLifecycleBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                void handlePublish();
+              }}
+              loading={gameLifecycleBusy}
+              disabled={publishProfileLoading}
+            >
+              Publish
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
       <Modal
         opened={pluginsDialogOpen}
         onClose={() => setPluginsDialogOpen(false)}

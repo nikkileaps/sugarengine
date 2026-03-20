@@ -102,6 +102,7 @@ function buildProfileContent(gameId: string, environment: 'staging' | 'productio
       siteName: frontendSiteName,
       gameApiBaseUrl: apiBaseUrl,
       backendRequired: true,
+      credentials: 'include',
     },
     backend: {
       serviceName,

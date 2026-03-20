@@ -14,6 +14,12 @@ import {
   getLocalEmbeddingRuntimeHealth,
   LOCAL_EMBEDDING_MODEL_ID,
 } from './src/plugins/sugaragent/runtime/local-embedding-runtime';
+import {
+  applyWebPublishProfileOverrides,
+  normalizeWebPublishEnvironment,
+  parseWebPublishProfile,
+  resolveWebPublishProfilePath,
+} from './src/editor/game-root/web-publish-profile';
 import type { SugarAgentSessionRuntime } from './packages/sugaragent-runtime-core/src';
 
 export default defineConfig({
@@ -125,6 +131,18 @@ export default defineConfig({
             return activeRoot;
           }
           return null;
+        };
+
+        const readWebPublishProfile = async (
+          rootPaths: ReturnType<typeof resolveGameRootPaths>,
+          environment: 'staging' | 'production',
+        ) => {
+          const profilePath = resolveWebPublishProfilePath(rootPaths, environment);
+          if (!fsSync.existsSync(profilePath)) {
+            throw new Error(`No ${environment} web profile found at ${profilePath}`);
+          }
+          const rawProfile = JSON.parse(await fs.readFile(profilePath, 'utf8'));
+          return parseWebPublishProfile(rawProfile, profilePath, environment);
         };
 
         let gameRootModulePromise: Promise<{
@@ -965,7 +983,19 @@ export default defineConfig({
               const rootPathInput = normalizeOptionalString(body.rootPath);
               const projectFilePathInput = normalizeOptionalString(body.projectFilePath);
               const gameId = normalizeOptionalString(body.gameId);
-              if (!rootPathInput || !projectFilePathInput || !gameId || !isValidSlug(gameId)) {
+              const target = normalizeOptionalString(body.target);
+              const environment = normalizeWebPublishEnvironment(body.environment);
+              const frontendOverrides = typeof body.frontend === 'object' && body.frontend !== null
+                ? body.frontend as Record<string, unknown>
+                : null;
+              if (
+                !rootPathInput
+                || !projectFilePathInput
+                || !gameId
+                || !isValidSlug(gameId)
+                || target !== 'web'
+                || !environment
+              ) {
                 writeJson(res, 400, { ok: false, error: 'Missing publish-web payload' });
                 return;
               }
@@ -985,6 +1015,18 @@ export default defineConfig({
               });
               await ensureScaffoldedGameRepo(rootPaths, project, module);
               await fs.mkdir(rootPaths.webExportPath, { recursive: true });
+              const publishProfile = applyWebPublishProfileOverrides(
+                await readWebPublishProfile(rootPaths, environment),
+                frontendOverrides
+                  ? {
+                    gameApiBaseUrl: normalizeOptionalString(frontendOverrides.gameApiBaseUrl),
+                    backendRequired: typeof frontendOverrides.backendRequired === 'boolean'
+                      ? frontendOverrides.backendRequired
+                      : undefined,
+                    credentials: normalizeOptionalString(frontendOverrides.credentials),
+                  }
+                  : null,
+              );
 
               const env = {
                 ...process.env,
@@ -992,6 +1034,9 @@ export default defineConfig({
                 GAME_ROOT: rootPath,
                 GAME_PROJECT: projectFilePath,
                 VITE_GAME_SLUG: gameId,
+                VITE_GAME_API_BASE_URL: publishProfile.frontend.gameApiBaseUrl,
+                VITE_GAME_API_REQUIRED: String(publishProfile.frontend.backendRequired),
+                VITE_GAME_API_CREDENTIALS: publishProfile.frontend.credentials,
               };
               const buildResult = spawnSync('npm', ['run', 'game:build'], {
                 cwd: projectRoot,
@@ -1024,6 +1069,32 @@ export default defineConfig({
                 rootPath,
                 projectFilePath,
                 exportPath: rootPaths.webExportClientPath,
+                target: publishProfile.target,
+                environment: publishProfile.environment,
+                profilePath: publishProfile.profilePath,
+                frontend: publishProfile.frontend,
+              });
+              return;
+            }
+
+            if (op === 'read-web-publish-profile') {
+              const rootPathInput = normalizeOptionalString(body.rootPath);
+              const environment = normalizeWebPublishEnvironment(body.environment);
+              if (!rootPathInput || !environment) {
+                writeJson(res, 400, { ok: false, error: 'Missing read-web-publish-profile payload' });
+                return;
+              }
+
+              const rootPath = resolveAbsoluteInputPath(rootPathInput);
+              const rootPaths = resolveGameRootPaths(rootPath);
+              const publishProfile = await readWebPublishProfile(rootPaths, environment);
+              writeJson(res, 200, {
+                ok: true,
+                rootPath,
+                target: publishProfile.target,
+                environment: publishProfile.environment,
+                profilePath: publishProfile.profilePath,
+                frontend: publishProfile.frontend,
               });
               return;
             }

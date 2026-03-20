@@ -39,6 +39,7 @@ describe('release-target-scaffold', () => {
     expect(productionProfile?.content).toContain('"serviceName": "wordlark-api"');
     expect(stagingProfile?.content).toContain('"serviceName": "wordlark-api-staging"');
     expect(productionProfile?.content).toContain('"publishDirectory": "exports/web/client"');
+    expect(productionProfile?.content).toContain('"credentials": "include"');
     expect(productionProfile?.content).toContain('"imageRepository": "us-central1-docker.pkg.dev/replace-me/wordlark-web/wordlark-api"');
     expect(stagingProfile?.content).toContain('"outputPath": "release/targets/web/.artifacts/release-metadata.staging.json"');
     expect(productionProfile?.content).toContain('"runtimeArchiveUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b8182/llama-b8182-bin-ubuntu-x64.tar.gz"');

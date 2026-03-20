@@ -18,6 +18,12 @@ import {
   type GameRootPaths,
 } from './fs-paths';
 import { buildWebReleaseTargetScaffold } from './release-target-scaffold';
+import type {
+  WebPublishEnvironment,
+  WebPublishFrontendConfig,
+  WebPublishProfile,
+  WebPublishTarget,
+} from './web-publish-profile';
 
 const GAME_ROOT_ENDPOINT = '/__sugarengine/game-root';
 const GAME_ROOT_PICKER_ENDPOINT = '/__sugarengine/pick-directory';
@@ -28,6 +34,10 @@ interface GameRootResponse {
   projectFilePath?: string;
   project?: unknown;
   exportPath?: string;
+  target?: WebPublishTarget;
+  environment?: WebPublishEnvironment;
+  profilePath?: string;
+  frontend?: WebPublishFrontendConfig;
   error?: string;
 }
 
@@ -61,6 +71,9 @@ export interface PublishWebTargetInput {
   rootPath: string;
   projectFilePath: string;
   gameId: string;
+  target: WebPublishTarget;
+  environment: WebPublishEnvironment;
+  frontend: WebPublishFrontendConfig;
 }
 
 export interface PublishWebTargetResult {
@@ -68,6 +81,13 @@ export interface PublishWebTargetResult {
   projectFilePath: string;
   exportPath: string;
 }
+
+export interface LoadWebPublishProfileInput {
+  rootPath: string;
+  environment: WebPublishEnvironment;
+}
+
+export interface LoadWebPublishProfileResult extends WebPublishProfile {}
 
 function isTauriEnvironment(): boolean {
   return typeof window !== 'undefined' && '__TAURI__' in window;
@@ -271,6 +291,9 @@ export async function publishWebTarget(input: PublishWebTargetInput): Promise<Pu
     rootPath: input.rootPath,
     projectFilePath: input.projectFilePath,
     gameId: input.gameId,
+    target: input.target,
+    environment: input.environment,
+    frontend: input.frontend,
   });
 
   if (!response.rootPath || !response.projectFilePath || !response.exportPath) {
@@ -281,6 +304,43 @@ export async function publishWebTarget(input: PublishWebTargetInput): Promise<Pu
     rootPath: response.rootPath,
     projectFilePath: response.projectFilePath,
     exportPath: response.exportPath,
+  };
+}
+
+export async function loadWebPublishProfile(
+  input: LoadWebPublishProfileInput,
+): Promise<LoadWebPublishProfileResult> {
+  if (isTauriEnvironment()) {
+    throw new Error('Web target profile loading is not wired for the desktop build yet. Use the local editor/dev host for now.');
+  }
+
+  const response = await postGameRootOperation({
+    op: 'read-web-publish-profile',
+    rootPath: input.rootPath,
+    environment: input.environment,
+  });
+
+  if (
+    response.target !== 'web'
+    || (response.environment !== 'production' && response.environment !== 'staging')
+    || typeof response.profilePath !== 'string'
+    || typeof response.frontend?.gameApiBaseUrl !== 'string'
+    || (response.frontend.credentials !== 'include'
+      && response.frontend.credentials !== 'same-origin'
+      && response.frontend.credentials !== 'omit')
+  ) {
+    throw new Error('Web target profile did not return the expected publish settings.');
+  }
+
+  return {
+    target: response.target,
+    environment: response.environment,
+    profilePath: response.profilePath,
+    frontend: {
+      gameApiBaseUrl: response.frontend.gameApiBaseUrl,
+      backendRequired: response.frontend.backendRequired === true,
+      credentials: response.frontend.credentials,
+    },
   };
 }
 
