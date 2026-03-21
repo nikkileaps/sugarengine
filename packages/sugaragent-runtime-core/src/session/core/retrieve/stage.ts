@@ -7,7 +7,7 @@ import {
 } from '../evidence/enrichment.js';
 import {
   runGovernedLoreRetrieval,
-} from '../retrieval-pipeline.js';
+} from './pipeline.js';
 import {
   buildEvidencePack,
   resolveConversationMode,

@@ -60,7 +60,7 @@ Consequences:
 1. the lifecycle mental model is not reflected in the file structure,
 2. retrieval logic is harder to discover,
 3. stage ownership is harder to discuss precisely,
-4. changes to retrieval tend to smear across `runtime.ts`, `retrieval-pipeline.ts`, `retrieval-governance.ts`, and `evidence-first-pipeline.ts`,
+4. changes to retrieval tend to smear across `runtime.ts`, `retrieve/pipeline.ts`, `retrieval-governance.ts`, and `evidence-first-pipeline.ts`,
 5. it becomes too easy for planning or runtime glue to quietly absorb retrieval responsibilities.
 
 ## Goal
@@ -220,7 +220,7 @@ Deliverables:
 Move the current inline retrieval choreography from [runtime.ts](/Users/nikki/projects/sugarengine/packages/sugaragent-runtime-core/src/session/runtime.ts) into the retrieve stage:
 
 1. scope preparation
-2. `runGovernedLoreRetrieval(...)`
+2. `runGovernedLoreRetrieval(...)` in [pipeline.ts](/Users/nikki/projects/sugarengine/packages/sugaragent-runtime-core/src/session/core/retrieve/pipeline.ts)
 3. evidence entry building
 4. evidence pack building
 5. epistemic enrichment

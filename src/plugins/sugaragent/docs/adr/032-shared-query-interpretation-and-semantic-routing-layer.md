@@ -347,7 +347,7 @@ This boundary is an intentional first implementation constraint, not the final t
 
 1. `routing.ts`
    - to derive `social_chat`, `session_recall`, `identity_self`, `lore_world`, `lore_other`, `mixed_knowledge`, `unclear`
-2. `retrieval-pipeline.ts`
+2. `retrieve/pipeline.ts`
    - to choose retrieval pools and corrective query strategy
 3. `retrieval-governance.ts`
    - to score semantic coverage against interpreted facet and focus

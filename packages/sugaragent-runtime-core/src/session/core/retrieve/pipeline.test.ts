@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runGovernedLoreRetrieval } from './retrieval-pipeline.js';
+import { runGovernedLoreRetrieval } from './pipeline.js';
 
 describe('retrieval-pipeline', () => {
   const emptyArtifacts = {

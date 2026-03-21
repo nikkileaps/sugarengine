@@ -493,7 +493,7 @@ Tasks:
 
 Files:
 
-1. `packages/sugaragent-runtime-core/src/session/core/retrieval-pipeline.ts`
+1. `packages/sugaragent-runtime-core/src/session/core/retrieve/pipeline.ts`
 2. `packages/sugaragent-runtime-core/src/session/core/retrieval-governance.ts`
 3. `packages/sugaragent-runtime-core/src/lore/lore-lib.ts`
 

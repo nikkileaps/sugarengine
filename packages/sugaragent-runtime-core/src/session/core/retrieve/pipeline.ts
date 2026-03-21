@@ -1,16 +1,16 @@
-import { retrieveLoreChunks, retrieveLoreChunksByVector } from '../../lore/lore-lib.js';
+import { retrieveLoreChunks, retrieveLoreChunksByVector } from '../../../lore/lore-lib.js';
 import {
   expandFacetQueryTokenVariants,
   extractFacetQueryTokens,
-} from './knowledge-query.js';
+} from '../knowledge-query.js';
 import {
   annotateEvidenceSubjectRelevance,
-} from './subject-relevance.js';
+} from '../subject-relevance.js';
 import {
   isKnowledgeSeekingQueryType,
   type QueryType,
   type RoutingIntent,
-} from './routing.js';
+} from '../routing.js';
 import {
   buildCorrectiveLoreQuery,
   buildRerankCacheKey,
@@ -19,7 +19,7 @@ import {
   rerankLoreMatches,
   resolveRerankBudgetTier,
   resolveRerankCandidateCap,
-} from './retrieval-governance.js';
+} from '../retrieval-governance.js';
 import type {
   QueryInterpretation,
   RetrievalRing,
@@ -27,7 +27,7 @@ import type {
   SubjectRelationDistance,
   SubjectRelationReason,
   SubjectReferentKind,
-} from './turn-contracts.js';
+} from '../turn-contracts.js';
 
 interface RecordLike {
   [key: string]: unknown;
