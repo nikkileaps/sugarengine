@@ -632,11 +632,18 @@ function matchesRetrievalFilters(chunk, retrievalFilters) {
 
 function shouldIncludeChunkForRetrieval(chunk, identityConfig) {
   if (!matchesRetrievalFilters(chunk, identityConfig.retrievalFilters)) return false;
-  if (matchesLoreScope(chunk, identityConfig.scopeFilters)) return true;
   const isSelfQuery = identityConfig.queryType === 'self_query';
-  if (!isSelfQuery || !identityConfig.selfEntityId) return false;
-  const chunkEntityIds = collectChunkEntityIds(chunk);
-  return chunkEntityIds.includes(identityConfig.selfEntityId);
+  if (isSelfQuery) {
+    const chunkEntityIds = collectChunkEntityIds(chunk);
+    if (identityConfig.selfEntityId && chunkEntityIds.includes(identityConfig.selfEntityId)) {
+      return true;
+    }
+    if (identityConfig.selfLoreScopes.length > 0) {
+      return matchesLoreScope(chunk, identityConfig.selfLoreScopes);
+    }
+    return false;
+  }
+  return matchesLoreScope(chunk, identityConfig.scopeFilters);
 }
 
 export function ingestLoreDirectory({

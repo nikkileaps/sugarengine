@@ -8,7 +8,7 @@ import { buildEvidencePreview, interpretQuery } from './query-interpretation.js'
 
 describe('evidence-first pipeline planning', () => {
   it('builds inferred claims from compatible corroborating evidence instead of single hedged items', () => {
-    const evidencePack = {
+    const evidencePack: any = {
       items: [
         {
           evidenceId: 'e_shift',
@@ -245,6 +245,68 @@ describe('evidence-first pipeline planning', () => {
     expect(plan.claims[0]?.text).toBe('I own a Cheese Shop in Wordlark Hollow Station');
   });
 
+  it('maps self-attributed preference lore into a first-person preference answer on self queries', () => {
+    const { plan } = createEvidenceFirstTurnPlanV2({
+      npcId: 'npc_rick',
+      npcName: 'Rick Roll',
+      playerMessage: 'Do you like cheese?',
+      queryType: 'self_query',
+      routing: {
+        intent: 'identity_self',
+        interpretation: {
+          schemaVersion: 1,
+          lane: 'knowledge',
+          target: 'self',
+          facet: 'preference',
+          timeframe: 'habitual',
+          focusText: 'Do you like cheese?',
+          normalizedText: 'do you like cheese',
+          referents: [],
+          discourse: {
+            repair: false,
+            filler: false,
+            contrast: false,
+            emphasis: false,
+          },
+          candidateScores: [],
+          confidence: 0.9,
+          margin: 0.4,
+          ambiguous: false,
+        },
+      },
+      evidencePack: {
+        items: [
+          {
+            evidenceId: 'ev_1',
+            sourceId: 'lore:npc_rick',
+            sourceType: 'lore_chunk',
+            ownerType: 'npc',
+            knowledgeClass: 'public_fact',
+            accessPolicy: 'assert',
+            disclosurePolicy: 'answer_only',
+            text: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+            verificationStatus: 'available',
+            entityIds: ['npc.rick-roll'],
+            selfAttributed: true,
+            confidence: 0.88,
+            anchorTerms: ['cheese', 'love', 'likes'],
+          },
+        ],
+        evidenceIdToItem: new Map(),
+      },
+      selfEntityId: 'npc.rick-roll',
+      mode: 'character',
+      beatContract: null,
+      initiativePolicy: {
+        decision: {
+          action: 'player_respond',
+        },
+      },
+    });
+
+    expect(plan.claims[0]?.text).toBe('I love cheese');
+  });
+
   it('does not use self-profile evidence to answer a lore-other question', () => {
     const { plan } = createEvidenceFirstTurnPlanV2({
       npcId: 'npc_rick',
@@ -325,6 +387,194 @@ describe('evidence-first pipeline planning', () => {
     expect(plan.claims).toEqual([]);
     expect(plan.speechAct).toBe('uncertain');
     expect(plan.abstention?.reason).toBe('no_claimable_evidence');
+  });
+
+  it('prefers direct-subject evidence over incidental related-page trivia on overview turns', () => {
+    const interpretation = {
+      schemaVersion: 1 as const,
+      lane: 'knowledge' as const,
+      target: 'world' as const,
+      facet: 'general_lore' as const,
+      timeframe: 'unknown' as const,
+      focusText: 'Earendale',
+      normalizedText: 'do you know anything about earendale',
+      referents: [],
+      discourse: {
+        repair: false,
+        filler: false,
+        contrast: false,
+        emphasis: false,
+      },
+      candidateScores: [],
+      confidence: 0.94,
+      margin: 0.42,
+      ambiguous: false,
+      primaryReferent: {
+        id: 'locations.earendale',
+        text: 'Earendale',
+        kind: 'location' as const,
+        confidence: 0.96,
+      },
+      relationPolicy: {
+        facet: 'general_lore' as const,
+        preferredRelationDistances: ['primary', 'associated'] as Array<'primary' | 'associated'>,
+        incidentalAllowed: false,
+        associatedFallbackAllowed: true,
+        evidenceBudget: {
+          maxPrimary: 2,
+          maxAssociated: 1,
+        },
+      },
+    };
+
+    const { plan } = createEvidenceFirstTurnPlanV2({
+      npcId: 'npc_rick',
+      npcName: 'Rick Cheese Roll',
+      playerMessage: 'Do you know anything about Earendale?',
+      queryType: 'world_query',
+      routing: { intent: 'lore_world', interpretation },
+      evidencePack: {
+        items: [
+          {
+            evidenceId: 'ev_1',
+            sourceId: 'lore:earendale',
+            sourceType: 'lore_chunk',
+            ownerType: 'world',
+            knowledgeClass: 'public_fact',
+            accessPolicy: 'assert',
+            disclosurePolicy: 'answer_only',
+            text: 'Earendale is a market town with a busy station.',
+            verificationStatus: 'available',
+            entityIds: [],
+            locationIds: ['locations.earendale'],
+            selfAttributed: false,
+            confidence: 0.92,
+            relationDistance: 'primary' as const,
+            relationStrength: 1,
+            relationReason: 'direct_id_match' as const,
+            subjectId: 'locations.earendale',
+            subjectKind: 'location' as const,
+          },
+          {
+            evidenceId: 'ev_2',
+            sourceId: 'lore:bippity-family',
+            sourceType: 'lore_chunk',
+            ownerType: 'world',
+            knowledgeClass: 'public_fact',
+            accessPolicy: 'assert',
+            disclosurePolicy: 'answer_only',
+            text: "His wife's name is Janet Roo.",
+            verificationStatus: 'available',
+            entityIds: ['npc.bippity-roo'],
+            selfAttributed: false,
+            confidence: 0.88,
+            relationDistance: 'incidental' as const,
+            relationStrength: 0.18,
+            relationReason: 'tag_only' as const,
+            subjectId: 'npc.bippity-roo',
+            subjectKind: 'npc' as const,
+          },
+        ],
+        evidenceIdToItem: new Map(),
+      },
+      selfEntityId: 'npc_rick',
+      mode: 'character',
+      beatContract: null,
+      initiativePolicy: {
+        decision: {
+          action: 'player_respond',
+        },
+      },
+    });
+
+    expect(plan.claims).toHaveLength(1);
+    expect(plan.claims[0]?.text).toContain('Earendale');
+    expect(plan.claims[0]?.text).not.toContain('Janet Roo');
+    expect(plan.claims[0]?.relationDistance).toBe('primary');
+  });
+
+  it('gracefully promotes associated evidence when no direct-subject evidence exists', () => {
+    const interpretation = {
+      schemaVersion: 1 as const,
+      lane: 'knowledge' as const,
+      target: 'world' as const,
+      facet: 'general_lore' as const,
+      timeframe: 'unknown' as const,
+      focusText: 'Earendale',
+      normalizedText: 'do you know anything about earendale',
+      referents: [],
+      discourse: {
+        repair: false,
+        filler: false,
+        contrast: false,
+        emphasis: false,
+      },
+      candidateScores: [],
+      confidence: 0.91,
+      margin: 0.38,
+      ambiguous: false,
+      primaryReferent: {
+        id: 'locations.earendale',
+        text: 'Earendale',
+        kind: 'location' as const,
+        confidence: 0.95,
+      },
+      relationPolicy: {
+        facet: 'general_lore' as const,
+        preferredRelationDistances: ['primary', 'associated'] as Array<'primary' | 'associated'>,
+        incidentalAllowed: false,
+        associatedFallbackAllowed: true,
+        evidenceBudget: {
+          maxPrimary: 2,
+          maxAssociated: 1,
+        },
+      },
+    };
+
+    const { plan } = createEvidenceFirstTurnPlanV2({
+      npcId: 'npc_rick',
+      npcName: 'Rick Cheese Roll',
+      playerMessage: 'Do you know anything about Earendale?',
+      queryType: 'world_query',
+      routing: { intent: 'lore_world', interpretation },
+      evidencePack: {
+        items: [
+          {
+            evidenceId: 'ev_1',
+            sourceId: 'lore:bippity-home',
+            sourceType: 'lore_chunk',
+            ownerType: 'world',
+            knowledgeClass: 'public_fact',
+            accessPolicy: 'assert',
+            disclosurePolicy: 'answer_only',
+            text: 'Bippity Roo lives in Earendale.',
+            verificationStatus: 'available',
+            entityIds: ['npc.bippity-roo'],
+            locationIds: ['locations.earendale'],
+            selfAttributed: false,
+            confidence: 0.87,
+            relationDistance: 'associated' as const,
+            relationStrength: 0.78,
+            relationReason: 'associated_location_relation' as const,
+            subjectId: 'npc.bippity-roo',
+            subjectKind: 'npc' as const,
+          },
+        ],
+        evidenceIdToItem: new Map(),
+      },
+      selfEntityId: 'npc_rick',
+      mode: 'character',
+      beatContract: null,
+      initiativePolicy: {
+        decision: {
+          action: 'player_respond',
+        },
+      },
+    });
+
+    expect(plan.claims).toHaveLength(1);
+    expect(plan.claims[0]?.text).toContain('Bippity Roo lives in Earendale');
+    expect(plan.claims[0]?.relationDistance).toBe('associated');
   });
 
   it('treats current npc activity from routine state as directly answerable self evidence', () => {

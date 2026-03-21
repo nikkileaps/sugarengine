@@ -223,6 +223,321 @@ describe('retrieval-pipeline', () => {
     expect(result.loreMatches.some((entry) => entry?.chunk?.chunkId?.includes('bippity'))).toBe(false);
   });
 
+  it('keeps self queries scoped to self evidence instead of inheriting general lore scopes', async () => {
+    const artifacts = {
+      chunks: [
+        {
+          chunkId: 'lore.entities.npcs.rick-roll#rick-roll',
+          pageId: 'lore.entities.npcs.rick-roll',
+          title: 'Rick Roll',
+          sectionHeading: 'Profile',
+          summary: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station.',
+          content: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+          tokens: ['rick', 'roll', 'owns', 'cheese', 'shop', 'wordlark', 'station', 'loves'],
+          metadata: {
+            id: 'lore.entities.npcs.rick-roll',
+            title: 'Rick Roll',
+            entity_ids: ['npc.rick-roll'],
+            location_ids: [],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale', 'merchant'],
+            fact_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.entities.npcs.bippity-roo#bippity-roo',
+          pageId: 'lore.entities.npcs.bippity-roo',
+          title: 'Bippity Roo',
+          sectionHeading: 'Profile',
+          summary: 'Bippity Roo lives in Earendale.',
+          content: 'Bippity Roo lives in Earendale.',
+          tokens: ['bippity', 'roo', 'lives', 'earendale'],
+          metadata: {
+            id: 'lore.entities.npcs.bippity-roo',
+            title: 'Bippity Roo',
+            entity_ids: ['npc.bippity-roo'],
+            location_ids: [],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale'],
+            fact_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.locations.towns.town.earendale#earendale',
+          pageId: 'lore.locations.towns.town.earendale',
+          title: 'Earendale',
+          sectionHeading: 'Overview',
+          summary: 'Earendale is a floating resort town.',
+          content: 'Earendale is a floating resort town.',
+          tokens: ['earendale', 'floating', 'resort', 'town'],
+          metadata: {
+            id: 'lore.locations.towns.town.earendale',
+            title: 'Earendale',
+            entity_ids: [],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale', 'town'],
+            fact_ids: [],
+          },
+        },
+      ],
+      factById: {},
+    };
+
+    const result = await runGovernedLoreRetrieval({
+      loreArtifacts: artifacts,
+      canRetrieveLore: true,
+      shouldAttemptLoreRetrieval: true,
+      playerMessage: 'What is your job?',
+      interpretation: {
+        schemaVersion: 1,
+        lane: 'knowledge',
+        target: 'self',
+        facet: 'occupation',
+        timeframe: 'habitual',
+        focusText: 'What is your job?',
+        normalizedText: 'What is your job?',
+        referents: [],
+        discourse: {
+          repair: false,
+          filler: false,
+          contrast: false,
+          emphasis: false,
+        },
+        candidateScores: [],
+        confidence: 0.8,
+        margin: 0.3,
+        ambiguous: false,
+      },
+      mode: 'character',
+      routingIntent: 'identity_self',
+      queryType: 'self_query',
+      loreScopes: ['town.earendale'],
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+      selfEntityId: 'npc.rick-roll',
+      hasBeatContract: false,
+      rerankerClass: 'lexical',
+    });
+
+    expect(result.retrievalQuality.pass).toBe(true);
+    expect(result.loreMatches.length).toBeGreaterThan(0);
+    expect(result.loreMatches.every((entry) => entry?.chunk?.chunkId?.includes('rick-roll'))).toBe(true);
+  });
+
+  it('keeps direct subject evidence ahead of associated evidence for generic overview queries', async () => {
+    const artifacts = {
+      chunks: [
+        {
+          chunkId: 'lore.locations.earendale#overview',
+          pageId: 'lore.locations.earendale',
+          title: 'Earendale',
+          sectionHeading: 'Overview',
+          summary: 'Earendale is a floating resort town.',
+          content: 'Earendale is a floating resort town.',
+          tokens: ['earendale', 'floating', 'resort', 'town'],
+          metadata: {
+            id: 'lore.locations.earendale',
+            title: 'Earendale',
+            entity_ids: [],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale', 'town'],
+            fact_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.entities.npcs.bippity-roo#bippity-roo',
+          pageId: 'lore.entities.npcs.bippity-roo',
+          title: 'Bippity Roo',
+          sectionHeading: 'Profile',
+          summary: 'Bippity Roo lives in Earendale.',
+          content: 'Bippity Roo lives in Earendale.',
+          tokens: ['bippity', 'roo', 'lives', 'earendale'],
+          metadata: {
+            id: 'lore.entities.npcs.bippity-roo',
+            title: 'Bippity Roo',
+            entity_ids: ['npc.bippity-roo'],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale'],
+            fact_ids: [],
+          },
+        },
+      ],
+      factById: {},
+    };
+
+    const result = await runGovernedLoreRetrieval({
+      loreArtifacts: artifacts,
+      canRetrieveLore: true,
+      shouldAttemptLoreRetrieval: true,
+      playerMessage: 'Do you know anything about Earendale?',
+      interpretation: {
+        schemaVersion: 1,
+        lane: 'knowledge',
+        target: 'world',
+        facet: 'general_lore',
+        timeframe: 'unknown',
+        focusText: 'Do you know anything about Earendale?',
+        normalizedText: 'Do you know anything about Earendale?',
+        referents: [],
+        discourse: {
+          repair: false,
+          filler: false,
+          contrast: false,
+          emphasis: false,
+        },
+        candidateScores: [],
+        confidence: 0.8,
+        margin: 0.2,
+        ambiguous: false,
+        primaryReferent: {
+          id: 'locations.earendale',
+          text: 'Earendale',
+          kind: 'location',
+          confidence: 1,
+        },
+        relationPolicy: {
+          facet: 'general_lore',
+          preferredRelationDistances: ['primary', 'associated'],
+          incidentalAllowed: false,
+          associatedFallbackAllowed: true,
+          evidenceBudget: {
+            maxPrimary: 2,
+            maxAssociated: 1,
+          },
+        },
+      },
+      mode: 'character',
+      routingIntent: 'lore_world',
+      queryType: 'world_query',
+      loreScopes: ['locations.earendale'],
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+      hasBeatContract: false,
+      rerankerClass: 'lexical',
+      retrievalFilters: {
+        locationIds: ['locations.earendale'],
+        aliases: ['earendale'],
+      },
+    });
+
+    expect(result.loreMatches[0]?.retrievalRing).toBe('direct');
+    expect(result.loreMatches[0]?.chunk?.chunkId).toContain('earendale#overview');
+  });
+
+  it('widens from direct to associated evidence for relation-seeking queries when policy invites it', async () => {
+    const artifacts = {
+      chunks: [
+        {
+          chunkId: 'lore.locations.earendale#overview',
+          pageId: 'lore.locations.earendale',
+          title: 'Earendale',
+          sectionHeading: 'Overview',
+          summary: 'Earendale is a floating resort town.',
+          content: 'Earendale is a floating resort town.',
+          tokens: ['earendale', 'floating', 'resort', 'town'],
+          metadata: {
+            id: 'lore.locations.earendale',
+            title: 'Earendale',
+            entity_ids: [],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale', 'town'],
+            fact_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.entities.npcs.bippity-roo#bippity-roo',
+          pageId: 'lore.entities.npcs.bippity-roo',
+          title: 'Bippity Roo',
+          sectionHeading: 'Profile',
+          summary: 'Bippity Roo lives in Earendale.',
+          content: 'Bippity Roo lives in Earendale.',
+          tokens: ['bippity', 'roo', 'lives', 'earendale'],
+          metadata: {
+            id: 'lore.entities.npcs.bippity-roo',
+            title: 'Bippity Roo',
+            entity_ids: ['npc.bippity-roo'],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale'],
+            fact_ids: [],
+          },
+        },
+      ],
+      factById: {},
+    };
+
+    const result = await runGovernedLoreRetrieval({
+      loreArtifacts: artifacts,
+      canRetrieveLore: true,
+      shouldAttemptLoreRetrieval: true,
+      playerMessage: 'Who lives in Earendale?',
+      interpretation: {
+        schemaVersion: 1,
+        lane: 'knowledge',
+        target: 'world',
+        facet: 'relationship',
+        timeframe: 'unknown',
+        focusText: 'Who lives in Earendale?',
+        normalizedText: 'Who lives in Earendale?',
+        referents: [],
+        discourse: {
+          repair: false,
+          filler: false,
+          contrast: false,
+          emphasis: false,
+        },
+        candidateScores: [],
+        confidence: 0.8,
+        margin: 0.2,
+        ambiguous: false,
+        primaryReferent: {
+          id: 'locations.earendale',
+          text: 'Earendale',
+          kind: 'location',
+          confidence: 1,
+        },
+        relationPolicy: {
+          facet: 'relationship',
+          preferredRelationDistances: ['associated', 'primary'],
+          incidentalAllowed: false,
+          associatedFallbackAllowed: true,
+          evidenceBudget: {
+            maxPrimary: 1,
+            maxAssociated: 2,
+          },
+        },
+      },
+      mode: 'character',
+      routingIntent: 'lore_world',
+      queryType: 'world_query',
+      loreScopes: ['locations.earendale'],
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+      hasBeatContract: false,
+      rerankerClass: 'lexical',
+      retrievalFilters: {
+        locationIds: ['locations.earendale'],
+        aliases: ['earendale'],
+      },
+    });
+
+    expect(result.loreMatches.length).toBeGreaterThan(1);
+    expect(result.loreMatches[0]?.retrievalRing).toBe('associated');
+    expect(result.loreMatches.some((entry) => entry?.retrievalRing === 'direct')).toBe(true);
+    expect(result.loreMatches[0]?.chunk?.chunkId).toContain('bippity-roo');
+  });
+
   it('merges lexical and vector candidates and surfaces vector diagnostics', async () => {
     const artifacts = {
       chunks: [

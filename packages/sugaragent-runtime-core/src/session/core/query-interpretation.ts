@@ -426,10 +426,28 @@ export function expandFacetQueryTokenVariants(token: unknown): Set<string> {
   const normalized = typeof token === 'string' ? token.trim().toLowerCase() : '';
   const variants = new Set<string>();
   if (!normalized) return variants;
-  variants.add(normalized);
+  const addVariant = (value: string) => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return;
+    variants.add(trimmed);
+  };
+  const addSimpleInflections = (value: string) => {
+    addVariant(value);
+    if (/^[a-z\u00c0-\u024f]{3,}$/i.test(value)) {
+      addVariant(`${value}s`);
+      if (value.endsWith('y')) {
+        addVariant(`${value.slice(0, -1)}ies`);
+      } else if (value.endsWith('e')) {
+        addVariant(`${value}s`);
+      } else {
+        addVariant(`${value}es`);
+      }
+    }
+  };
+  addSimpleInflections(normalized);
   for (const variant of FACET_QUERY_SYNONYMS.get(normalized) ?? []) {
     if (typeof variant === 'string' && variant.trim().length > 0) {
-      variants.add(variant.trim().toLowerCase());
+      addSimpleInflections(variant.trim().toLowerCase());
     }
   }
   return variants;
@@ -630,7 +648,7 @@ function hasDirectNpcSelfCue(
   if (isLikelyReciprocalSocialQuestion(focusText, targetLanguage)) return true;
   if (isLikelyNpcDirectedLocationPrompt(focusText, targetLanguage)) return true;
   if (/\b(your|yourself)\b/.test(source)) return true;
-  return /\b(who are you|what(?:'s| is) your name|your name|what do you do|what(?:'s| is) your job|where do you work|what are you doing|what are you up to|where are you|where are you from|tell me about yourself|about yourself|your background|your past|your family|your favorite|your preference|do you remember me|have we met|did we meet)\b/.test(source);
+  return /\b(who are you|what(?:'s| is) your name|your name|what do you do|what(?:'s| is) your job|where do you work|what are you doing|what are you up to|where are you|where are you from|tell me about yourself|about yourself|your background|your past|your family|your favorite|your preference|do you like|do you love|do you hate|do you prefer|what do you like|what do you love|what do you prefer|do you remember me|have we met|did we meet)\b/.test(source);
 }
 
 function scoreLane(
@@ -735,7 +753,7 @@ function scoreFacet(
     case 'background':
       return /\b(background|past|family|where are you from|about yourself)\b/.test(source) ? 0.48 : 0.04;
     case 'preference':
-      return /\b(favorite|like|love|hate|prefer)\b/.test(source) ? 0.34 : 0.03;
+      return /\b(favorite|like|love|hate|prefer|do you like|do you love|do you hate|do you prefer|what do you like|what do you prefer)\b/.test(source) ? 0.5 : 0.03;
     case 'relationship':
       return /\b(remember me|have we met|did we meet|last time|before)\b/.test(source) ? 0.48 : 0.03;
     case 'general_lore':

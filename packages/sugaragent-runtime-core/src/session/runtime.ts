@@ -94,6 +94,9 @@ import {
   enhanceInterpretationWithFacetSimilarity,
 } from './core/query-interpretation.js';
 import {
+  attachSubjectSelectionToInterpretation,
+} from './core/subject-relevance.js';
+import {
   runGovernedLoreRetrieval,
 } from './core/retrieval-pipeline.js';
 import {
@@ -136,6 +139,8 @@ import type {
   LanguageAdaptationContext,
   QueryInterpretation,
   ReferentPreviewCandidate,
+  ResolvedPrimaryReferent,
+  SubjectRelationPolicy,
 } from './core/turn-contracts.js';
 import type { PluginPedagogyContext } from '../pedagogy.js';
 import type {
@@ -324,9 +329,248 @@ function emitRetrievalTopMatchesDebugLog(input: {
           ? Number(entry.score.toFixed(4))
           : undefined,
         pool: normalizeOptionalString(entry?.pool),
+        retrievalRing: normalizeOptionalString(entry?.retrievalRing),
+        retrievalRingReason: normalizeOptionalString(entry?.retrievalRingReason),
         entityIds: Array.isArray(metadata?.entity_ids) ? metadata.entity_ids.slice(0, 4) : [],
         locationIds: Array.isArray(metadata?.location_ids) ? metadata.location_ids.slice(0, 4) : [],
         tags: Array.isArray(metadata?.tags) ? metadata.tags.slice(0, 4) : [],
+      };
+    }),
+  });
+}
+
+function emitSubjectSelectionDebugLog(input: {
+  npcId?: string;
+  routeIntent?: string;
+  queryType?: string;
+  primaryReferent?: ResolvedPrimaryReferent;
+  relationPolicy?: SubjectRelationPolicy;
+}) {
+  console.debug('[sugaragent][subject-selection]', {
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    primaryReferent: input.primaryReferent
+      ? {
+          id: normalizeOptionalString(input.primaryReferent.id),
+          text: sanitizePromptText(input.primaryReferent.text).slice(0, 80),
+          kind: input.primaryReferent.kind,
+          confidence: input.primaryReferent.confidence,
+        }
+      : null,
+    relationPolicy: input.relationPolicy
+      ? {
+          facet: input.relationPolicy.facet,
+          preferredRelationDistances: input.relationPolicy.preferredRelationDistances,
+          incidentalAllowed: input.relationPolicy.incidentalAllowed,
+          associatedFallbackAllowed: input.relationPolicy.associatedFallbackAllowed,
+          evidenceBudget: input.relationPolicy.evidenceBudget ?? null,
+        }
+      : null,
+  });
+}
+
+function normalizeDebugScopeToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('lore.') && trimmed.length > 5) {
+    return trimmed.slice(5);
+  }
+  return trimmed;
+}
+
+function expandDebugScopeAliases(scope: string): string[] {
+  const normalized = normalizeDebugScopeToken(scope);
+  if (!normalized) return [];
+  const aliases = new Set([normalized]);
+  const placeScopeMatch = normalized.match(/^(town|city|place|region|location|locations)\.([a-z0-9._-]+)$/);
+  if (placeScopeMatch?.[2]) {
+    const placeId = placeScopeMatch[2];
+    const tail = placeId.split('.').pop();
+    aliases.add(`locations.${placeId}`);
+    if (tail && tail.length >= 3) {
+      aliases.add(tail);
+      aliases.add(`locations.${tail}`);
+    }
+  }
+  return [...aliases];
+}
+
+function collectDebugChunkScopeTokens(chunk: RecordLike | null): Set<string> {
+  const metadata = isRecord(chunk?.metadata) ? chunk.metadata : null;
+  const rawCandidates = [
+    normalizeOptionalString(chunk?.chunkId),
+    normalizeOptionalString(chunk?.pageId),
+    normalizeOptionalString(metadata?.id),
+    ...normalizeStringArray(metadata?.tags),
+    ...normalizeStringArray(metadata?.entity_ids),
+    ...normalizeStringArray(metadata?.location_ids),
+    ...normalizeStringArray(metadata?.faction_ids),
+    ...normalizeStringArray(metadata?.beat_ids),
+  ];
+
+  const tokens = new Set<string>();
+  for (const candidate of rawCandidates) {
+    const normalized = normalizeDebugScopeToken(candidate);
+    if (!normalized) continue;
+    tokens.add(normalized);
+    for (const part of normalized.split(/[.#/_-]+/)) {
+      if (part.length >= 3) tokens.add(part);
+    }
+  }
+  return tokens;
+}
+
+function matchesDebugScopeFilters(chunk: RecordLike | null, scopeFilters: string[]): boolean {
+  if (scopeFilters.length === 0) return true;
+  const chunkTokens = collectDebugChunkScopeTokens(chunk);
+  for (const scope of scopeFilters) {
+    for (const alias of expandDebugScopeAliases(scope)) {
+      if (chunkTokens.has(alias)) return true;
+      for (const token of chunkTokens) {
+        if (token.startsWith(`${alias}.`) || token.endsWith(`.${alias}`)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function emitSelfRetrievalGateDebugLog(input: {
+  npcId?: string;
+  routeIntent?: string;
+  queryType?: string;
+  selfEntityId?: string;
+  loreScopes?: string[];
+  selfLoreScopes?: string[];
+  relatedLoreScopes?: string[];
+  loreArtifacts?: unknown;
+  retrievalAttempted?: boolean;
+  retrievalMatchCount?: number;
+}) {
+  if (input.queryType !== 'self_query' && input.routeIntent !== 'identity_self') return;
+
+  const chunks = isRecord(input.loreArtifacts) && Array.isArray(input.loreArtifacts.chunks)
+    ? input.loreArtifacts.chunks.filter((entry): entry is RecordLike => isRecord(entry))
+    : [];
+  const normalizedSelfEntityId = normalizeOptionalString(input.selfEntityId)?.toLowerCase();
+  const normalizedLoreScopes = normalizeStringArray(input.loreScopes)
+    .map((entry) => normalizeDebugScopeToken(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  const normalizedSelfLoreScopes = normalizeStringArray(input.selfLoreScopes)
+    .map((entry) => normalizeDebugScopeToken(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  const effectiveScopeFilters = normalizedSelfLoreScopes;
+
+  const exactSelfMatches = chunks.filter((chunk) => {
+    const metadata = isRecord(chunk.metadata) ? chunk.metadata : null;
+    const entityIds = normalizeStringArray(metadata?.entity_ids).map((entry) => entry.toLowerCase());
+    return Boolean(normalizedSelfEntityId && entityIds.includes(normalizedSelfEntityId));
+  });
+  const scopeMatches = effectiveScopeFilters.length > 0
+    ? chunks.filter((chunk) => matchesDebugScopeFilters(chunk, effectiveScopeFilters))
+    : [];
+  const includedSelfChunks = chunks.filter((chunk) => {
+    const metadata = isRecord(chunk.metadata) ? chunk.metadata : null;
+    const entityIds = normalizeStringArray(metadata?.entity_ids).map((entry) => entry.toLowerCase());
+    const exactSelfMatch = Boolean(normalizedSelfEntityId && entityIds.includes(normalizedSelfEntityId));
+    if (exactSelfMatch) return true;
+    if (effectiveScopeFilters.length === 0) return false;
+    return matchesDebugScopeFilters(chunk, effectiveScopeFilters);
+  });
+
+  console.debug('[sugaragent][self-retrieval-gate]', {
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    selfEntityId: normalizedSelfEntityId ?? null,
+    retrievalAttempted: input.retrievalAttempted ?? null,
+    retrievalMatchCount: input.retrievalMatchCount ?? null,
+    loreArtifactChunkCount: chunks.length,
+    effectiveScopeFilters,
+    exactSelfEntityChunkCount: exactSelfMatches.length,
+    scopeEligibleChunkCount: scopeMatches.length,
+    includedSelfChunkCount: includedSelfChunks.length,
+    exactSelfEntityChunks: exactSelfMatches.slice(0, 4).map((chunk) => ({
+      chunkId: normalizeOptionalString(chunk.chunkId),
+      title: normalizeOptionalString(chunk.title),
+      pageId: normalizeOptionalString(chunk.pageId),
+    })),
+    scopeEligibleChunks: scopeMatches.slice(0, 4).map((chunk) => ({
+      chunkId: normalizeOptionalString(chunk.chunkId),
+      title: normalizeOptionalString(chunk.title),
+      pageId: normalizeOptionalString(chunk.pageId),
+    })),
+    includedSelfChunks: includedSelfChunks.slice(0, 4).map((chunk) => {
+      const metadata = isRecord(chunk.metadata) ? chunk.metadata : null;
+      return {
+        chunkId: normalizeOptionalString(chunk.chunkId),
+        title: normalizeOptionalString(chunk.title),
+        pageId: normalizeOptionalString(chunk.pageId),
+        entityIds: normalizeStringArray(metadata?.entity_ids).slice(0, 4),
+      };
+    }),
+  });
+}
+
+function emitSelfRetrievalQualityDebugLog(input: {
+  npcId?: string;
+  routeIntent?: string;
+  queryType?: string;
+  retrieval?: {
+    quality?: RecordLike;
+    governance?: RecordLike;
+  } | null;
+}) {
+  if (input.queryType !== 'self_query' && input.routeIntent !== 'identity_self') return;
+  const quality = isRecord(input.retrieval?.quality) ? input.retrieval?.quality : null;
+  const governance = isRecord(input.retrieval?.governance) ? input.retrieval?.governance : null;
+  const attempts = Array.isArray(governance?.attempts) ? governance.attempts : [];
+  console.debug('[sugaragent][self-retrieval-quality]', {
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    quality: quality
+      ? {
+          required: quality.required === true,
+          pass: quality.pass === true,
+          reason: normalizeOptionalString(quality.reason),
+          coverage: typeof quality.coverage === 'number' && Number.isFinite(quality.coverage)
+            ? Number(quality.coverage.toFixed(4))
+            : null,
+          supportConfidence: typeof quality.supportConfidence === 'number' && Number.isFinite(quality.supportConfidence)
+            ? Number(quality.supportConfidence.toFixed(4))
+            : null,
+          conflictRisk: typeof quality.conflictRisk === 'number' && Number.isFinite(quality.conflictRisk)
+            ? Number(quality.conflictRisk.toFixed(4))
+            : null,
+        }
+      : null,
+    governance: governance
+      ? {
+          candidateCount: typeof governance.candidateCount === 'number' ? governance.candidateCount : null,
+          selectedCount: typeof governance.selectedCount === 'number' ? governance.selectedCount : null,
+          qualityPath: normalizeOptionalString(governance.qualityPath),
+          qualityReason: normalizeOptionalString(governance.qualityReason),
+          qualityGatePassed: governance.qualityGatePassed === true,
+          correctiveAttempted: governance.correctiveAttempted === true,
+        }
+      : null,
+    attempts: attempts.slice(0, 2).map((attempt) => {
+      const qualityRecord = isRecord(attempt?.quality) ? attempt.quality : null;
+      return {
+        attempt: normalizeOptionalString(attempt?.attempt),
+        query: sanitizePromptText(attempt?.query ?? '').slice(0, 120),
+        candidateCount: typeof attempt?.candidateCount === 'number' ? attempt.candidateCount : null,
+        selectedCount: typeof attempt?.selectedCount === 'number' ? attempt.selectedCount : null,
+        reason: normalizeOptionalString(qualityRecord?.reason),
+        pass: qualityRecord?.pass === true,
+        coverage: typeof qualityRecord?.coverage === 'number' && Number.isFinite(qualityRecord.coverage)
+          ? Number(qualityRecord.coverage.toFixed(4))
+          : null,
+        supportConfidence: typeof qualityRecord?.supportConfidence === 'number' && Number.isFinite(qualityRecord.supportConfidence)
+          ? Number(qualityRecord.supportConfidence.toFixed(4))
+          : null,
       };
     }),
   });
@@ -2991,7 +3235,20 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         playerMessage: message,
         loreArtifacts,
       });
-      const resolvedRouting = routingRefinement.route;
+      let resolvedRouting = routingRefinement.route;
+      if (resolvedRouting.interpretation) {
+        resolvedRouting = {
+          ...resolvedRouting,
+          interpretation: await attachSubjectSelectionToInterpretation({
+            interpretation: resolvedRouting.interpretation,
+            playerMessage: message,
+            routeMatches: routingRefinement.matches,
+            recentReferents: recentReferentPreview,
+            selfEntityId: npcProfile?.selfEntityId,
+            embedTexts: runtime.embed.bind(runtime),
+          }),
+        };
+      }
       const queryType: QueryType = (() => {
         const explicit = normalizeOptionalString(turnContext.queryType);
         return explicit === 'conversation'
@@ -3009,6 +3266,13 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         queryType,
         matches: routingRefinement.matches,
         retrievalFilters: routingRefinement.retrievalFilters,
+      });
+      emitSubjectSelectionDebugLog({
+        npcId: args.npc,
+        routeIntent: resolvedRouting.intent,
+        queryType,
+        primaryReferent: resolvedRouting.interpretation?.primaryReferent,
+        relationPolicy: resolvedRouting.interpretation?.relationPolicy,
       });
       turnContext.queryType = queryType;
       turnContext.routingIntent = resolvedRouting.intent;
@@ -3112,6 +3376,24 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         governance: governedRetrieval.governance,
         embeddingDegradedReason,
       };
+      emitSelfRetrievalGateDebugLog({
+        npcId: args.npc,
+        routeIntent: resolvedRouting.intent,
+        queryType,
+        selfEntityId: npcProfile.selfEntityId,
+        loreScopes,
+        selfLoreScopes,
+        relatedLoreScopes,
+        loreArtifacts,
+        retrievalAttempted: retrieval.attempted,
+        retrievalMatchCount: retrieval.matches.length,
+      });
+      emitSelfRetrievalQualityDebugLog({
+        npcId: args.npc,
+        routeIntent: resolvedRouting.intent,
+        queryType,
+        retrieval,
+      });
       emitRetrievalTopMatchesDebugLog({
         npcId: args.npc,
         routeIntent: resolvedRouting.intent,

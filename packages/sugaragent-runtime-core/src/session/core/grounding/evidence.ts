@@ -94,11 +94,19 @@ export interface GroundingEvidenceEntry {
   sourceType: string;
   text: string;
   selfAttributed: boolean;
+  retrievalRing?: 'direct' | 'associated' | 'ambient';
+  retrievalRingReason?: string;
   chunkId?: string;
+  pageId?: string;
+  pageTitle?: string;
+  sectionHeading?: string;
   factId?: string;
   verificationStatus?: string;
   provenance?: RecordLike;
   entityIds: string[];
+  locationIds: string[];
+  factionIds: string[];
+  tags?: string[];
   anchorTerms?: string[];
 }
 
@@ -248,10 +256,16 @@ export function buildGroundingEvidenceEntries({
       text,
       selfAttributed: entry.selfAttributed === true,
       chunkId: typeof entry.chunkId === 'string' ? entry.chunkId : undefined,
+      pageId: typeof entry.pageId === 'string' ? entry.pageId : undefined,
+      pageTitle: typeof entry.pageTitle === 'string' ? entry.pageTitle : undefined,
+      sectionHeading: typeof entry.sectionHeading === 'string' ? entry.sectionHeading : undefined,
       factId: typeof entry.factId === 'string' ? entry.factId : undefined,
       verificationStatus: typeof entry.verificationStatus === 'string' ? entry.verificationStatus : undefined,
       provenance: isRecord(entry.provenance) ? entry.provenance : undefined,
       entityIds: toStringArray(entry.entityIds),
+      locationIds: toStringArray(entry.locationIds),
+      factionIds: toStringArray(entry.factionIds),
+      tags: toStringArray(entry.tags),
       anchorTerms: toStringArray(entry.anchorTerms),
     });
   };
@@ -272,6 +286,8 @@ export function buildGroundingEvidenceEntries({
         regionName: regionLabel || undefined,
       },
       entityIds: normalizedRegionPath ? [normalizedRegionPath] : [],
+      locationIds: normalizedRegionPath ? [normalizedRegionPath] : [],
+      factionIds: [],
       anchorTerms: [
         regionLabel,
         normalizedRegionPath,
@@ -302,6 +318,8 @@ export function buildGroundingEvidenceEntries({
         activity: normalizedCurrentActivity,
       },
       entityIds: normalizedSelfEntityId ? [normalizedSelfEntityId] : [],
+      locationIds: [],
+      factionIds: [],
       anchorTerms: [
         normalizedCurrentActivity,
         'current activity',
@@ -326,6 +344,8 @@ export function buildGroundingEvidenceEntries({
         goal: normalizedCurrentGoal,
       },
       entityIds: normalizedSelfEntityId ? [normalizedSelfEntityId] : [],
+      locationIds: [],
+      factionIds: [],
       anchorTerms: [
         normalizedCurrentGoal,
         'current goal',
@@ -343,8 +363,14 @@ export function buildGroundingEvidenceEntries({
     if (!isRecord(matchEntry) || !isRecord(matchEntry.chunk)) continue;
     const chunk = matchEntry.chunk as LoreChunkEntry;
     const chunkId = normalizeOptionalString(chunk.chunkId);
+    const pageId = normalizeOptionalString(chunk.pageId);
+    const pageTitle = normalizeOptionalString(chunk.title);
+    const sectionHeading = normalizeOptionalString(chunk.sectionHeading);
     const chunkMetadata = isRecord(chunk.metadata) ? chunk.metadata as LoreChunkMetadata : null;
     const entityIds = toStringArray(chunkMetadata?.entity_ids);
+    const locationIds = toStringArray(chunkMetadata?.location_ids);
+    const factionIds = toStringArray(chunkMetadata?.faction_ids);
+    const tags = toStringArray(chunkMetadata?.tags);
     const anchorTerms = collectLoreAnchorTerms(chunk, chunkMetadata);
     const chunkFactIds = toStringArray(chunkMetadata?.fact_ids);
     let usedFactEntries = 0;
@@ -362,12 +388,20 @@ export function buildGroundingEvidenceEntries({
         sourceId: factId,
         sourceType: 'lore_chunk',
         text: statement,
+        retrievalRing: typeof matchEntry.retrievalRing === 'string' ? matchEntry.retrievalRing : undefined,
+        retrievalRingReason: typeof matchEntry.retrievalRingReason === 'string' ? matchEntry.retrievalRingReason : undefined,
         factId,
         chunkId: normalizeOptionalString(chunkId ?? fact.chunkId),
         verificationStatus,
         provenance: isRecord(fact.provenance) ? fact.provenance : undefined,
         selfAttributed: isSelfEvidenceMatch(matchEntry as LoreMatchEntry, normalizedSelfEntityId),
         entityIds,
+        locationIds,
+        factionIds,
+        tags,
+        pageId,
+        pageTitle,
+        sectionHeading,
         anchorTerms,
       });
     }
@@ -385,9 +419,17 @@ export function buildGroundingEvidenceEntries({
       sourceId: chunkId ?? `lore:${entries.length + 1}`,
       sourceType: 'lore_chunk',
       text: combinedText,
+      retrievalRing: typeof matchEntry.retrievalRing === 'string' ? matchEntry.retrievalRing : undefined,
+      retrievalRingReason: typeof matchEntry.retrievalRingReason === 'string' ? matchEntry.retrievalRingReason : undefined,
       chunkId: chunkId ?? undefined,
       selfAttributed: isSelfEvidenceMatch(matchEntry as LoreMatchEntry, normalizedSelfEntityId),
       entityIds,
+      locationIds,
+      factionIds,
+      tags,
+      pageId,
+      pageTitle,
+      sectionHeading,
       anchorTerms,
     });
   }
@@ -410,6 +452,8 @@ export function buildGroundingEvidenceEntries({
       text: profileEvidenceParts.join(' '),
       selfAttributed: true,
       entityIds: normalizedSelfEntityId ? [normalizedSelfEntityId] : [],
+      locationIds: [],
+      factionIds: [],
     });
   }
 
@@ -423,6 +467,8 @@ export function buildGroundingEvidenceEntries({
       text: fact,
       selfAttributed: Boolean(beatNpcId && normalizeOptionalString(npcId) === beatNpcId),
       entityIds: beatNpcId ? [beatNpcId] : [],
+      locationIds: [],
+      factionIds: [],
     });
   });
 

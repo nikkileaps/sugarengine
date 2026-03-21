@@ -60,6 +60,11 @@ export function buildPlannedClaim(input: {
   const avgConfidence = input.evidenceItems.length > 0
     ? input.evidenceItems.reduce((sum, item) => sum + item.confidence, 0) / input.evidenceItems.length
     : 0;
+  const strongestRelationEvidence = [...input.evidenceItems]
+    .sort((left, right) => (
+      (right.relationStrength ?? 0) - (left.relationStrength ?? 0)
+      || (right.confidence ?? 0) - (left.confidence ?? 0)
+    ))[0];
 
   return {
     claimId: input.claimId,
@@ -71,6 +76,11 @@ export function buildPlannedClaim(input: {
     confidence: input.confidenceOverride ?? Number(Math.max(0.1, Math.min(1, avgConfidence)).toFixed(4)),
     requiredHedge: requiredHedgeForMode(mode),
     maxSpecificity: maxSpecificityForMode(mode),
+    relationDistance: strongestRelationEvidence?.relationDistance,
+    relationStrength: strongestRelationEvidence?.relationStrength,
+    relationReason: strongestRelationEvidence?.relationReason,
+    relationSubjectId: strongestRelationEvidence?.subjectId,
+    relationSubjectKind: strongestRelationEvidence?.subjectKind,
   };
 }
 

@@ -111,9 +111,20 @@ export function enrichEvidenceWithEpistemics(
     verificationStatus: string;
     provenance?: Record<string, unknown>;
     entityIds: string[];
+    locationIds?: string[];
+    factionIds?: string[];
+    pageId?: string;
+    pageTitle?: string;
+    sectionHeading?: string;
+    tags?: string[];
     anchorTerms?: string[];
     selfAttributed: boolean;
     confidence: number;
+    subjectId?: string;
+    subjectKind?: EpistemicEvidenceItem['subjectKind'];
+    relationDistance?: EpistemicEvidenceItem['relationDistance'];
+    relationStrength?: number;
+    relationReason?: EpistemicEvidenceItem['relationReason'];
   },
   beatContract?: BeatContractInput | null,
 ): EpistemicEvidenceItem {
@@ -142,9 +153,20 @@ export function enrichEvidenceWithEpistemics(
     verificationStatus: item.verificationStatus,
     provenance: item.provenance,
     entityIds: item.entityIds,
+    locationIds: Array.isArray(item.locationIds) ? item.locationIds : [],
+    factionIds: Array.isArray(item.factionIds) ? item.factionIds : [],
+    pageId: item.pageId,
+    pageTitle: item.pageTitle,
+    sectionHeading: item.sectionHeading,
+    tags: Array.isArray(item.tags) ? item.tags : [],
     anchorTerms: Array.isArray(item.anchorTerms) ? item.anchorTerms : [],
     selfAttributed: item.selfAttributed,
     confidence: item.confidence,
+    subjectId: item.subjectId,
+    subjectKind: item.subjectKind,
+    relationDistance: item.relationDistance,
+    relationStrength: item.relationStrength,
+    relationReason: item.relationReason,
   };
 }
 

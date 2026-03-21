@@ -40,6 +40,7 @@ Core engine/plugin-host ADRs remain in `/docs/adr` (for example ADR-024).
 - [032-shared-query-interpretation-and-semantic-routing-layer.md](./032-shared-query-interpretation-and-semantic-routing-layer.md)
 - [033-local-embedding-runtime-and-vector-artifact-contract.md](./033-local-embedding-runtime-and-vector-artifact-contract.md)
 - [034-shared-generation-provider-config-and-runtime-resolution-boundary.md](./034-shared-generation-provider-config-and-runtime-resolution-boundary.md)
+- [035-subject-centric-evidence-selection-and-relation-distance.md](./035-subject-centric-evidence-selection-and-relation-distance.md)
 
 
 
@@ -57,3 +58,4 @@ ADR-024 is the active grounded-turn contract: runtime-owned reply parts with tur
 ADR-025..031 define the intended cutover from model-first factual generation to a fully live evidence-first pipeline, plus the epistemology, memory, and optional SugarLang interoperability contracts required to support it cleanly.
 ADR-032..033 are now the active contracts for the shared semantic interpretation layer and real local embedding/vector support that replaced the old stubbed semantic path.
 ADR-034 defines the shared generation-provider config and runtime-resolution boundary across preview and hosted web.
+ADR-035 defines subject-centric primary-referent resolution and relation-distance-aware evidence selection in `Interpret -> Retrieve -> Plan`.

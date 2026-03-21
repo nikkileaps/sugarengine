@@ -190,4 +190,93 @@ describe('retrieval-governance', () => {
     expect(ranked.length).toBeGreaterThan(0);
     expect(ranked[0]?.item.ownerType).toBe('player');
   });
+
+  it('attaches subject relevance during evidence-pack normalization and filters incidental overview evidence', () => {
+    const interpretation = {
+      schemaVersion: 1 as const,
+      lane: 'knowledge' as const,
+      target: 'world' as const,
+      facet: 'general_lore' as const,
+      timeframe: 'unknown' as const,
+      focusText: 'Earendale',
+      normalizedText: 'do you know anything about earendale',
+      referents: [],
+      discourse: {
+        repair: false,
+        filler: false,
+        contrast: false,
+        emphasis: false,
+      },
+      candidateScores: [],
+      confidence: 0.92,
+      margin: 0.4,
+      ambiguous: false,
+      primaryReferent: {
+        id: 'locations.earendale',
+        text: 'Earendale',
+        kind: 'location' as const,
+        confidence: 0.96,
+      },
+      relationPolicy: {
+        facet: 'general_lore' as const,
+        preferredRelationDistances: ['primary', 'associated'] as Array<'primary' | 'associated'>,
+        incidentalAllowed: false,
+        associatedFallbackAllowed: true,
+        evidenceBudget: {
+          maxPrimary: 2,
+          maxAssociated: 1,
+        },
+      },
+    };
+
+    const evidencePack = buildEvidencePack({
+      evidenceEntries: [
+        {
+          sourceId: 'lore:earendale',
+          sourceType: 'lore_chunk',
+          text: 'Earendale is a market town with a busy station.',
+          locationIds: ['locations.earendale'],
+          pageId: 'lore.locations.earendale',
+          pageTitle: 'Earendale',
+        },
+        {
+          sourceId: 'lore:bippity',
+          sourceType: 'lore_chunk',
+          text: "His wife's name is Janet Roo.",
+          entityIds: ['npc.bippity-roo'],
+          tags: ['earendale'],
+          pageId: 'lore.entities.npcs.bippity-roo',
+          pageTitle: 'Bippity Roo',
+        },
+      ],
+      loreMatches: [],
+      mode: 'character',
+      playerMessage: 'Do you know anything about Earendale?',
+      queryType: 'world_query',
+      routing: { intent: 'lore_world', policyPath: 'lore_knowledge', interpretation },
+      selfEntityId: 'npc.rick-roll',
+      npcId: 'npc.rick-roll',
+    });
+
+    expect(evidencePack.items[0]).toMatchObject({
+      relationDistance: 'primary',
+      relationReason: 'direct_id_match',
+    });
+    expect(evidencePack.items[1]).toMatchObject({
+      relationDistance: 'incidental',
+      relationReason: 'tag_only',
+    });
+
+    const ranked = pickEvidenceForIntent(
+      evidencePack,
+      'Do you know anything about Earendale?',
+      'lore_world',
+      'world_query',
+      'npc.rick-roll',
+      'npc.rick-roll',
+    );
+
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]?.item.sourceId).toBe('lore:earendale');
+  });
 });

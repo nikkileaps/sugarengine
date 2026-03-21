@@ -4,6 +4,9 @@ import {
   extractFacetQueryTokens,
 } from './knowledge-query.js';
 import {
+  annotateEvidenceSubjectRelevance,
+} from './subject-relevance.js';
+import {
   isKnowledgeSeekingQueryType,
   type QueryType,
   type RoutingIntent,
@@ -17,7 +20,14 @@ import {
   resolveRerankBudgetTier,
   resolveRerankCandidateCap,
 } from './retrieval-governance.js';
-import type { QueryInterpretation } from './turn-contracts.js';
+import type {
+  QueryInterpretation,
+  RetrievalRing,
+  RetrievalRingReason,
+  SubjectRelationDistance,
+  SubjectRelationReason,
+  SubjectReferentKind,
+} from './turn-contracts.js';
 
 interface RecordLike {
   [key: string]: unknown;
@@ -52,6 +62,13 @@ interface RetrievalFilters {
   locationIds?: string[];
   factionIds?: string[];
   aliases?: string[];
+}
+
+interface RingedSelection {
+  selected: Array<Record<string, unknown>>;
+  activeRings: RetrievalRing[];
+  ringCounts: Record<RetrievalRing, number>;
+  usedRingStrategy: boolean;
 }
 
 type RerankCache = Map<string, { ranked: Array<Record<string, unknown>> }>;
@@ -111,6 +128,12 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function buildInterpretationRetrievalQuery(
   playerMessage: unknown,
   interpretation?: QueryInterpretation | null,
@@ -146,7 +169,7 @@ function deriveScopedRetrievalPools({
 
   if (queryType === 'self_query' || routingIntent === 'identity_self') {
     return {
-      loreScopes: normalizedSelfLoreScopes.length > 0 ? [] : normalizedLoreScopes,
+      loreScopes: [],
       selfLoreScopes: normalizedSelfLoreScopes,
       relatedLoreScopes: [],
     };
@@ -283,6 +306,221 @@ function asFiniteScore(candidate: Record<string, unknown>): number {
     : 0;
 }
 
+function mapRelationDistanceToRing(distance: SubjectRelationDistance | undefined): RetrievalRing {
+  if (distance === 'primary') return 'direct';
+  if (distance === 'associated') return 'associated';
+  return 'ambient';
+}
+
+function mapRelationReasonToRingReason(
+  reason: SubjectRelationReason | undefined,
+  fallback: RetrievalRingReason,
+): RetrievalRingReason {
+  if (reason === 'direct_id_match') return 'direct_subject_match';
+  if (reason === 'direct_page_match') return 'direct_page_match';
+  if (reason === 'direct_location_match') return 'direct_location_match';
+  if (reason === 'associated_entity_relation' || reason === 'associated_location_relation') {
+    return 'explicit_association';
+  }
+  if (reason === 'mention_only') return 'semantic_neighbor';
+  if (reason === 'tag_only') return 'tag_neighbor';
+  return fallback;
+}
+
+function annotateRetrievalCandidateRing(input: {
+  candidate: Record<string, unknown>;
+  interpretation?: QueryInterpretation | null;
+  queryType: QueryType;
+  routingIntent: RoutingIntent | 'unclear';
+  selfEntityId?: unknown;
+}): Record<string, unknown> {
+  const candidate = isRecord(input.candidate) ? input.candidate : {};
+  const chunk = isRecord(candidate.chunk) ? candidate.chunk : null;
+  const metadata = isRecord(chunk?.metadata) ? chunk.metadata : null;
+  const normalizedSelfEntityId = normalizeOptionalString(input.selfEntityId)?.toLowerCase();
+  const chunkEntityIds = normalizeStringArray(metadata?.entity_ids).map((entry) => entry.toLowerCase());
+  const selfEntityMatch = candidate.selfEntityMatch === true
+    || Boolean(normalizedSelfEntityId && chunkEntityIds.includes(normalizedSelfEntityId));
+  const isSelfQuery = input.queryType === 'self_query' || input.routingIntent === 'identity_self';
+
+  const subjectRelevance = input.interpretation
+    ? annotateEvidenceSubjectRelevance({
+      sourceType: 'lore_chunk',
+      sourceId: normalizeOptionalString(chunk?.chunkId),
+      ownerType: typeof candidate.pool === 'string' && candidate.pool === 'self'
+        ? 'npc'
+        : 'world',
+      text: normalizeOptionalString(chunk?.summary) ?? normalizeOptionalString(chunk?.content) ?? normalizeOptionalString(chunk?.title) ?? '',
+      entityIds: normalizeStringArray(metadata?.entity_ids),
+      locationIds: normalizeStringArray(metadata?.location_ids),
+      factionIds: normalizeStringArray(metadata?.faction_ids),
+      pageId: normalizeOptionalString(chunk?.pageId),
+      pageTitle: normalizeOptionalString(chunk?.title),
+      sectionHeading: normalizeOptionalString(chunk?.sectionHeading),
+      anchorTerms: [
+        normalizeOptionalString(chunk?.title),
+        normalizeOptionalString(chunk?.sectionHeading),
+        normalizeOptionalString(chunk?.pageId),
+        ...normalizeStringArray(metadata?.tags),
+        ...normalizeStringArray(metadata?.entity_ids),
+        ...normalizeStringArray(metadata?.location_ids),
+        ...normalizeStringArray(metadata?.faction_ids),
+      ].filter((entry): entry is string => Boolean(entry)),
+      tags: normalizeStringArray(metadata?.tags),
+      provenance: null,
+    }, input.interpretation)
+    : undefined;
+
+  let retrievalRing: RetrievalRing = 'ambient';
+  let retrievalRingReason: RetrievalRingReason = typeof candidate.pool === 'string' && candidate.pool === 'related'
+    ? 'relation_scope'
+    : 'ambient_scope';
+
+  if (isSelfQuery && selfEntityMatch) {
+    retrievalRing = 'direct';
+    retrievalRingReason = 'exact_self_entity';
+  } else if (isSelfQuery && candidate.pool === 'self') {
+    retrievalRing = 'direct';
+    retrievalRingReason = 'explicit_self_scope';
+  } else if (subjectRelevance) {
+    retrievalRing = mapRelationDistanceToRing(subjectRelevance.relationDistance);
+    retrievalRingReason = mapRelationReasonToRingReason(subjectRelevance.reason, retrievalRingReason);
+  } else if (candidate.pool === 'related') {
+    retrievalRing = 'associated';
+    retrievalRingReason = 'relation_scope';
+  }
+
+  return {
+    ...candidate,
+    retrievalRing,
+    retrievalRingReason,
+    subjectId: subjectRelevance?.subjectId ?? candidate.subjectId,
+    subjectKind: subjectRelevance?.subjectKind ?? candidate.subjectKind,
+    relationDistance: subjectRelevance?.relationDistance ?? candidate.relationDistance,
+    relationStrength: subjectRelevance?.relationStrength ?? candidate.relationStrength,
+    relationReason: subjectRelevance?.reason ?? candidate.relationReason,
+  };
+}
+
+function countCandidatesByRing(ranked: Array<Record<string, unknown>>): Record<RetrievalRing, number> {
+  const counts: Record<RetrievalRing, number> = {
+    direct: 0,
+    associated: 0,
+    ambient: 0,
+  };
+  for (const entry of ranked) {
+    const ring = entry?.retrievalRing;
+    if (ring === 'direct' || ring === 'associated' || ring === 'ambient') {
+      counts[ring] += 1;
+    }
+  }
+  return counts;
+}
+
+function selectCandidatesByRing(input: {
+  ranked: Array<Record<string, unknown>>;
+  interpretation?: QueryInterpretation | null;
+  queryType: QueryType;
+  routingIntent: RoutingIntent | 'unclear';
+  maxSelected: number;
+}): RingedSelection {
+  const ranked = Array.isArray(input.ranked)
+    ? input.ranked.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    : [];
+  const relationPolicy = input.interpretation?.relationPolicy;
+  const hasRingContext = Boolean(
+    (input.queryType === 'self_query' || input.routingIntent === 'identity_self')
+    || input.interpretation?.primaryReferent,
+  );
+  if (!hasRingContext) {
+    return {
+      selected: ranked.slice(0, input.maxSelected),
+      activeRings: [],
+      ringCounts: countCandidatesByRing(ranked),
+      usedRingStrategy: false,
+    };
+  }
+
+  const effectivePolicy = relationPolicy ?? {
+    facet: 'unknown',
+    preferredRelationDistances: ['primary', 'associated'] as Array<'primary' | 'associated'>,
+    incidentalAllowed: false,
+    associatedFallbackAllowed: true,
+    evidenceBudget: {
+      maxPrimary: Math.max(1, Math.min(2, input.maxSelected)),
+      maxAssociated: 1,
+    },
+  };
+
+  const direct = ranked.filter((entry) => entry.retrievalRing === 'direct');
+  const associated = ranked.filter((entry) => entry.retrievalRing === 'associated');
+  const ambient = ranked.filter((entry) => entry.retrievalRing === 'ambient');
+  const ringCounts = {
+    direct: direct.length,
+    associated: associated.length,
+    ambient: ambient.length,
+  };
+  const activeRings: RetrievalRing[] = [];
+  const selected: Array<Record<string, unknown>> = [];
+  const maxPrimary = Math.max(1, Math.min(input.maxSelected, effectivePolicy.evidenceBudget?.maxPrimary ?? input.maxSelected));
+  const maxAssociated = Math.max(0, Math.min(input.maxSelected, effectivePolicy.evidenceBudget?.maxAssociated ?? 1));
+  const preferredPrimary = (effectivePolicy.preferredRelationDistances[0] ?? 'primary') === 'primary';
+
+  const takeFromRing = (entries: Array<Record<string, unknown>>, ring: RetrievalRing, limit: number) => {
+    if (entries.length === 0 || limit <= 0 || selected.length >= input.maxSelected) return;
+    const remaining = Math.max(0, input.maxSelected - selected.length);
+    if (remaining <= 0) return;
+    const toTake = entries.slice(0, Math.min(limit, remaining));
+    if (toTake.length === 0) return;
+    activeRings.push(ring);
+    selected.push(...toTake);
+  };
+
+  if (preferredPrimary) {
+    takeFromRing(direct, 'direct', maxPrimary);
+    if (
+      effectivePolicy.associatedFallbackAllowed
+      && (selected.length === 0 || selected.length < Math.min(maxPrimary, input.maxSelected))
+    ) {
+      takeFromRing(associated, 'associated', maxAssociated || 1);
+    }
+  } else {
+    takeFromRing(associated, 'associated', maxAssociated || 1);
+    if (selected.length === 0 || selected.length < Math.min(2, input.maxSelected)) {
+      takeFromRing(direct, 'direct', Math.min(maxPrimary, 1));
+    }
+  }
+
+  if (selected.length === 0 && effectivePolicy.incidentalAllowed) {
+    takeFromRing(ambient, 'ambient', 1);
+  }
+
+  return {
+    selected: selected.slice(0, input.maxSelected),
+    activeRings: [...new Set(activeRings)],
+    ringCounts,
+    usedRingStrategy: true,
+  };
+}
+
+function annotateRetrievalCandidates(input: {
+  candidates: Array<Record<string, unknown>>;
+  interpretation?: QueryInterpretation | null;
+  queryType: QueryType;
+  routingIntent: RoutingIntent | 'unclear';
+  selfEntityId?: unknown;
+}): Array<Record<string, unknown>> {
+  return (Array.isArray(input.candidates) ? input.candidates : [])
+    .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    .map((candidate) => annotateRetrievalCandidateRing({
+      candidate,
+      interpretation: input.interpretation,
+      queryType: input.queryType,
+      routingIntent: input.routingIntent,
+      selfEntityId: input.selfEntityId,
+    }));
+}
+
 export async function runGovernedLoreRetrieval({
   loreArtifacts,
   canRetrieveLore,
@@ -410,9 +648,15 @@ export async function runGovernedLoreRetrieval({
       vectorCandidates = [];
     }
   }
-  const initialCandidates = mergeRetrievalCandidates({
-    lexicalCandidates,
-    vectorCandidates,
+  const initialCandidates = annotateRetrievalCandidates({
+    candidates: mergeRetrievalCandidates({
+      lexicalCandidates,
+      vectorCandidates,
+    }),
+    interpretation,
+    queryType,
+    routingIntent,
+    selfEntityId,
   });
   const initialCacheKey = buildRerankCacheKey({
     query: retrievalQuery,
@@ -437,7 +681,14 @@ export async function runGovernedLoreRetrieval({
     cache: rerankCache,
     cacheKey: initialCacheKey,
   });
-  const initialSelected = initialRerank.ranked.slice(0, Math.min(3, candidateCap));
+  const initialSelection = selectCandidatesByRing({
+    ranked: initialRerank.ranked,
+    interpretation,
+    queryType,
+    routingIntent,
+    maxSelected: Math.min(3, candidateCap),
+  });
+  const initialSelected = initialSelection.selected;
   const initialQuality = evaluateRetrievalQuality({
     query: playerMessage,
     interpretation,
@@ -450,6 +701,7 @@ export async function runGovernedLoreRetrieval({
 
   let finalRanked = initialRerank.ranked;
   let finalSelected = initialSelected;
+  let finalSelection = initialSelection;
   let finalQuality = {
     ...initialQuality,
     score: initialQualityScore,
@@ -470,6 +722,8 @@ export async function runGovernedLoreRetrieval({
       mergedCandidateCount: initialCandidates.length,
       candidateCount: initialCandidates.length,
       selectedCount: initialSelected.length,
+      activeRings: initialSelection.activeRings,
+      ringCounts: initialSelection.ringCounts,
       quality: {
         coverage: initialQuality.coverage,
         conflictRisk: initialQuality.conflictRisk,
@@ -502,9 +756,7 @@ export async function runGovernedLoreRetrieval({
     let correctiveRelatedLoreScopes = normalizeStringArray(relatedLoreScopes);
 
     if (queryType === 'self_query' || routingIntent === 'identity_self') {
-      if (correctiveSelfLoreScopes.length > 0) {
-        correctiveLoreScopes = [...correctiveSelfLoreScopes];
-      }
+      correctiveLoreScopes = [];
       correctiveRelatedLoreScopes = [];
     } else if (queryType === 'world_query' || routingIntent === 'lore_world') {
       correctiveSelfLoreScopes = [];
@@ -539,9 +791,15 @@ export async function runGovernedLoreRetrieval({
         correctiveVectorCandidates = [];
       }
     }
-    const correctiveCandidates = mergeRetrievalCandidates({
-      lexicalCandidates: correctiveLexicalCandidates,
-      vectorCandidates: correctiveVectorCandidates,
+    const correctiveCandidates = annotateRetrievalCandidates({
+      candidates: mergeRetrievalCandidates({
+        lexicalCandidates: correctiveLexicalCandidates,
+        vectorCandidates: correctiveVectorCandidates,
+      }),
+      interpretation,
+      queryType,
+      routingIntent,
+      selfEntityId,
     });
     const correctiveCacheKey = buildRerankCacheKey({
       query: correctiveQuery,
@@ -566,7 +824,14 @@ export async function runGovernedLoreRetrieval({
       cache: rerankCache,
       cacheKey: correctiveCacheKey,
     });
-    const correctiveSelected = correctiveRerank.ranked.slice(0, Math.min(3, candidateCap));
+    const correctiveSelection = selectCandidatesByRing({
+      ranked: correctiveRerank.ranked,
+      interpretation,
+      queryType,
+      routingIntent,
+      maxSelected: Math.min(3, candidateCap),
+    });
+    const correctiveSelected = correctiveSelection.selected;
     const correctiveQuality = evaluateRetrievalQuality({
       query: playerMessage,
       interpretation,
@@ -585,6 +850,8 @@ export async function runGovernedLoreRetrieval({
       mergedCandidateCount: correctiveCandidates.length,
       candidateCount: correctiveCandidates.length,
       selectedCount: correctiveSelected.length,
+      activeRings: correctiveSelection.activeRings,
+      ringCounts: correctiveSelection.ringCounts,
       quality: {
         coverage: correctiveQuality.coverage,
         conflictRisk: correctiveQuality.conflictRisk,
@@ -604,6 +871,7 @@ export async function runGovernedLoreRetrieval({
     if (useCorrective) {
       finalRanked = correctiveRerank.ranked;
       finalSelected = correctiveSelected;
+      finalSelection = correctiveSelection;
       finalQuality = {
         ...correctiveQuality,
         score: correctiveQualityScore,
@@ -626,7 +894,9 @@ export async function runGovernedLoreRetrieval({
 
   const knowledgeGatePassed = !knowledgeTurn || finalQuality.pass;
   const loreMatches = knowledgeGatePassed
-    ? finalRanked.slice(0, Math.max(2, Math.min(4, candidateCap)))
+    ? (finalSelection.usedRingStrategy
+        ? finalSelected
+        : finalRanked.slice(0, Math.max(2, Math.min(4, candidateCap))))
     : [];
   return {
     loreMatches,
@@ -651,6 +921,8 @@ export async function runGovernedLoreRetrieval({
       lexicalCandidateCount: lexicalCandidates.length,
       vectorCandidateCount: vectorCandidates.length,
       mergedCandidateCount: finalRanked.length,
+      activeRings: finalSelection.activeRings,
+      ringCounts: finalSelection.ringCounts,
       embeddingAvailable: typeof embedTexts === 'function' && degradedReason === null,
       degradedReason,
       attempts: attemptLogs,

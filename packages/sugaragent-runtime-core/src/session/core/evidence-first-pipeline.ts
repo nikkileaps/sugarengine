@@ -38,6 +38,10 @@ import {
   localizeGroundedUncertaintyReply,
   localizeSimpleSocialReply,
 } from './language-stock.js';
+import {
+  isRelationDistanceAdmissible,
+  relationDistanceWeight,
+} from './subject-relevance.js';
 import { verifyRealizationAgainstPlan } from './semantic/verification.js';
 import { extractExplicitPlayerFacts, filterMemoryWrites, extractNpcCommitments } from './memory-provenance.js';
 import type {
@@ -335,14 +339,28 @@ function formatSelfProfileClaimText(
 function formatNpcSelfKnowledgeClaimText(
   item: EpistemicEvidenceItem | null | undefined,
   snapshot: Partial<NpcStateSnapshot> | null | undefined,
+  facet: QueryInterpretation['facet'] | 'unknown' = 'unknown',
 ): string {
   const fullText = normalizeClaimText(item?.text);
   if (!fullText) return '';
-  const firstSentence = normalizeClaimText(
-    String(fullText).split(/(?<=[.!?])\s+/)[0],
-  );
+  const sentences = String(fullText)
+    .split(/(?<=[.!?])\s+/)
+    .map((entry) => normalizeClaimText(entry))
+    .filter(Boolean);
+  const sentenceMatchers: Record<string, RegExp> = {
+    occupation: /\b(own|owns|run|runs|work|works|job|occupation|shop|store|stall|merchant|manager)\b/i,
+    preference: /\b(like|likes|love|loves|hate|hates|prefer|prefers|favorite|favourite|obsessed)\b/i,
+    identity: /\b(name|called|is)\b/i,
+    current_activity: /\b(right now|currently|doing|watching|minding|working)\b/i,
+    background: /\b(from|grew|family|past|background)\b/i,
+  };
+  const preferredSentence = (
+    sentenceMatchers[facet]
+      ? sentences.find((sentence) => sentenceMatchers[facet].test(sentence))
+      : undefined
+  ) ?? sentences[0] ?? fullText;
   const npcName = normalizeClaimText(snapshot?.npcName || '');
-  if (!npcName) return firstSentence || fullText;
+  if (!npcName) return preferredSentence || fullText;
 
   const replacements = [
     {
@@ -361,15 +379,47 @@ function formatNpcSelfKnowledgeClaimText(
       pattern: new RegExp(`^${escapeRegex(npcName)}\\s+is\\b`, 'i'),
       replacement: 'I am',
     },
+    {
+      pattern: /^(he|she)\s+owns\b/i,
+      replacement: 'I own',
+    },
+    {
+      pattern: /^(he|she)\s+runs\b/i,
+      replacement: 'I run',
+    },
+    {
+      pattern: /^(he|she)\s+works\b/i,
+      replacement: 'I work',
+    },
+    {
+      pattern: /^(he|she)\s+is\b/i,
+      replacement: 'I am',
+    },
+    {
+      pattern: /^(he|she)\s+likes\b/i,
+      replacement: 'I like',
+    },
+    {
+      pattern: /^(he|she)\s+loves\b/i,
+      replacement: 'I love',
+    },
+    {
+      pattern: /^(he|she)\s+hates\b/i,
+      replacement: 'I hate',
+    },
+    {
+      pattern: /^(he|she)\s+prefers\b/i,
+      replacement: 'I prefer',
+    },
   ];
 
   for (const { pattern, replacement } of replacements) {
-    if (pattern.test(firstSentence)) {
-      return firstSentence.replace(pattern, replacement);
+    if (pattern.test(preferredSentence)) {
+      return preferredSentence.replace(pattern, replacement);
     }
   }
 
-  return firstSentence || fullText;
+  return preferredSentence || fullText;
 }
 
 function buildDeterministicSocialReply(
@@ -586,9 +636,18 @@ function assessKnowledgeEvidenceRelevance(
     && queryTokens.length <= 2
     && matchedTokens >= 1
   );
+  const selfPreferenceQuestion = (
+    playerMessageOrInterpretation
+    && typeof playerMessageOrInterpretation === 'object'
+    && playerMessageOrInterpretation.target === 'self'
+    && interpretationFacet === 'preference'
+    && (item?.ownerType === 'npc' || item?.selfAttributed === true)
+    && matchedTokens >= 1
+    && coverage >= 0.5
+  );
   const claimable = queryTokens.length <= 1
     ? matchedTokens > 0
-    : coverage > 0.5 || matchedTokens >= 2 || broadLoreQuestion;
+    : coverage > 0.5 || matchedTokens >= 2 || broadLoreQuestion || selfPreferenceQuestion;
   return {
     matchedTokens,
     coverage: Number(coverage.toFixed(4)),
@@ -662,6 +721,13 @@ function selectClaimableKnowledgeEvidence(
     : [];
   const genericWorldLore = isGenericWorldLoreInterpretation(playerMessageOrInterpretation);
   const currentLocationQuestion = isExplicitCurrentLocationQuestion(options.playerMessage ?? '');
+  const relationPolicy = (
+    playerMessageOrInterpretation
+    && typeof playerMessageOrInterpretation === 'object'
+    && playerMessageOrInterpretation.relationPolicy
+  )
+    ? playerMessageOrInterpretation.relationPolicy
+    : undefined;
   const ranked = (Array.isArray(items) ? items : [])
     .map((item) => {
       const relevance = assessKnowledgeEvidenceRelevance(item, playerMessageOrInterpretation);
@@ -669,6 +735,7 @@ function selectClaimableKnowledgeEvidence(
         ? (genericWorldLore ? 0.42 : 0.28)
         : 0;
       const loreChunkBoost = genericWorldLore && item?.sourceType === 'lore_chunk' ? 0.08 : 0;
+      const relationWeight = relationDistanceWeight(item.relationDistance, relationPolicy);
       const repeatPenalty = recentReplyOverlapPenalty(
         item,
         recentNpcReplies,
@@ -677,13 +744,19 @@ function selectClaimableKnowledgeEvidence(
       return {
         item,
         relevance,
+        admissible: isRelationDistanceAdmissible(item.relationDistance, relationPolicy),
         priority: Number((
-          (relevance.coverage * 0.62)
-          + (relevance.matchedTokens * 0.14)
-          + ((item?.confidence ?? 0) * 0.22)
-          + loreChunkBoost
-          - currentLocationPenalty
-          - repeatPenalty
+          (
+            (relevance.coverage * 0.62)
+            + (relevance.matchedTokens * 0.14)
+            + ((item?.confidence ?? 0) * 0.22)
+            + loreChunkBoost
+            - currentLocationPenalty
+            - repeatPenalty
+          )
+          * relationWeight
+          + (item?.relationDistance === 'primary' ? 0.06 : 0)
+          + (item?.relationDistance === 'associated' ? 0.02 : 0)
         ).toFixed(4)),
       };
     })
@@ -693,30 +766,97 @@ function selectClaimableKnowledgeEvidence(
       || b.relevance.matchedTokens - a.relevance.matchedTokens
       || (b.item?.confidence ?? 0) - (a.item?.confidence ?? 0)
     ))
-    .filter((entry) => entry.relevance.claimable);
+    .filter((entry) => entry.relevance.claimable && entry.admissible);
 
-  if (currentLocationQuestion) {
-    const currentLocationEntries = ranked.filter((entry) => isCurrentLocationRoutineStateItem(entry.item));
-    if (currentLocationEntries.length > 0) {
-      return [
-        ...currentLocationEntries.map((entry) => entry.item),
-        ...ranked
-          .filter((entry) => !isCurrentLocationRoutineStateItem(entry.item))
-          .map((entry) => entry.item),
-      ];
+  if (ranked.length === 0) {
+    const associatedFallback = (Array.isArray(items) ? items : [])
+      .map((item) => {
+        const relevance = assessKnowledgeEvidenceRelevance(item, playerMessageOrInterpretation);
+        return {
+          item,
+          relevance,
+          priority: Number((
+            (relevance.coverage * 0.62)
+            + (relevance.matchedTokens * 0.14)
+            + ((item?.confidence ?? 0) * 0.22)
+          ).toFixed(4)),
+        };
+      })
+      .filter((entry) => (
+        entry.relevance.claimable
+        && entry.item?.relationDistance === 'associated'
+      ))
+      .sort((a, b) => (
+        b.priority - a.priority
+        || (b.item?.confidence ?? 0) - (a.item?.confidence ?? 0)
+      ));
+    if (associatedFallback.length > 0) {
+      return associatedFallback.map((entry) => entry.item);
     }
   }
 
-  if (!currentLocationQuestion) {
-    const hasNonLocationClaimable = ranked.some((entry) => !isCurrentLocationRoutineStateItem(entry.item));
-    if (hasNonLocationClaimable) {
-      return ranked
-        .filter((entry) => !isCurrentLocationRoutineStateItem(entry.item))
-        .map((entry) => entry.item);
-    }
+  const rankedItems = currentLocationQuestion
+    ? (() => {
+        const currentLocationEntries = ranked.filter((entry) => isCurrentLocationRoutineStateItem(entry.item));
+        if (currentLocationEntries.length === 0) return ranked;
+        return [
+          ...currentLocationEntries,
+          ...ranked.filter((entry) => !isCurrentLocationRoutineStateItem(entry.item)),
+        ];
+      })()
+    : (() => {
+        const hasNonLocationClaimable = ranked.some((entry) => !isCurrentLocationRoutineStateItem(entry.item));
+        if (!hasNonLocationClaimable) return ranked;
+        return ranked.filter((entry) => !isCurrentLocationRoutineStateItem(entry.item));
+      })();
+
+  if (!relationPolicy?.evidenceBudget) {
+    return rankedItems.map((entry) => entry.item);
   }
 
-  return ranked.map((entry) => entry.item);
+  const selected: EpistemicEvidenceItem[] = [];
+  let primaryCount = 0;
+  let associatedCount = 0;
+  const primaryPreferred = (relationPolicy.preferredRelationDistances[0] ?? 'primary') === 'primary';
+  const hasPrimaryCandidate = rankedItems.some((entry) => entry.item?.relationDistance === 'primary');
+  const primaryEntries = primaryPreferred
+    ? rankedItems.filter((entry) => entry.item?.relationDistance === 'primary')
+    : rankedItems;
+
+  for (const entry of primaryEntries) {
+    const distance = entry.item?.relationDistance;
+    if (distance === 'primary') {
+      if (primaryCount >= relationPolicy.evidenceBudget.maxPrimary) continue;
+      primaryCount += 1;
+      selected.push(entry.item);
+      continue;
+    }
+    if (primaryPreferred && hasPrimaryCandidate) {
+      continue;
+    }
+    if (distance === 'associated') {
+      if (associatedCount >= relationPolicy.evidenceBudget.maxAssociated) continue;
+      associatedCount += 1;
+      selected.push(entry.item);
+      continue;
+    }
+    if (!distance) {
+      selected.push(entry.item);
+    }
+  }
+  for (const entry of rankedItems) {
+    const distance = entry.item?.relationDistance;
+    if (distance !== 'associated') continue;
+    if (associatedCount >= relationPolicy.evidenceBudget.maxAssociated) break;
+    if (selected.some((item) => item.evidenceId === entry.item.evidenceId)) continue;
+    associatedCount += 1;
+    selected.push(entry.item);
+  }
+  if (selected.length > 0) {
+    return selected;
+  }
+
+  return rankedItems.map((entry) => entry.item);
 }
 
 function pickPrimaryEvidenceForMode(
@@ -912,7 +1052,7 @@ export function createEvidenceFirstTurnPlanV2(
       text: item?.sourceType === 'self_profile'
         ? formatSelfProfileClaimText(item, { npcName }, playerMessage)
         : ((queryType === 'self_query' || routing?.intent === 'identity_self') && item?.ownerType === 'npc')
-          ? formatNpcSelfKnowledgeClaimText(item, { npcName })
+          ? formatNpcSelfKnowledgeClaimText(item, { npcName }, routing?.interpretation?.facet ?? 'unknown')
         : normalizedText,
       evidenceIds: [item.evidenceId],
       evidenceItems,
@@ -1268,7 +1408,7 @@ export function runEvidenceFirstPipeline(
   const enrichedPack = enrichEvidencePackWithEpistemics(evidencePack, beatContract);
 
   // Step 4: Create evidence-first turn plan
-  const { plan } = createEvidenceFirstTurnPlanV2({
+  const { plan, plannerMeta } = createEvidenceFirstTurnPlanV2({
     npcId: snapshot.npcId,
     npcName: snapshot.npcName,
     playerMessage,
@@ -1281,6 +1421,19 @@ export function runEvidenceFirstPipeline(
     beatContract,
     initiativePolicy,
   });
+  diagnostics.subjectSelection = {
+    primaryReferent: normalizedRouting.interpretation?.primaryReferent,
+    relationPolicy: normalizedRouting.interpretation?.relationPolicy,
+    selectedEvidence: plannerMeta.selectedEvidence.slice(0, 4).map((item) => ({
+      evidenceId: item.evidenceId,
+      sourceId: item.sourceId,
+      relationDistance: item.relationDistance,
+      relationReason: item.relationReason,
+      subjectId: item.subjectId,
+      subjectKind: item.subjectKind,
+      score: Number(item.confidence.toFixed(4)),
+    })),
+  };
 
   // Step 5: Validate and repair plan
   const validated = validateAndRepairTurnPlanV2({
@@ -1300,6 +1453,13 @@ export function runEvidenceFirstPipeline(
     acceptable: validated.acceptable,
     errors: validated.errors,
   };
+  diagnostics.subjectSelection.selectedClaims = validated.plan.claims.slice(0, 4).map((claim) => ({
+    claimId: claim.claimId,
+    relationDistance: claim.relationDistance,
+    relationReason: claim.relationReason,
+    subjectId: claim.relationSubjectId,
+    subjectKind: claim.relationSubjectKind,
+  }));
 
   // Step 6: Realize the plan deterministically
   const realized = realizeDeterministicPlan(validated.plan, snapshot, enrichedPack, adaptationContext ?? null);

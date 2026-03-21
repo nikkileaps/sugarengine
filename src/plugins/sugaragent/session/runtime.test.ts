@@ -1360,4 +1360,194 @@ describe('session runtime social fast path', () => {
     expect(result.output.utterance).toContain('Cheese Shop');
     expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
   });
+
+  it('keeps self job retrieval focused on the npc even with unrelated ambient Earendale neighbors', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.entities.npcs.rick-roll#rick-roll',
+        pageId: 'lore.entities.npcs.rick-roll',
+        title: 'Rick Roll',
+        sectionHeading: 'Overview',
+        summary: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station.',
+        content: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+        tokens: ['rick', 'roll', 'owns', 'cheese', 'shop', 'station'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.rick-roll',
+          title: 'Rick Roll',
+          canon_level: 'hard',
+          entity_ids: ['npc.rick-roll'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['earendale', 'rick', 'cheese', 'shop'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.entities.npcs.bippity-roo#bippity-roo',
+        pageId: 'lore.entities.npcs.bippity-roo',
+        title: 'Bippity Roo',
+        sectionHeading: 'Overview',
+        summary: 'Bippity Roo lives in Earendale.',
+        content: 'Bippity Roo lives in Earendale.',
+        tokens: ['bippity', 'roo', 'lives', 'earendale'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.bippity-roo',
+          title: 'Bippity Roo',
+          canon_level: 'hard',
+          entity_ids: ['npc.bippity-roo'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['earendale', 'bippity'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.entities.npcs.bippity-roo#notes',
+        pageId: 'lore.entities.npcs.bippity-roo',
+        title: 'Bippity Roo',
+        sectionHeading: 'Notes',
+        summary: "His wife's name is Janet Roo.",
+        content: "His wife's name is Janet Roo.",
+        tokens: ['wife', 'janet', 'roo'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.bippity-roo',
+          title: 'Bippity Roo',
+          canon_level: 'hard',
+          entity_ids: ['npc.bippity-roo'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['earendale', 'janet'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.locations.towns.town.earendale#earendale',
+        pageId: 'lore.locations.towns.town.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Overview',
+        summary: 'Earendale is a town on a floating chunk of land.',
+        content: 'Earendale is a town on a floating chunk of land.',
+        tokens: ['earendale', 'town', 'floating', 'land'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.towns.town.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'town'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('self-job-ambient-neighbors');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('What is your job?', {
+      npcName: 'Ricky Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+    });
+
+    expect(result.routing.intent).toBe('identity_self');
+    expect(result.output.utterance).toContain('Cheese Shop');
+    expect(result.output.utterance.toLowerCase()).not.toContain("don't know");
+    expect(result.pipeline.retrieval?.qualityGatePassed).toBe(true);
+  });
+
+  it('answers self preference questions from self lore instead of falling back to uncertainty', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.entities.npcs.rick-roll#rick-roll',
+        pageId: 'lore.entities.npcs.rick-roll',
+        title: 'Rick Roll',
+        sectionHeading: 'Overview',
+        summary: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station.',
+        content: 'Rick Roll owns a Cheese Shop in Wordlark Hollow Station. He loves cheese.',
+        tokens: ['rick', 'roll', 'owns', 'cheese', 'shop', 'loves'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.rick-roll',
+          title: 'Rick Roll',
+          canon_level: 'hard',
+          entity_ids: ['npc.rick-roll'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['earendale', 'rick', 'cheese', 'shop'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.entities.npcs.bippity-roo#bippity-roo',
+        pageId: 'lore.entities.npcs.bippity-roo',
+        title: 'Bippity Roo',
+        sectionHeading: 'Overview',
+        summary: 'Bippity Roo lives in Earendale.',
+        content: 'Bippity Roo lives in Earendale.',
+        tokens: ['bippity', 'roo', 'lives', 'earendale'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.entities.npcs.bippity-roo',
+          title: 'Bippity Roo',
+          canon_level: 'hard',
+          entity_ids: ['npc.bippity-roo'],
+          location_ids: [],
+          faction_ids: [],
+          tags: ['earendale', 'bippity'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('self-preference-cheese');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+    });
+
+    const result = await session.runTurn('Do you like cheese?', {
+      npcName: 'Ricky Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'full_support',
+        },
+      },
+    });
+
+    expect(result.routing.intent).toBe('identity_self');
+    expect(result.output.utterance.toLowerCase()).toContain('cheese');
+    expect(result.output.utterance.toLowerCase()).not.toContain('no lo se');
+    expect(result.pipeline.retrieval?.qualityGatePassed).toBe(true);
+  });
 });

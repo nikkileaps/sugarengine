@@ -36,6 +36,56 @@ export type DisclosurePolicy = 'volunteer_ok' | 'answer_only' | 'never';
 
 export type ClaimMode = 'grounded' | 'inferred' | 'rumor';
 export type RequiredHedge = 'none' | 'soft' | 'strong';
+export type SubjectReferentKind = 'location' | 'npc' | 'faction' | 'object' | 'unknown';
+export type SubjectRelationDistance = 'primary' | 'associated' | 'incidental';
+export type RetrievalRing = 'direct' | 'associated' | 'ambient';
+export type RetrievalRingReason =
+  | 'exact_self_entity'
+  | 'explicit_self_scope'
+  | 'direct_subject_match'
+  | 'direct_page_match'
+  | 'direct_location_match'
+  | 'explicit_association'
+  | 'relation_scope'
+  | 'semantic_neighbor'
+  | 'tag_neighbor'
+  | 'ambient_scope'
+  | 'unknown';
+export type SubjectRelationReason =
+  | 'direct_id_match'
+  | 'direct_page_match'
+  | 'direct_location_match'
+  | 'associated_entity_relation'
+  | 'associated_location_relation'
+  | 'mention_only'
+  | 'tag_only'
+  | 'unknown';
+
+export interface ResolvedPrimaryReferent {
+  id?: string;
+  text: string;
+  kind: SubjectReferentKind;
+  confidence: number;
+}
+
+export interface SubjectRelationPolicy {
+  facet: QueryFacet;
+  preferredRelationDistances: Array<'primary' | 'associated'>;
+  incidentalAllowed: boolean;
+  associatedFallbackAllowed: boolean;
+  evidenceBudget?: {
+    maxPrimary: number;
+    maxAssociated: number;
+  };
+}
+
+export interface SubjectRelevanceAnnotation {
+  subjectId?: string;
+  subjectKind?: SubjectReferentKind;
+  relationDistance: SubjectRelationDistance;
+  relationStrength: number;
+  reason: SubjectRelationReason;
+}
 
 export interface PlannedClaim {
   claimId: string;
@@ -47,6 +97,11 @@ export interface PlannedClaim {
   confidence: number;
   requiredHedge: RequiredHedge;
   maxSpecificity: 'exact' | 'bounded' | 'coarse';
+  relationDistance?: SubjectRelationDistance;
+  relationStrength?: number;
+  relationReason?: SubjectRelationReason;
+  relationSubjectId?: string;
+  relationSubjectKind?: SubjectReferentKind;
 }
 
 export interface PlannedSocialAct {
@@ -176,6 +231,8 @@ export interface QueryInterpretation {
   confidence: number;
   margin: number;
   ambiguous: boolean;
+  primaryReferent?: ResolvedPrimaryReferent;
+  relationPolicy?: SubjectRelationPolicy;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,12 +271,25 @@ export interface EpistemicEvidenceItem {
   verificationStatus: string;
   provenance?: Record<string, unknown>;
   entityIds: string[];
+  locationIds?: string[];
+  factionIds?: string[];
+  pageId?: string;
+  pageTitle?: string;
+  sectionHeading?: string;
+  tags?: string[];
   anchorTerms?: string[];
   selfAttributed: boolean;
   confidence: number;
   lexicalScore?: number;
   vectorScore?: number;
   rerankScore?: number;
+  retrievalRing?: RetrievalRing;
+  retrievalRingReason?: RetrievalRingReason;
+  subjectId?: string;
+  subjectKind?: SubjectReferentKind;
+  relationDistance?: SubjectRelationDistance;
+  relationStrength?: number;
+  relationReason?: SubjectRelationReason;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +428,26 @@ export interface EvidenceFirstPipelineDiagnostics {
   pipelineVersion: 'evidence_first_v1';
   turnPath: TurnPath;
   riskSignals: TurnRiskSignals;
+  subjectSelection?: {
+    primaryReferent?: ResolvedPrimaryReferent;
+    relationPolicy?: SubjectRelationPolicy;
+    selectedEvidence?: Array<{
+      evidenceId: string;
+      sourceId: string;
+      relationDistance?: SubjectRelationDistance;
+      relationReason?: SubjectRelationReason;
+      subjectId?: string;
+      subjectKind?: SubjectReferentKind;
+      score?: number;
+    }>;
+    selectedClaims?: Array<{
+      claimId: string;
+      relationDistance?: SubjectRelationDistance;
+      relationReason?: SubjectRelationReason;
+      subjectId?: string;
+      subjectKind?: SubjectReferentKind;
+    }>;
+  };
   pathDecision?: {
     semanticSocialProtected: boolean;
     heuristicFallbackUsed: boolean;

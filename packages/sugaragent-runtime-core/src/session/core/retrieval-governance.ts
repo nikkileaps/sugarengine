@@ -13,6 +13,12 @@ import {
   expandFacetQueryTokenVariants,
   extractFacetQueryTokens,
 } from './knowledge-query.js';
+import {
+  annotateEvidenceSubjectRelevance,
+  isRelationDistanceAdmissible,
+  relationDistanceWeight,
+} from './subject-relevance.js';
+import type { QueryInterpretation } from './turn-contracts.js';
 
 export type ConversationMode = 'character' | 'narrative' | 'hybrid';
 export type RerankBudgetTier = 'low' | 'standard' | 'high';
@@ -128,11 +134,19 @@ interface EvidenceEntryLike {
   sourceId?: unknown;
   sourceType?: unknown;
   text?: unknown;
+  retrievalRing?: unknown;
+  retrievalRingReason?: unknown;
   factId?: unknown;
   chunkId?: unknown;
+  pageId?: unknown;
+  pageTitle?: unknown;
+  sectionHeading?: unknown;
   verificationStatus?: unknown;
   provenance?: unknown;
   entityIds?: unknown;
+  locationIds?: unknown;
+  factionIds?: unknown;
+  tags?: unknown;
   anchorTerms?: unknown;
   selfAttributed?: unknown;
 }
@@ -145,12 +159,25 @@ interface EvidenceItem {
   text: string;
   factId?: string;
   chunkId?: string;
+  pageId?: string;
+  pageTitle?: string;
+  sectionHeading?: string;
   verificationStatus: string;
   provenance?: RecordLike;
   entityIds: string[];
+  locationIds: string[];
+  factionIds: string[];
+  tags?: string[];
   anchorTerms?: string[];
   selfAttributed: boolean;
   confidence: number;
+  retrievalRing?: 'direct' | 'associated' | 'ambient';
+  retrievalRingReason?: string;
+  subjectId?: string;
+  subjectKind?: 'location' | 'npc' | 'faction' | 'object' | 'unknown';
+  relationDistance?: 'primary' | 'associated' | 'incidental';
+  relationStrength?: number;
+  relationReason?: 'direct_id_match' | 'direct_page_match' | 'direct_location_match' | 'associated_entity_relation' | 'associated_location_relation' | 'mention_only' | 'tag_only' | 'unknown';
 }
 
 interface RankEvidenceForBudgetInput {
@@ -171,7 +198,7 @@ interface BuildEvidencePackInput {
   mode: unknown;
   playerMessage: unknown;
   queryType: unknown;
-  routing: { intent?: unknown; policyPath?: unknown } | null | undefined;
+  routing: { intent?: unknown; policyPath?: unknown; interpretation?: unknown } | null | undefined;
   selfEntityId: unknown;
   npcId: unknown;
 }
@@ -1009,6 +1036,7 @@ export function buildEvidencePack(input: BuildEvidencePackInput): {
   queryType: QueryType;
   routingIntent: RoutingIntent | 'unclear';
   policyPath: string;
+  interpretation?: QueryInterpretation;
   items: EvidenceItem[];
   ownerCounts: Record<string, number>;
   sourceTypeCounts: Record<string, number>;
@@ -1047,6 +1075,9 @@ export function buildEvidencePack(input: BuildEvidencePackInput): {
 
   const items: EvidenceItem[] = [];
   const evidenceIdToItem = new Map<string, EvidenceItem>();
+  const interpretation = isRecord(input.routing?.interpretation)
+    ? input.routing?.interpretation as unknown as QueryInterpretation
+    : undefined;
   for (const entry of Array.isArray(input.evidenceEntries) ? input.evidenceEntries : []) {
     if (!isRecord(entry)) continue;
     const typedEntry = entry as EvidenceEntryLike;
@@ -1072,17 +1103,53 @@ export function buildEvidencePack(input: BuildEvidencePackInput): {
       text,
       factId: normalizeOptionalString(typedEntry.factId),
       chunkId: normalizeOptionalString(typedEntry.chunkId),
+      pageId: normalizeOptionalString(typedEntry.pageId),
+      pageTitle: normalizeOptionalString(typedEntry.pageTitle),
+      sectionHeading: normalizeOptionalString(typedEntry.sectionHeading),
       verificationStatus: normalizeOptionalString(typedEntry.verificationStatus) ?? 'available',
       provenance: isRecord(typedEntry.provenance) ? typedEntry.provenance : undefined,
       entityIds: Array.isArray(typedEntry.entityIds)
         ? typedEntry.entityIds.filter((value): value is string => typeof value === 'string')
+        : [],
+      locationIds: Array.isArray(typedEntry.locationIds)
+        ? typedEntry.locationIds.filter((value): value is string => typeof value === 'string')
+        : [],
+      factionIds: Array.isArray(typedEntry.factionIds)
+        ? typedEntry.factionIds.filter((value): value is string => typeof value === 'string')
+        : [],
+      tags: Array.isArray(typedEntry.tags)
+        ? typedEntry.tags.filter((value): value is string => typeof value === 'string')
         : [],
       anchorTerms: Array.isArray(typedEntry.anchorTerms)
         ? typedEntry.anchorTerms.filter((value): value is string => typeof value === 'string')
         : [],
       selfAttributed: typedEntry.selfAttributed === true,
       confidence: Number(confidence.toFixed(4)),
+      retrievalRing: (
+        typedEntry.retrievalRing === 'direct'
+        || typedEntry.retrievalRing === 'associated'
+        || typedEntry.retrievalRing === 'ambient'
+      )
+        ? typedEntry.retrievalRing
+        : undefined,
+      retrievalRingReason: normalizeOptionalString(typedEntry.retrievalRingReason),
     };
+    const subjectRelevance = annotateEvidenceSubjectRelevance(evidenceItem, interpretation);
+    if (!evidenceItem.retrievalRing && subjectRelevance) {
+      evidenceItem.retrievalRing = subjectRelevance.relationDistance === 'primary'
+        ? 'direct'
+        : subjectRelevance.relationDistance === 'associated'
+          ? 'associated'
+          : 'ambient';
+      evidenceItem.retrievalRingReason = subjectRelevance.reason;
+    }
+    if (subjectRelevance) {
+      evidenceItem.subjectId = subjectRelevance.subjectId;
+      evidenceItem.subjectKind = subjectRelevance.subjectKind;
+      evidenceItem.relationDistance = subjectRelevance.relationDistance;
+      evidenceItem.relationStrength = subjectRelevance.relationStrength;
+      evidenceItem.relationReason = subjectRelevance.reason;
+    }
     items.push(evidenceItem);
   }
 
@@ -1115,6 +1182,7 @@ export function buildEvidencePack(input: BuildEvidencePackInput): {
     queryType: normalizeQueryType(input.queryType),
     routingIntent: normalizeRoutingIntent(input.routing?.intent),
     policyPath: normalizeOptionalString(input.routing?.policyPath) ?? 'safe_chat',
+    ...(interpretation ? { interpretation } : {}),
     items: budgetedItems,
     ownerCounts,
     sourceTypeCounts,
@@ -1161,6 +1229,10 @@ export function pickEvidenceForIntent(
   const items = isRecord(evidencePack) && Array.isArray(evidencePack.items)
     ? evidencePack.items
     : [];
+  const interpretation = isRecord(evidencePack) && isRecord(evidencePack.interpretation)
+    ? evidencePack.interpretation as unknown as QueryInterpretation
+    : undefined;
+  const relationPolicy = interpretation?.relationPolicy;
   const normalizedIntent = normalizeRoutingIntent(intent);
   const normalizedQueryType = normalizeQueryType(queryType);
   const normalizedSelfEntityId = normalizeOptionalString(selfEntityId)?.toLowerCase();
@@ -1197,10 +1269,15 @@ export function pickEvidenceForIntent(
     return true;
   });
 
-  return filtered
+  const relationAwareFiltered = filtered.filter((item) => isRelationDistanceAdmissible(item.relationDistance, relationPolicy));
+
+  return relationAwareFiltered
     .map((item) => {
       const overlap = lexicalOverlapScore(playerMessage, item.text);
-      const score = (overlap * 0.68) + (item.confidence * 0.32);
+      const score = (
+        ((overlap * 0.68) + (item.confidence * 0.32))
+        * relationDistanceWeight(item.relationDistance, relationPolicy)
+      );
       return {
         item,
         overlap: Number(overlap.toFixed(4)),
