@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   createEvidenceFirstTurnPlanV2,
-  runEvidenceFirstPipeline,
   validateAndRepairTurnPlanV2,
-} from './evidence-first-pipeline.js';
+} from './plan/planning.js';
+import {
+  buildDeterministicSocialReply,
+} from './turn-realization.js';
 import { buildEvidencePreview, interpretQuery } from './query-interpretation.js';
 
 describe('evidence-first pipeline planning', () => {
@@ -140,30 +142,18 @@ describe('evidence-first pipeline planning', () => {
   });
 
   it('uses direct social replies for introductions instead of placeholder chat', () => {
-    const result = runEvidenceFirstPipeline({
-      playerMessage: "I'm Mim.",
-      routing: {
-        intent: 'social_chat',
-        confidence: 0.94,
-        margin: 0.5,
-        candidateScores: [],
-        policyPath: 'chat',
-      },
-      snapshot: {
+    const result = buildDeterministicSocialReply(
+      "I'm Mim.",
+      {
         npcId: 'npc_rick',
         npcName: 'Rick Cheese Roll',
         mode: 'character',
       },
-      evidencePack: { items: [], evidenceIdToItem: new Map() },
-      initiativePolicy: {
-        decision: {
-          action: 'player_respond',
-        },
-      },
-      beatContract: null,
-    });
+      null,
+      [],
+    );
 
-    expect(result.output.utterance).toBe("Nice to meet you, Mim. I'm Rick Cheese Roll.");
+    expect(result.utterance).toBe("Nice to meet you, Mim. I'm Rick Cheese Roll.");
   });
 
   it('normalizes self-profile evidence into a direct name answer', () => {

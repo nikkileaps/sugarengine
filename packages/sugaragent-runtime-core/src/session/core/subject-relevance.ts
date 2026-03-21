@@ -159,6 +159,21 @@ function pushCandidate(
 function buildCandidatePool(input: ResolvePrimaryReferentInput): SubjectCandidate[] {
   const pool = new Map<string, SubjectCandidate>();
 
+  const selfEntityId = normalizeOptionalString(input.selfEntityId ?? undefined);
+  if (input.interpretation.target === 'self' && selfEntityId) {
+    const selfAliases = aliasesFromId(selfEntityId);
+    const selfText = selfAliases[1] ?? selfAliases[0] ?? selfEntityId;
+    pushCandidate(pool, {
+      id: selfEntityId,
+      text: selfText,
+      kind: 'npc',
+      confidence: 0.98,
+      sourceBoost: 0.56,
+      salience: 0.12,
+      aliases: dedupeStrings([selfText, ...selfAliases]),
+    });
+  }
+
   for (const referent of Array.isArray(input.interpretation.referents) ? input.interpretation.referents : []) {
     if (!referent || typeof referent.text !== 'string') continue;
     const kind = mapReferentKind(referent.kind, referent.id);
@@ -244,6 +259,12 @@ function computeTargetCompatibility(
 }
 
 function computeFacetCompatibility(interpretation: QueryInterpretation, candidate: SubjectCandidate): number {
+  if (interpretation.facet === 'occupation' || interpretation.facet === 'current_activity') {
+    return candidate.kind === 'npc' ? 0.94 : candidate.kind === 'unknown' ? 0.18 : 0.12;
+  }
+  if (interpretation.facet === 'preference') {
+    return candidate.kind === 'npc' ? 0.9 : candidate.kind === 'unknown' ? 0.2 : 0.12;
+  }
   if (interpretation.facet === 'location') {
     return candidate.kind === 'location' ? 1 : candidate.kind === 'unknown' ? 0.38 : 0.14;
   }
@@ -257,6 +278,14 @@ function computeFacetCompatibility(interpretation: QueryInterpretation, candidat
     return candidate.kind === 'location' || candidate.kind === 'faction' ? 0.72 : candidate.kind === 'unknown' ? 0.42 : 0.28;
   }
   return 0.34;
+}
+
+function isExactSelfCandidate(candidate: SubjectCandidate, selfEntityId: string | undefined): boolean {
+  return Boolean(
+    candidate.id
+    && selfEntityId
+    && normalizeLookupText(candidate.id) === normalizeLookupText(selfEntityId),
+  );
 }
 
 function computeLexicalFit(focusTokens: string[], candidate: SubjectCandidate): number {
@@ -332,6 +361,12 @@ export async function resolvePrimaryReferent(
       const targetCompatibility = computeTargetCompatibility(input.interpretation, candidate, selfEntityId);
       const facetCompatibility = computeFacetCompatibility(input.interpretation, candidate);
       const semanticFit = semanticScores.get(buildCandidateKey(candidate)) ?? 0;
+      const exactSelfBonus = (
+        input.interpretation.target === 'self'
+        && isExactSelfCandidate(candidate, selfEntityId)
+      )
+        ? 1.35
+        : 0;
       const score = (
         (candidate.confidence * 1.35)
         + (lexicalFit * 1.8)
@@ -340,6 +375,7 @@ export async function resolvePrimaryReferent(
         + (candidate.sourceBoost * 0.5)
         + (candidate.salience * 0.28)
         + (semanticFit * 0.35)
+        + exactSelfBonus
       );
       return {
         candidate,

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Implemented.
 
 Depends on:
 
@@ -80,8 +80,10 @@ Create one canonical retrieve-stage boundary with:
 4. The new stage boundary must preserve one-way dependencies:
    - `Interpret -> Retrieve -> Plan`
 5. `Plan` must consume retrieve outputs, not reconstruct retrieval decisions itself.
-6. This refactor must not change behavior by default; it is primarily a structural clarification and relocation.
-7. Ring-based retrieval from Plan 008 must have a natural home inside this stage.
+6. Stages may consume prior-stage output objects and neutral shared support modules, but must not import another stage's internal helpers.
+7. The lifecycle remains a globally linear pipeline rather than a graph or state machine.
+8. This refactor must not change behavior by default; it is primarily a structural clarification and relocation.
+9. Ring-based retrieval from Plan 008 must have a natural home inside this stage.
 
 ## Intended Directory Shape
 
@@ -126,7 +128,8 @@ The important point is:
 
 1. there is one named retrieve-stage entry point,
 2. it is the only thing `runtime.ts` calls for retrieval,
-3. it owns the retrieve-stage choreography.
+3. it owns the retrieve-stage choreography,
+4. downstream stages consume retrieve-stage outputs rather than reaching into retrieve-internal helpers.
 
 ## Retrieve Stage Responsibilities
 
@@ -197,7 +200,8 @@ That is the key architectural win:
 
 1. Retrieve produces one bounded result,
 2. Plan consumes it,
-3. the lifecycle handoff is explicit in code.
+3. the lifecycle handoff is explicit in code,
+4. no downstream stage needs retrieve-internal helper imports to do its work.
 
 ## Refactor Strategy
 
@@ -284,7 +288,8 @@ There must be one canonical stage boundary.
 4. The retrieve stage returns one bounded handoff object for planning.
 5. Ring-based retrieval from Plan 008 lives under the retrieve-stage boundary.
 6. The lifecycle `Interpret -> Retrieve -> Plan -> Generate -> Audit -> Repair` is visible in the runtime orchestration code.
-7. Retrieval behavior remains unchanged except for changes intentionally introduced by Plan 008.
+7. No stage imports retrieve-internal helper modules directly; downstream stages consume retrieve-stage outputs instead.
+8. Retrieval behavior remains unchanged except for changes intentionally introduced by Plan 008.
 
 ## Non-Goals
 
@@ -292,4 +297,3 @@ There must be one canonical stage boundary.
 2. No new online LLM pass.
 3. No change to plugin/browser transport boundaries.
 4. No item/object referent work in this plan.
-

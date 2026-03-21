@@ -19,13 +19,8 @@ import type {
   ResolvedSugarAgentGenerationConfig,
 } from '../runtime/generation-config.js';
 import {
-  collectLoreEntityRouteMatches,
   isKnowledgeSeekingQueryType,
-  refineRouteWithLoreEntityMentions,
   routeIntentToQueryType,
-  routeTurnIntentFromInterpretation,
-  routeIntentUsesLore,
-  routeTurnIntent,
 } from './core/routing.js';
 import {
   applyTurnToSession,
@@ -38,9 +33,6 @@ import {
   loadSessionState,
   MAX_HISTORY_ENTRIES,
 } from './core/session-state.js';
-import {
-  buildGroundingEvidenceEntries,
-} from './core/grounding/evidence.js';
 import {
   REPLY_PARTS_JSON_SCHEMA,
   buildReplyPartsPrompt,
@@ -77,12 +69,8 @@ import {
   validateReplyAgainstDeliveryContract,
 } from './core/delivery-contract.js';
 import {
-  runEvidenceFirstPipeline,
   buildNpcStateSnapshot,
-  enrichEvidencePackWithEpistemics,
-  hasDirectAnswerableStateEvidence,
-  isEvidenceItemRelevantForTurn,
-} from './core/evidence-first-pipeline.js';
+} from './core/snapshot.js';
 import {
   buildSugarlangLanguageAdaptationContext,
   estimateTextLanguage,
@@ -90,32 +78,22 @@ import {
   resolveLanguageAdaptationContext,
 } from './core/language-adaptation.js';
 import {
-  buildEvidencePreview,
-  enhanceInterpretationWithFacetSimilarity,
-} from './core/query-interpretation.js';
+  runInterpretStage,
+} from './core/interpret/index.js';
 import {
-  attachSubjectSelectionToInterpretation,
-} from './core/subject-relevance.js';
+  runRetrieveStage,
+} from './core/retrieve/index.js';
 import {
-  runGovernedLoreRetrieval,
-} from './core/retrieval-pipeline.js';
+  runPlanStage,
+} from './core/plan/index.js';
 import {
-  buildEvidencePack,
-  resolveConversationMode,
-} from './core/retrieval-governance.js';
-import {
-  resolveInitiativePolicy,
-} from './core/initiative.js';
-import {
-  hasLikelyQuestionForm,
-} from './core/routing.js';
+  buildDeterministicSocialReply,
+  realizeDeterministicPlan,
+} from './core/turn-realization.js';
 import {
   isLikelySmallTalkQuery,
   isProtectedShortSocialTurn,
 } from './core/social-cues.js';
-import {
-  computeNoveltyState,
-} from './core/turn-planning.js';
 import {
   extractNpcCommitments,
   filterMemoryWrites,
@@ -129,6 +107,9 @@ import {
   detectSocialAcknowledgement,
   isLikelyLightweightLocationPrompt,
 } from './core/social-cues.js';
+import {
+  verifyRealizationAgainstPlan,
+} from './core/semantic/verification.js';
 import {
   checkSocialResponseForFactualLeakage,
 } from './core/turn-path-routing.js';
@@ -759,22 +740,6 @@ function buildTurnReferentCandidates(input: {
   }
 
   return [...deduped.values()].slice(0, 8);
-}
-
-function computeEvidenceBackedRetrievalConfidence(input: RecordLike | null | undefined): number {
-  const queryType = input?.queryType;
-  const routeIntent = input?.routeIntent;
-  const retrievalMatches = Array.isArray(input?.retrievalMatches) ? input.retrievalMatches : [];
-  const evidenceItems = Array.isArray(input?.evidenceItems) ? input.evidenceItems : [];
-
-  if (retrievalMatches.length > 0) return 0.7;
-
-  const npcEvidenceCount = evidenceItems.filter((item) => item?.ownerType === 'npc' || item?.ownerType === 'beat').length;
-  if ((queryType === 'self_query' || routeIntent === 'identity_self') && npcEvidenceCount > 0) {
-    return 0.76;
-  }
-  if (evidenceItems.length > 0) return 0.42;
-  return 0.1;
 }
 
 function parseReplyPartsTurnFromText(text: unknown) {
@@ -3033,26 +2998,6 @@ function createEchoReply(message: string): SugarAgentTurnOutput {
   };
 }
 
-function didSemanticInterpretationChange(
-  baseRouting: RoutingResult,
-  enhancedRouting: RoutingResult,
-): boolean {
-  const baseInterpretation = isRecord(baseRouting?.interpretation) ? baseRouting.interpretation : null;
-  const enhancedInterpretation = isRecord(enhancedRouting?.interpretation) ? enhancedRouting.interpretation : null;
-  if ((baseRouting?.intent ?? 'unclear') !== (enhancedRouting?.intent ?? 'unclear')) {
-    return true;
-  }
-  if (!baseInterpretation || !enhancedInterpretation) {
-    return false;
-  }
-  return (
-    normalizeOptionalString(baseInterpretation.lane) !== normalizeOptionalString(enhancedInterpretation.lane)
-    || normalizeOptionalString(baseInterpretation.target) !== normalizeOptionalString(enhancedInterpretation.target)
-    || normalizeOptionalString(baseInterpretation.facet) !== normalizeOptionalString(enhancedInterpretation.facet)
-    || normalizeOptionalString(baseInterpretation.timeframe) !== normalizeOptionalString(enhancedInterpretation.timeframe)
-  );
-}
-
 export async function createSugarAgentSession(options: RecordLike = {}): Promise<SugarAgentSessionRuntime> {
   const args = normalizeSessionOptions(options);
   const sessionId = normalizeOptionalString(args.session) ?? `preview-default-${args.npc}`;
@@ -3165,100 +3110,26 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
       );
       const targetLanguage = normalizeOptionalString(getPedagogyContext(turnContext)?.targetLanguage);
 
-      const loreEntityHints = collectLoreEntityRouteMatches(message, loreArtifacts);
-      let semanticDiagnostics = {
-        exemplarEnabled: true,
-        exemplarAttempted: false,
-        exemplarChanged: false,
-        degradedReason: undefined as string | undefined,
-      };
-      const interpretationPreview = buildEvidencePreview({
-        selfEntityId: npcProfile?.selfEntityId,
-        regionName: normalizeOptionalString(turnContext?.regionName),
-        regionPath: normalizeOptionalString(turnContext?.regionPath),
-        currentActivity: normalizeOptionalString(turnContext?.currentActivity),
-        currentGoal: normalizeOptionalString(turnContext?.currentGoal),
-        activeTopic: topicCoverageContext?.activeTopic ?? undefined,
-        recentReferents: recentReferentPreview,
-        loreScopes: normalizeStringArray(npcProfile?.loreScopes),
-        selfLoreScopes: normalizeStringArray(npcProfile?.selfLoreScopes),
-        relatedLoreScopes: normalizeStringArray(npcProfile?.relatedLoreScopes),
-        entityIds: loreEntityHints
-          .filter((entry) => entry.filterKind === 'entityIds')
-          .map((entry) => entry.entityId),
-        locationIds: loreEntityHints
-          .filter((entry) => entry.filterKind === 'locationIds')
-          .map((entry) => entry.entityId),
-        tagHints: loreEntityHints.map((entry) => entry.matchedText),
-      });
-      const baseRouting = routeTurnIntent(message, npcName, {
+      const interpretStage = await runInterpretStage({
+        playerMessage: message,
+        npcName,
         targetLanguage,
         history,
-        scene: {
-          regionName: normalizeOptionalString(turnContext?.regionName),
-          regionPath: normalizeOptionalString(turnContext?.regionPath),
-          currentActivity: normalizeOptionalString(turnContext?.currentActivity),
-          currentGoal: normalizeOptionalString(turnContext?.currentGoal),
-        },
-        loreEntityHints,
-        evidencePreview: interpretationPreview,
-      });
-      let embeddingDegradedReason: string | null = null;
-      let interpretedRouting = baseRouting;
-      // Phase B closed with exemplar-assisted interpretation as the default
-      // semantic path. Degraded lexical-only scoring is fallback behavior only
-      // when embeddings fail or are unavailable; it is not an alternate main
-      // path and should stay observable in logs/diagnostics.
-      if (baseRouting.interpretation) {
-        semanticDiagnostics.exemplarAttempted = true;
-        try {
-          const enhancedRouting = routeTurnIntentFromInterpretation(
-            message,
-            await enhanceInterpretationWithFacetSimilarity({
-              interpretation: baseRouting.interpretation,
-              embedTexts: (texts) => runtime.embed(texts),
-            }),
-            {
-              targetLanguage,
-              explicitLoreMatchCount: loreEntityHints.length,
-            },
-          );
-          semanticDiagnostics.exemplarChanged = didSemanticInterpretationChange(baseRouting, enhancedRouting);
-          interpretedRouting = enhancedRouting;
-        } catch (error) {
-          embeddingDegradedReason = error instanceof Error ? error.message : String(error);
-          semanticDiagnostics.degradedReason = embeddingDegradedReason;
-        }
-      }
-      const routingRefinement = refineRouteWithLoreEntityMentions({
-        route: interpretedRouting,
-        playerMessage: message,
+        turnContext,
+        topicCoverageContext,
+        recentReferentPreview,
+        npcProfile,
         loreArtifacts,
+        embedTexts: runtime.embed.bind(runtime),
       });
-      let resolvedRouting = routingRefinement.route;
-      if (resolvedRouting.interpretation) {
-        resolvedRouting = {
-          ...resolvedRouting,
-          interpretation: await attachSubjectSelectionToInterpretation({
-            interpretation: resolvedRouting.interpretation,
-            playerMessage: message,
-            routeMatches: routingRefinement.matches,
-            recentReferents: recentReferentPreview,
-            selfEntityId: npcProfile?.selfEntityId,
-            embedTexts: runtime.embed.bind(runtime),
-          }),
-        };
-      }
-      const queryType: QueryType = (() => {
-        const explicit = normalizeOptionalString(turnContext.queryType);
-        return explicit === 'conversation'
-          || explicit === 'self_query'
-          || explicit === 'other_query'
-          || explicit === 'world_query'
-          || explicit === 'mixed_query'
-          ? explicit
-          : routeIntentToQueryType(resolvedRouting.intent);
-      })();
+      const {
+        routing: resolvedRouting,
+        queryType,
+        loreEntityHints,
+        routingRefinement,
+        semanticDiagnostics,
+        embeddingDegradedReason,
+      } = interpretStage;
       emitRoutingRefinementDebugLog({
         npcId: args.npc,
         playerMessage: message,
@@ -3333,49 +3204,35 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         };
       }
 
-      const loreScopes = normalizeStringArray(npcProfile?.loreScopes);
-      const selfLoreScopes = normalizeStringArray(npcProfile?.selfLoreScopes);
-      const relatedLoreScopes = normalizeStringArray(npcProfile?.relatedLoreScopes);
-      const hasScopes = loreScopes.length > 0 || selfLoreScopes.length > 0 || relatedLoreScopes.length > 0;
-      const requireScopes = args.requireLoreScopeForRetrieval === true;
-      const canRetrieveLore = Boolean(loreArtifacts);
-      const shouldAttemptLoreRetrieval = canRetrieveLore
-        && (
-          isKnowledgeSeekingQueryType(queryType)
-          || routeIntentUsesLore(resolvedRouting.intent)
-          || resolvedRouting.interpretation?.lane === 'knowledge'
-        )
-        && (!requireScopes || hasScopes);
-
-      const governedRetrieval = await runGovernedLoreRetrieval({
-        loreArtifacts,
-        canRetrieveLore,
-        shouldAttemptLoreRetrieval,
+      const retrieveStage = await runRetrieveStage({
+        npcId: args.npc,
+        npcName,
         playerMessage: message,
-        interpretation: resolvedRouting.interpretation,
-        mode: toMode(turnContext?.interactionMode),
-        routingIntent: resolvedRouting.intent,
         queryType,
-        activeBeatId: normalizeOptionalString(turnOptionsRecord.beatContract?.beatId),
+        routing: resolvedRouting,
+        loreArtifacts,
+        npcProfile,
+        memoryFacts,
+        history,
+        turnContext,
+        beatContract: turnOptionsRecord.beatContract,
+        requireLoreScopeForRetrieval: args.requireLoreScopeForRetrieval === true,
+        retrievalFilters: routingRefinement.retrievalFilters,
+        embedTexts: (texts) => runtime.embed(texts),
+        modelVersion: LOCAL_EMBEDDING_MODEL_ID,
+        rerankerClass: 'lexical',
+        embeddingDegradedReason,
+      });
+      const {
         loreScopes,
         selfLoreScopes,
         relatedLoreScopes,
-        selfEntityId: npcProfile.selfEntityId,
-        hasBeatContract: Boolean(turnOptionsRecord.beatContract),
-        rerankCache: undefined,
-        artifactVersion: undefined,
-        modelVersion: LOCAL_EMBEDDING_MODEL_ID,
-        rerankerClass: 'lexical',
-        retrievalFilters: routingRefinement.retrievalFilters,
-        embedTexts: (texts) => runtime.embed(texts),
-      });
-      const retrieval = {
-        attempted: governedRetrieval.governance.attempted,
-        matches: governedRetrieval.loreMatches,
-        quality: governedRetrieval.retrievalQuality,
-        governance: governedRetrieval.governance,
-        embeddingDegradedReason,
-      };
+        resolvedMode,
+        retrieval,
+        groundingEvidenceEntries,
+        evidencePack: evidencePackForPipeline,
+        enrichedEvidencePack,
+      } = retrieveStage;
       emitSelfRetrievalGateDebugLog({
         npcId: args.npc,
         routeIntent: resolvedRouting.intent,
@@ -3401,44 +3258,12 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         retrievalFilters: routingRefinement.retrievalFilters,
         matches: retrieval.matches,
       });
-      const groundingEvidenceEntries = buildGroundingEvidenceEntries({
-        loreMatches: retrieval.matches,
-        loreArtifacts,
-        npcId: args.npc,
-        npcName,
-        npcProfile,
-        selfEntityId: npcProfile.selfEntityId,
-        memoryFacts,
-        playerMessage: message,
-        history,
-        regionPath: turnContext?.regionPath,
-        regionName: turnContext?.regionName,
-        currentActivity: turnContext?.currentActivity,
-        currentGoal: turnContext?.currentGoal,
-      });
       // ---------------------------------------------------------------
       // Evidence-first pipeline (ADR-SA-025)
       // Knowledge turns create and validate a plan before any LLM call.
       // The LLM generation loop below is used as the realization transport
       // for already-validated plans, or as fallback for social turns.
       // ---------------------------------------------------------------
-      const mode = toMode(turnContext?.interactionMode);
-      const hasBeatContract = Boolean(turnOptionsRecord.beatContract);
-      const resolvedMode = resolveConversationMode(turnContext, hasBeatContract);
-      const evidencePackForPipeline = buildEvidencePack({
-        evidenceEntries: groundingEvidenceEntries,
-        loreMatches: retrieval.matches,
-        mode: resolvedMode,
-        playerMessage: message,
-        queryType,
-        routing: resolvedRouting,
-        selfEntityId: npcProfile.selfEntityId,
-        npcId: args.npc,
-      });
-      const enrichedEvidencePack = enrichEvidencePackWithEpistemics(
-        evidencePackForPipeline,
-        turnOptionsRecord.beatContract,
-      );
       const snapshot = buildNpcStateSnapshot({
         npcId: args.npc,
         npcName,
@@ -3451,80 +3276,75 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         activeBeatId: normalizeOptionalString(turnOptionsRecord.beatContract?.beatId),
       });
 
-      // Resolve initiative policy
-      const playerHasQuestion = hasLikelyQuestionForm(message);
-      const turnIndexWithNpc = derivedContext.turnIndexWithNpc;
-      const noveltyState = computeNoveltyState({
-        history,
-        turnIndexWithNpc,
-        routingIntent: resolvedRouting.intent,
-        topicCoverage: topicCoverageContext,
-        playerMessage: message,
-        normalizeForEchoCheck: (text: string) => sanitizePromptText(text).toLowerCase(),
-        maxNovelty: 0.34,
-      });
-      const relevantEvidenceItems = enrichedEvidencePack.items.filter((item) => isEvidenceItemRelevantForTurn(item, {
-        queryType,
-        routeIntent: resolvedRouting.intent,
-        selfEntityId: npcProfile.selfEntityId,
-        npcId: args.npc,
-      }));
-      const hasDirectAnswerEvidence = hasDirectAnswerableStateEvidence(
-        relevantEvidenceItems,
-        resolvedRouting.interpretation ?? message,
-      );
-
-      const initiativePolicy = resolveInitiativePolicy({
-        mode: resolvedMode,
-        routingIntent: resolvedRouting.intent,
-        queryType,
-        interpretation: resolvedRouting.interpretation,
-        playerMessage: message,
-        playerHasQuestion,
-        turnIndexWithNpc,
-        noveltyState,
-        beatContract: turnOptionsRecord.beatContract,
-        hasEvidence: relevantEvidenceItems.length > 0,
-        hasDirectAnswerEvidence,
-        retrievalConfidence: computeEvidenceBackedRetrievalConfidence({
-          queryType,
-          routeIntent: resolvedRouting.intent,
-          retrievalMatches: retrieval.matches,
-          evidenceItems: relevantEvidenceItems,
-        }),
-        isFirstMeeting: derivedContext.isFirstMeeting,
-      });
-
       // Resolve delivery-language context from Sugarlang pedagogy first,
       // then fall back to any SugarAgent-local language model if present.
       const adaptationContext = buildSugarlangLanguageAdaptationContext(getPedagogyContext(turnContext))
         ?? await resolveLanguageAdaptationContext(null, null);
       snapshot.deliveryLanguageContext = adaptationContext;
 
-      // Run the evidence-first pipeline
-      const efResult = await runEvidenceFirstPipeline({
+      // Run the explicit Plan stage
+      const planStage = await runPlanStage({
+        npcId: args.npc,
         playerMessage: message,
         recentNpcReplies: history
           .filter((entry) => isRecord(entry) && entry.role === 'npc' && typeof entry.text === 'string')
           .slice(-3)
           .map((entry) => String(entry.text ?? '')),
         routing: resolvedRouting,
+        retrieve: retrieveStage,
         snapshot,
-        evidencePack: evidencePackForPipeline,
-        initiativePolicy,
+        history,
+        turnIndexWithNpc: derivedContext.turnIndexWithNpc,
+        topicCoverageContext,
         beatContract: turnOptionsRecord.beatContract,
         adaptationContext,
         loreEntityIds: routingRefinement.loreEntityIds,
+        isFirstMeeting: derivedContext.isFirstMeeting,
       });
 
-      let efOutput = efResult.output;
-      let efPlanAcceptable = efResult.validatedPlan?.acceptable !== false;
-      const validationErrors = Array.isArray(efResult.validatedPlan?.errors)
-        ? [...efResult.validatedPlan.errors]
+      let efOutput = planStage.turnRouting?.path === 'social_fast'
+        ? buildDeterministicSocialReply(
+          message,
+          snapshot,
+          adaptationContext ?? null,
+          history
+            .filter((entry) => isRecord(entry) && entry.role === 'npc' && typeof entry.text === 'string')
+            .slice(-3)
+            .map((entry) => String(entry.text ?? '')),
+        )
+        : realizeDeterministicPlan(
+          planStage.validatedPlan?.plan ?? planStage.plan,
+          snapshot,
+          evidencePackForPipeline,
+          adaptationContext ?? null,
+        );
+      let efPlanAcceptable = planStage.validatedPlan?.acceptable !== false;
+      const validationErrors = Array.isArray(planStage.validatedPlan?.errors)
+        ? [...planStage.validatedPlan.errors]
         : [];
-      const validatedPlan = efResult.validatedPlan?.plan ?? efResult.plan;
-      const groundedTurn = efResult.turnRouting?.path === 'grounded';
-      const socialFastTurn = efResult.turnRouting?.path === 'social_fast';
+      const validatedPlan = planStage.validatedPlan?.plan ?? planStage.plan;
+      const groundedTurn = planStage.turnRouting?.path === 'grounded';
+      const socialFastTurn = planStage.turnRouting?.path === 'social_fast';
+
+      if (groundedTurn) {
+        const verification = verifyRealizationAgainstPlan(
+          efOutput.utterance,
+          validatedPlan,
+          evidencePackForPipeline,
+          snapshot,
+        );
+        planStage.diagnostics.semanticVerification = verification;
+        if (!verification.ok) {
+          planStage.diagnostics.deterministicFallbackUsed = true;
+          efOutput = realizeDeterministicPlan(
+            validatedPlan,
+            snapshot,
+            evidencePackForPipeline,
+            adaptationContext ?? null,
+          );
+        }
+      }
+
       const canUseModelRealization = groundedTurn
         && efPlanAcceptable
         && validatedPlan
@@ -3553,10 +3373,10 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
 
         if (realized) {
           efOutput = realized;
-          efResult.diagnostics.semanticVerification = undefined;
-          efResult.diagnostics.deterministicFallbackUsed = false;
+          planStage.diagnostics.semanticVerification = undefined;
+          planStage.diagnostics.deterministicFallbackUsed = false;
         } else {
-          efResult.diagnostics.deterministicFallbackUsed = true;
+          planStage.diagnostics.deterministicFallbackUsed = true;
           const replyPartsFailureReason = normalizeOptionalString(generationDiagnostics.replyParts.failureReason);
           if (replyPartsFailureReason) {
             validationErrors.push(replyPartsFailureReason);
@@ -3578,9 +3398,9 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         });
         if (realized) {
           efOutput = realized;
-          efResult.diagnostics.deterministicFallbackUsed = false;
+          planStage.diagnostics.deterministicFallbackUsed = false;
         } else {
-          efResult.diagnostics.deterministicFallbackUsed = true;
+          planStage.diagnostics.deterministicFallbackUsed = true;
           const replyPartsFailureReason = normalizeOptionalString(generationDiagnostics.replyParts.failureReason);
           if (replyPartsFailureReason) {
             validationErrors.push(replyPartsFailureReason);
@@ -3601,7 +3421,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
           validationErrors.push(mismatchReason);
           generationDiagnostics.replyParts.failureReason = generationDiagnostics.replyParts.failureReason ?? mismatchReason;
           efOutput = createGroundedUncertaintyReply(queryType, adaptationContext?.targetLanguage);
-          efResult.diagnostics.deterministicFallbackUsed = true;
+          planStage.diagnostics.deterministicFallbackUsed = true;
           emitPlanRealizationStatusLog({
             stage: 'fallback-enforced',
             strategy: 'target_language_guardrail',
@@ -3610,7 +3430,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
             npcId: args.npc,
             routeIntent: resolvedRouting.intent,
             queryType,
-            turnPath: efResult.turnRouting?.path,
+            turnPath: planStage.turnRouting?.path,
             estimatedLanguage: deliveryEstimate.estimatedLanguage,
             mismatchSuspected: deliveryEstimate.mismatchSuspected,
             failureReason: mismatchReason,
@@ -3621,7 +3441,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
           });
         }
       }
-      efResult.diagnostics.deliveryLanguageContextApplied = (adaptationContext ?? null) != null;
+      planStage.diagnostics.deliveryLanguageContextApplied = (adaptationContext ?? null) != null;
 
       const acceptedPlan = validatedPlan ?? {
         claims: [],
@@ -3637,7 +3457,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         npcId: args.npc,
         routeIntent: resolvedRouting.intent,
         queryType,
-        turnPath: efResult.turnRouting?.path,
+        turnPath: planStage.turnRouting?.path,
         replyText: efOutput.utterance,
       });
       const persistedReferentCandidates = buildTurnReferentCandidates({
@@ -3659,7 +3479,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
 
       validationErrors.sort();
       const dedupedValidationErrors = validationErrors.filter((entry, index, entries) => entries.indexOf(entry) === index);
-      const usedFallback = efResult.diagnostics.deterministicFallbackUsed === true || efPlanAcceptable === false;
+      const usedFallback = planStage.diagnostics.deterministicFallbackUsed === true || efPlanAcceptable === false;
 
       const pipeline = defaultPipelineDiagnostics({
         routing: {
@@ -3688,13 +3508,13 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         usedFallback,
         validationErrors: dedupedValidationErrors,
         validationDecision: usedFallback ? 'fallback' : (efPlanAcceptable ? 'accept' : 'repair'),
-        unsupportedClaims: efResult.validatedPlan?.droppedClaims?.length ?? 0,
+        unsupportedClaims: planStage.validatedPlan?.droppedClaims?.length ?? 0,
         requiresRepair: usedFallback || !efPlanAcceptable,
         turnContext,
         generation: generationDiagnostics,
       });
       pipeline.retrievalQuality = retrieval.quality;
-      pipeline.evidenceFirst = efResult.diagnostics;
+      pipeline.evidenceFirst = planStage.diagnostics;
       pipeline.evidenceFirst.retrievalGovernance = retrieval.governance;
       pipeline.version = 'evidence_first_v1';
 
@@ -3710,7 +3530,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         grounding: {
           summary: {
             decision: usedFallback ? 'fallback' : (efPlanAcceptable ? 'accept' : 'repair'),
-            unsupportedCount: efResult.validatedPlan?.droppedClaims?.length ?? 0,
+            unsupportedCount: planStage.validatedPlan?.droppedClaims?.length ?? 0,
           },
         },
       };

@@ -1,5 +1,293 @@
 // @ts-nocheck
-import { localizeGroundedUncertaintyReply } from './language-stock.js';
+import type { SugarAgentTurnOutput } from '../../contracts/turn.js';
+import { deterministicHedgePrefix } from './claim-planning.js';
+import {
+  localizeGroundedUncertaintyReply,
+  localizeSimpleSocialReply,
+} from './language-stock.js';
+import {
+  detectSocialAcknowledgement,
+  isLikelySmallTalkQuery,
+} from './social-cues.js';
+import {
+  extractDeclaredIdentityName,
+  isLikelyGreetingOnlyMessage,
+} from './turn-quality.js';
+
+const EMPTY_BEAT_EVIDENCE = {
+  coveredFacts: [],
+  uncoveredFacts: [],
+  completionSignal: 'none',
+  confidence: 0,
+};
+
+function normalizeClaimText(text) {
+  return String(text ?? '').trim().replace(/[.!?]+$/, '');
+}
+
+function capitalizeName(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return '';
+  return normalized
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function shouldAnswerWithNpcName(playerMessage) {
+  return /\b(what(?:'s| is) your name|your name|who are you)\b/i.test(String(playerMessage ?? ''));
+}
+
+export function buildDeterministicSocialReply(
+  playerMessage,
+  snapshot,
+  adaptationContext = null,
+  recentNpcReplies = [],
+) {
+  const message = String(playerMessage ?? '').trim();
+  const npcName = normalizeClaimText(snapshot?.npcName || '') || 'friend';
+  const targetLanguage = adaptationContext?.targetLanguage;
+  const declaredName = extractDeclaredIdentityName(message, targetLanguage);
+  const safeDeclaredName = declaredName ? capitalizeName(declaredName) : '';
+  const asksIdentity = shouldAnswerWithNpcName(message);
+  const hasPriorNpcReply = recentNpcReplies.some((entry) => normalizeClaimText(entry).length > 0);
+  const frustration = /\b(i was pretty clear|i was clear|that was clear|pretty clear|be serious|come on)\b/i.test(message);
+  const acknowledgement = detectSocialAcknowledgement(message, targetLanguage);
+  const smallTalkQuery = isLikelySmallTalkQuery(message, targetLanguage);
+
+  if (frustration) {
+    return {
+      utterance: `Fair enough. I'm ${npcName}. Ask me directly what you want to know.`,
+      emotion: 'steady',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (safeDeclaredName && asksIdentity) {
+    return {
+      utterance: localizeSimpleSocialReply('nice_to_meet_you', targetLanguage, {
+        npcName,
+        playerName: safeDeclaredName,
+      }),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (asksIdentity) {
+    return {
+      utterance: localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName }),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (safeDeclaredName) {
+    return {
+      utterance: localizeSimpleSocialReply(hasPriorNpcReply ? 'nice_to_meet_you_brief' : 'nice_to_meet_you', targetLanguage, {
+        npcName,
+        playerName: safeDeclaredName,
+      }),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (isLikelyGreetingOnlyMessage(message, targetLanguage)) {
+    return {
+      utterance: localizeSimpleSocialReply(hasPriorNpcReply ? 'hi' : 'hi_im_npc', targetLanguage, { npcName }),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (smallTalkQuery) {
+    return {
+      utterance: localizeSimpleSocialReply('status_good_and_you', targetLanguage),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (acknowledgement === 'gratitude') {
+    return {
+      utterance: localizeSimpleSocialReply('any_time', targetLanguage),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (acknowledgement === 'shared_preference') {
+    return {
+      utterance: /\bcheese\b/i.test(message)
+        ? localizeSimpleSocialReply('shared_preference_cheese', targetLanguage)
+        : localizeSimpleSocialReply('shared_preference', targetLanguage),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  if (acknowledgement) {
+    return {
+      utterance: localizeSimpleSocialReply('agreement', targetLanguage),
+      emotion: 'warm',
+      intent: 'conversation',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+  return {
+    utterance: localizeSimpleSocialReply('listening', targetLanguage),
+    emotion: 'neutral',
+    intent: 'conversation',
+    proposedIntents: [],
+    citations: [],
+    beatEvidence: EMPTY_BEAT_EVIDENCE,
+  };
+}
+
+export function realizeDeterministicPlan(
+  plan,
+  snapshot,
+  evidencePack = null,
+  adaptationContext = null,
+) {
+  const claims = plan.claims ?? [];
+  const speechAct = plan.speechAct ?? 'chat';
+  const evidenceIdToItem = evidencePack?.evidenceIdToItem instanceof Map
+    ? evidencePack.evidenceIdToItem
+    : new Map();
+
+  function buildCitations(claimList) {
+    return claimList.flatMap((claim) => (claim.evidenceIds ?? []).map((id) => {
+      const item = evidenceIdToItem.get(id);
+      return {
+        sourceId: item?.sourceId ?? item?.factId ?? id,
+        snippet: item?.text ?? undefined,
+      };
+    }));
+  }
+
+  if (speechAct === 'uncertain') {
+    const utterance = localizeGroundedUncertaintyReply(
+      plan.queryType,
+      adaptationContext?.targetLanguage,
+    );
+    return {
+      utterance,
+      emotion: 'uncertain',
+      intent: 'uncertain',
+      proposedIntents: [],
+      citations: buildCitations(claims),
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+
+  if (speechAct === 'ask') {
+    return {
+      utterance: plan.questionBack ?? localizeSimpleSocialReply('clarify_simple', adaptationContext?.targetLanguage),
+      emotion: 'curious',
+      intent: 'question',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+
+  if (speechAct === 'close') {
+    return {
+      utterance: plan.questionBack ?? localizeSimpleSocialReply('close_for_now', adaptationContext?.targetLanguage),
+      emotion: 'warm',
+      intent: 'close',
+      proposedIntents: [],
+      citations: [],
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+
+  if (speechAct === 'recall') {
+    if (claims.length === 0) {
+      return {
+        utterance: localizeSimpleSocialReply('remember_none', adaptationContext?.targetLanguage),
+        emotion: 'warm',
+        intent: 'recall',
+        proposedIntents: [],
+        citations: [],
+        beatEvidence: EMPTY_BEAT_EVIDENCE,
+      };
+    }
+    const recallTexts = claims.map((claim) => claim.text).filter(Boolean);
+    const utterance = recallTexts.length === 1
+      ? `I remember that ${recallTexts[0]}.`
+      : `I remember that ${recallTexts[0]}, and ${recallTexts[1]}.`;
+    return {
+      utterance,
+      emotion: 'warm',
+      intent: 'recall',
+      proposedIntents: [],
+      citations: buildCitations(claims),
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+
+  if (speechAct === 'answer' || speechAct === 'chat') {
+    if (claims.length === 0) {
+      return {
+        utterance: localizeSimpleSocialReply('tell_me_more', adaptationContext?.targetLanguage),
+        emotion: 'neutral',
+        intent: 'conversation',
+        proposedIntents: [],
+        citations: [],
+        beatEvidence: EMPTY_BEAT_EVIDENCE,
+      };
+    }
+
+    const claimTexts = claims.map((claim) => {
+      const prefix = deterministicHedgePrefix(claim.mode);
+      const text = claim.text.replace(/[.!?]+$/, '');
+      return `${prefix}${text}`;
+    });
+
+    const utterance = claimTexts.length === 1
+      ? `${claimTexts[0]}.`
+      : `${claimTexts[0]}. ${claimTexts[1]}.`;
+
+    return {
+      utterance,
+      emotion: claims[0]?.mode === 'rumor' ? 'uncertain' : 'grounded',
+      intent: speechAct === 'answer' ? 'answer_lore' : 'conversation',
+      proposedIntents: [],
+      citations: buildCitations(claims),
+      beatEvidence: EMPTY_BEAT_EVIDENCE,
+    };
+  }
+
+  return {
+    utterance: localizeSimpleSocialReply('tell_me_more', adaptationContext?.targetLanguage),
+    emotion: 'neutral',
+    intent: 'conversation',
+    proposedIntents: [],
+    citations: [],
+    beatEvidence: EMPTY_BEAT_EVIDENCE,
+  };
+}
 export function realizePlanTurn({
   plan,
   npcName,
