@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyWebPublishProfileOverrides,
+  normalizeWebPublishSugarAgentGenerationConfig,
   parseWebPublishProfile,
   resolveWebPublishProfilePath,
 } from '../web-publish-profile';
@@ -99,6 +100,25 @@ describe('web-publish-profile', () => {
     }, '/games/wordlark/release/targets/web/profile.production.json', 'production');
 
     expect(profile.sugaragent.generation).toEqual({
+      provider: 'openai',
+      selfHosted: {
+        runtimeMode: 'llama',
+      },
+      openai: {
+        model: 'gpt-5-mini',
+        baseUrl: 'https://api.openai.com/v1',
+      },
+    });
+  });
+
+  it('normalizes hosted sugaragent generation config into one canonical shape', () => {
+    expect(normalizeWebPublishSugarAgentGenerationConfig({
+      provider: 'openai',
+      openai: {
+        model: 'gpt-5-mini',
+        baseUrl: 'https://api.openai.com/v1/',
+      },
+    })).toEqual({
       provider: 'openai',
       selfHosted: {
         runtimeMode: 'llama',

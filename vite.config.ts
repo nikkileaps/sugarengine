@@ -16,6 +16,7 @@ import {
 } from './src/plugins/sugaragent/runtime/local-embedding-runtime';
 import {
   applyWebPublishProfileOverrides,
+  normalizeWebPublishSugarAgentGenerationConfig,
   normalizeWebPublishEnvironment,
   parseWebPublishProfile,
   resolveWebPublishProfilePath,
@@ -149,6 +150,80 @@ export default defineConfig(({ mode }) => {
           }
           const rawProfile = JSON.parse(await fs.readFile(profilePath, 'utf8'));
           return parseWebPublishProfile(rawProfile, profilePath, environment);
+        };
+
+        const writeWebPublishProfile = async (
+          rootPaths: ReturnType<typeof resolveGameRootPaths>,
+          environment: 'staging' | 'production',
+          input: {
+            frontend?: {
+              gameApiBaseUrl?: string;
+              backendRequired?: boolean;
+              credentials?: string;
+            } | null;
+            sugaragent?: {
+              generation?: unknown;
+            } | null;
+          },
+        ) => {
+          const profilePath = resolveWebPublishProfilePath(rootPaths, environment);
+          if (!fsSync.existsSync(profilePath)) {
+            throw new Error(`No ${environment} web profile found at ${profilePath}`);
+          }
+          const rawProfile = JSON.parse(await fs.readFile(profilePath, 'utf8')) as Record<string, unknown>;
+          const parsedProfile = parseWebPublishProfile(rawProfile, profilePath, environment);
+          const frontendProfile = applyWebPublishProfileOverrides(
+            parsedProfile,
+            input.frontend
+              ? {
+                gameApiBaseUrl: normalizeOptionalString(input.frontend.gameApiBaseUrl),
+                backendRequired: typeof input.frontend.backendRequired === 'boolean'
+                  ? input.frontend.backendRequired
+                  : undefined,
+                credentials: normalizeOptionalString(input.frontend.credentials),
+              }
+              : null,
+          );
+          const resolvedGeneration = normalizeWebPublishSugarAgentGenerationConfig(
+            input.sugaragent
+            && typeof input.sugaragent === 'object'
+            && typeof input.sugaragent.generation === 'object'
+            && input.sugaragent.generation !== null
+              ? input.sugaragent.generation
+              : parsedProfile.sugaragent.generation,
+          );
+
+          const nextProfile = {
+            ...rawProfile,
+            target: frontendProfile.target,
+            environment: frontendProfile.environment,
+            frontend: {
+              ...(typeof rawProfile.frontend === 'object' && rawProfile.frontend !== null
+                ? rawProfile.frontend as Record<string, unknown>
+                : {}),
+              gameApiBaseUrl: frontendProfile.frontend.gameApiBaseUrl,
+              backendRequired: frontendProfile.frontend.backendRequired,
+              credentials: frontendProfile.frontend.credentials,
+            },
+            sugaragent: {
+              ...(typeof rawProfile.sugaragent === 'object' && rawProfile.sugaragent !== null
+                ? rawProfile.sugaragent as Record<string, unknown>
+                : {}),
+              generation: {
+                provider: resolvedGeneration.provider,
+                selfHosted: {
+                  runtimeMode: resolvedGeneration.selfHosted.runtimeMode,
+                },
+                openai: {
+                  model: resolvedGeneration.openai.model,
+                  baseUrl: resolvedGeneration.openai.baseUrl,
+                },
+              },
+            },
+          };
+
+          await fs.writeFile(profilePath, `${JSON.stringify(nextProfile, null, 2)}\n`, 'utf8');
+          return parseWebPublishProfile(nextProfile, profilePath, environment);
         };
 
         let gameRootModulePromise: Promise<{
@@ -994,6 +1069,9 @@ export default defineConfig(({ mode }) => {
               const frontendOverrides = typeof body.frontend === 'object' && body.frontend !== null
                 ? body.frontend as Record<string, unknown>
                 : null;
+              const sugaragentOverrides = typeof body.sugaragent === 'object' && body.sugaragent !== null
+                ? body.sugaragent as Record<string, unknown>
+                : null;
               if (
                 !rootPathInput
                 || !projectFilePathInput
@@ -1021,9 +1099,8 @@ export default defineConfig(({ mode }) => {
               });
               await ensureScaffoldedGameRepo(rootPaths, project, module);
               await fs.mkdir(rootPaths.webExportPath, { recursive: true });
-              const publishProfile = applyWebPublishProfileOverrides(
-                await readWebPublishProfile(rootPaths, environment),
-                frontendOverrides
+              const publishProfile = await writeWebPublishProfile(rootPaths, environment, {
+                frontend: frontendOverrides
                   ? {
                     gameApiBaseUrl: normalizeOptionalString(frontendOverrides.gameApiBaseUrl),
                     backendRequired: typeof frontendOverrides.backendRequired === 'boolean'
@@ -1032,7 +1109,12 @@ export default defineConfig(({ mode }) => {
                     credentials: normalizeOptionalString(frontendOverrides.credentials),
                   }
                   : null,
-              );
+                sugaragent: sugaragentOverrides
+                  ? {
+                    generation: sugaragentOverrides.generation,
+                  }
+                  : null,
+              });
 
               const env = {
                 ...process.env,
@@ -1079,6 +1161,7 @@ export default defineConfig(({ mode }) => {
                 environment: publishProfile.environment,
                 profilePath: publishProfile.profilePath,
                 frontend: publishProfile.frontend,
+                sugaragent: publishProfile.sugaragent,
               });
               return;
             }
@@ -1101,6 +1184,7 @@ export default defineConfig(({ mode }) => {
                 environment: publishProfile.environment,
                 profilePath: publishProfile.profilePath,
                 frontend: publishProfile.frontend,
+                sugaragent: publishProfile.sugaragent,
               });
               return;
             }

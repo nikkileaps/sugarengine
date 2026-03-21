@@ -34,6 +34,7 @@ import type { PluginConfigData } from './store/useEditorStore';
 import { createGame, loadWebPublishProfile, openGame, pickGameProjectFile, pickGameRootDirectory, publishWebTarget, saveGame } from './game-root/service';
 import { loadAllSugarlangArtifacts } from './game-root/plugin-artifacts';
 import type {
+  WebPublishProfile,
   WebPublishCredentials,
   WebPublishEnvironment,
   WebPublishTarget,
@@ -339,6 +340,10 @@ export function Editor() {
   const [publishGameApiBaseUrl, setPublishGameApiBaseUrl] = useState('');
   const [publishBackendRequired, setPublishBackendRequired] = useState(true);
   const [publishCredentials, setPublishCredentials] = useState<WebPublishCredentials>('include');
+  const [publishSugarAgentGenerationProvider, setPublishSugarAgentGenerationProvider] = useState<SugarAgentGenerationProvider>('selfHosted');
+  const [publishSugarAgentRuntimeMode, setPublishSugarAgentRuntimeMode] = useState<SugarAgentRuntimeMode>('llama');
+  const [publishSugarAgentOpenAiModel, setPublishSugarAgentOpenAiModel] = useState('gpt-5-mini');
+  const [publishSugarAgentOpenAiBaseUrl, setPublishSugarAgentOpenAiBaseUrl] = useState('https://api.openai.com/v1');
   const [publishProfileLoading, setPublishProfileLoading] = useState(false);
   const [sugarAgentSettingsOpen, setSugarAgentSettingsOpen] = useState(false);
   const [resettingSugarAgentRuntime, setResettingSugarAgentRuntime] = useState(false);
@@ -537,6 +542,14 @@ export function Editor() {
       setPublishGameApiBaseUrl(profile.frontend.gameApiBaseUrl);
       setPublishBackendRequired(profile.frontend.backendRequired);
       setPublishCredentials(profile.frontend.credentials);
+      setPublishSugarAgentGenerationProvider(
+        normalizeSugarAgentGenerationProvider(profile.sugaragent.generation.provider),
+      );
+      setPublishSugarAgentRuntimeMode(
+        normalizeSugarAgentRuntimeMode(profile.sugaragent.generation.selfHosted?.runtimeMode),
+      );
+      setPublishSugarAgentOpenAiModel(profile.sugaragent.generation.openai?.model ?? 'gpt-5-mini');
+      setPublishSugarAgentOpenAiBaseUrl(profile.sugaragent.generation.openai?.baseUrl ?? 'https://api.openai.com/v1');
     } finally {
       setPublishProfileLoading(false);
     }
@@ -856,6 +869,18 @@ export function Editor() {
           gameApiBaseUrl: publishGameApiBaseUrl,
           backendRequired: publishBackendRequired,
           credentials: publishCredentials,
+        },
+        sugaragent: {
+          generation: {
+            provider: publishSugarAgentGenerationProvider,
+            selfHosted: {
+              runtimeMode: publishSugarAgentRuntimeMode,
+            },
+            openai: {
+              model: publishSugarAgentOpenAiModel.trim() || 'gpt-5-mini',
+              baseUrl: publishSugarAgentOpenAiBaseUrl.trim() || 'https://api.openai.com/v1',
+            },
+          },
         },
       });
       setSugarlangDirty(false);
@@ -1627,6 +1652,9 @@ export function Editor() {
           <Text size="xs" c="dimmed">
             Profile path: {publishProfilePath || 'Loading...'}
           </Text>
+          <Text size="xs" c="dimmed">
+            Hosted SugarAgent settings below are saved into the web publish profile and used by backend deploys.
+          </Text>
           <TextInput
             label="VITE_GAME_API_BASE_URL"
             description="Hosted game-api base URL baked into the exported frontend bundle."
@@ -1656,6 +1684,50 @@ export function Editor() {
               </Text>
             </Stack>
           </Group>
+          <Select
+            label="Hosted SugarAgent Generation Provider"
+            description="Saved to the web publish profile for the hosted game-api and Cloud Run deploy."
+            data={SUGARAGENT_GENERATION_PROVIDER_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+            value={publishSugarAgentGenerationProvider}
+            onChange={(value) => setPublishSugarAgentGenerationProvider(
+              normalizeSugarAgentGenerationProvider(value ?? publishSugarAgentGenerationProvider),
+            )}
+            allowDeselect={false}
+            disabled={publishProfileLoading || gameLifecycleBusy}
+          />
+          {publishSugarAgentGenerationProvider === 'selfHosted' ? (
+            <Select
+              label="Hosted Self-Hosted Runtime Mode"
+              description="Only used when the hosted generation provider is Self-hosted."
+              data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+              value={publishSugarAgentRuntimeMode}
+              onChange={(value) => setPublishSugarAgentRuntimeMode(
+                normalizeSugarAgentRuntimeMode(value ?? publishSugarAgentRuntimeMode),
+              )}
+              allowDeselect={false}
+              disabled={publishProfileLoading || gameLifecycleBusy}
+            />
+          ) : null}
+          {publishSugarAgentGenerationProvider === 'openai' ? (
+            <>
+              <TextInput
+                label="Hosted OpenAI Model"
+                description="Saved to the hosted web publish profile and injected into Cloud Run."
+                value={publishSugarAgentOpenAiModel}
+                onChange={(event) => setPublishSugarAgentOpenAiModel(event.currentTarget.value)}
+                placeholder="gpt-5-mini"
+                disabled={publishProfileLoading || gameLifecycleBusy}
+              />
+              <TextInput
+                label="Hosted OpenAI Base URL"
+                description="Defaults to the public OpenAI API endpoint."
+                value={publishSugarAgentOpenAiBaseUrl}
+                onChange={(event) => setPublishSugarAgentOpenAiBaseUrl(event.currentTarget.value)}
+                placeholder="https://api.openai.com/v1"
+                disabled={publishProfileLoading || gameLifecycleBusy}
+              />
+            </>
+          ) : null}
           <Group justify="flex-end">
             <Button
               variant="default"

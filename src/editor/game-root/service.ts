@@ -19,10 +19,14 @@ import {
 } from './fs-paths';
 import { buildWebReleaseTargetScaffold } from './release-target-scaffold';
 import type {
+  SugarAgentGenerationConfig,
   WebPublishEnvironment,
   WebPublishFrontendConfig,
   WebPublishProfile,
   WebPublishTarget,
+} from './web-publish-profile';
+import {
+  normalizeWebPublishSugarAgentGenerationConfig,
 } from './web-publish-profile';
 
 const GAME_ROOT_ENDPOINT = '/__sugarengine/game-root';
@@ -75,6 +79,9 @@ export interface PublishWebTargetInput {
   target: WebPublishTarget;
   environment: WebPublishEnvironment;
   frontend: WebPublishFrontendConfig;
+  sugaragent?: {
+    generation: SugarAgentGenerationConfig;
+  };
 }
 
 export interface PublishWebTargetResult {
@@ -295,6 +302,7 @@ export async function publishWebTarget(input: PublishWebTargetInput): Promise<Pu
     target: input.target,
     environment: input.environment,
     frontend: input.frontend,
+    sugaragent: input.sugaragent,
   });
 
   if (!response.rootPath || !response.projectFilePath || !response.exportPath) {
@@ -342,20 +350,15 @@ export async function loadWebPublishProfile(
       backendRequired: response.frontend.backendRequired === true,
       credentials: response.frontend.credentials,
     },
-    sugaragent: response.sugaragent && typeof response.sugaragent === 'object'
-      ? response.sugaragent as LoadWebPublishProfileResult['sugaragent']
-      : {
-        generation: {
-          provider: 'selfHosted',
-          selfHosted: {
-            runtimeMode: 'llama',
-          },
-          openai: {
-            model: 'gpt-5-mini',
-            baseUrl: 'https://api.openai.com/v1',
-          },
-        },
-      },
+    sugaragent: {
+      generation: normalizeWebPublishSugarAgentGenerationConfig(
+        response.sugaragent
+        && typeof response.sugaragent === 'object'
+        && typeof response.sugaragent.generation === 'object'
+          ? response.sugaragent.generation
+          : null,
+      ),
+    },
   };
 }
 

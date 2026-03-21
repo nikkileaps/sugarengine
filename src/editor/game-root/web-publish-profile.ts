@@ -22,6 +22,27 @@ export interface WebPublishProfile {
   };
 }
 
+export function normalizeWebPublishSugarAgentGenerationConfig(
+  generation: unknown,
+): SugarAgentGenerationConfig {
+  const resolvedGeneration = resolveSugarAgentGenerationConfig({
+    generation: (typeof generation === 'object' && generation !== null)
+      ? generation as SugarAgentGenerationConfig
+      : undefined,
+  });
+
+  return {
+    provider: resolvedGeneration.provider,
+    selfHosted: {
+      runtimeMode: resolvedGeneration.selfHosted.runtimeMode,
+    },
+    openai: {
+      model: resolvedGeneration.openai.model,
+      baseUrl: resolvedGeneration.openai.baseUrl,
+    },
+  };
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -93,11 +114,6 @@ export function parseWebPublishProfile(
   const rawSugarAgent = typeof profile.sugaragent === 'object' && profile.sugaragent !== null
     ? profile.sugaragent as Record<string, unknown>
     : {};
-  const resolvedGeneration = resolveSugarAgentGenerationConfig({
-    generation: (typeof rawSugarAgent.generation === 'object' && rawSugarAgent.generation !== null)
-      ? rawSugarAgent.generation as SugarAgentGenerationConfig
-      : undefined,
-  });
 
   return {
     target,
@@ -109,16 +125,7 @@ export function parseWebPublishProfile(
       credentials: normalizeWebPublishCredentials(rawFrontend?.credentials, 'include'),
     },
     sugaragent: {
-      generation: {
-        provider: resolvedGeneration.provider,
-        selfHosted: {
-          runtimeMode: resolvedGeneration.selfHosted.runtimeMode,
-        },
-        openai: {
-          model: resolvedGeneration.openai.model,
-          baseUrl: resolvedGeneration.openai.baseUrl,
-        },
-      },
+      generation: normalizeWebPublishSugarAgentGenerationConfig(rawSugarAgent.generation),
     },
   };
 }
