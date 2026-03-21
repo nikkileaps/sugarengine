@@ -71,6 +71,16 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
     expect(result.enabled).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.bundle).toBeTruthy();
+    expect(result.bundle?.policy.generation).toEqual({
+      provider: 'selfHosted',
+      selfHosted: {
+        runtimeMode: 'llama',
+      },
+      openai: {
+        model: 'gpt-5-mini',
+        baseUrl: 'https://api.openai.com/v1',
+      },
+    });
     expect(result.bundle?.policy.globalSafetyBounds).toEqual(['no profanity', 'no legal advice']);
     expect(result.bundle?.profiles.length).toBe(1);
     expect(result.bundle?.profiles[0]?.constraints).toEqual(['do not reveal captain identity before beat.gate.reveal']);
@@ -175,6 +185,37 @@ describe('SugarAgent authoring artifacts (ADR-008)', () => {
     expect(parsed?.profiles[0]?.selfLoreScopes).toEqual(['npc.guard']);
     expect(parsed?.profiles[0]?.relatedLoreScopes).toEqual([]);
     expect(parsed?.beatContracts.length).toBe(1);
+  });
+
+  it('normalizes shared generation config with legacy runtime fallback', () => {
+    const result = buildSugarAgentAuthoringBundle({
+      plugins: [{
+        id: 'sugaragent',
+        enabled: true,
+        generation: {
+          provider: 'openai',
+          openai: {
+            model: 'gpt-5-mini',
+          },
+        },
+        runtimeMode: 'mock',
+      }],
+      npcs: [{ id: 'npc.baker', name: 'Baker' }],
+      dialogues: [],
+      quests: [],
+    });
+
+    expect(result.bundle?.policy.generation).toEqual({
+      provider: 'openai',
+      selfHosted: {
+        runtimeMode: 'mock',
+      },
+      openai: {
+        model: 'gpt-5-mini',
+        baseUrl: 'https://api.openai.com/v1',
+      },
+    });
+    expect(result.bundle?.policy.runtimeMode).toBe('mock');
   });
 
   it('resolves profile and beat contract lookup from parsed bundle', () => {

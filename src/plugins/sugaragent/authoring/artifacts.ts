@@ -1,3 +1,10 @@
+import type {
+  SugarAgentGenerationConfig,
+} from '../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js';
+import {
+  resolveSugarAgentGenerationConfig,
+} from '../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js';
+
 export type SugarAgentCompletionRule = 'player_ack' | 'player_action' | 'engine_flag';
 
 export interface SugarAgentAgentProfile {
@@ -33,6 +40,7 @@ export interface SugarAgentPackProject {
   plugins?: Array<string | {
     id: string;
     enabled?: boolean;
+    generation?: SugarAgentGenerationConfig;
     runtimeMode?: 'llama' | 'auto' | 'mock';
     runtime?: 'llama' | 'auto' | 'mock'; // Legacy alias accepted for backward compatibility.
     globalSafetyBounds?: string[];
@@ -40,6 +48,7 @@ export interface SugarAgentPackProject {
   }>;
   sugaragent?: {
     enabled?: boolean;
+    generation?: SugarAgentGenerationConfig;
     runtimeMode?: 'llama' | 'auto' | 'mock';
     runtime?: 'llama' | 'auto' | 'mock'; // Legacy alias accepted for backward compatibility.
     globalSafetyBounds?: string[];
@@ -102,6 +111,7 @@ export interface SugarAgentAuthoringBundleV1 {
     name?: string;
   };
   policy: {
+    generation?: SugarAgentGenerationConfig;
     runtimeMode?: 'llama' | 'auto' | 'mock';
     globalSafetyBounds: string[];
   };
@@ -172,6 +182,33 @@ function normalizeRuntimeMode(value: unknown): 'llama' | 'auto' | 'mock' | undef
     : undefined;
 }
 
+function normalizeGenerationConfig(
+  value: unknown,
+  legacyRuntimeMode?: unknown,
+): SugarAgentGenerationConfig | undefined {
+  if (typeof value !== 'object' || value === null) {
+    if (legacyRuntimeMode === undefined) return undefined;
+  }
+
+  const resolved = resolveSugarAgentGenerationConfig({
+    generation: (typeof value === 'object' && value !== null)
+      ? value as SugarAgentGenerationConfig
+      : undefined,
+    legacyRuntimeMode,
+  });
+
+  return {
+    provider: resolved.provider,
+    selfHosted: {
+      runtimeMode: resolved.selfHosted.runtimeMode,
+    },
+    openai: {
+      model: resolved.openai.model,
+      baseUrl: resolved.openai.baseUrl,
+    },
+  };
+}
+
 function extractRuntimeMode(project: SugarAgentPackProject): 'llama' | 'auto' | 'mock' | undefined {
   let runtimeMode = normalizeRuntimeMode(project.sugaragent?.runtimeMode ?? project.sugaragent?.runtime);
 
@@ -183,6 +220,25 @@ function extractRuntimeMode(project: SugarAgentPackProject): 'llama' | 'auto' | 
   }
 
   return runtimeMode;
+}
+
+function extractGenerationConfig(project: SugarAgentPackProject): SugarAgentGenerationConfig | undefined {
+  let generation = normalizeGenerationConfig(
+    project.sugaragent?.generation,
+    project.sugaragent?.runtimeMode ?? project.sugaragent?.runtime,
+  );
+
+  if (Array.isArray(project.plugins)) {
+    for (const plugin of project.plugins) {
+      if (!isRecord(plugin) || plugin.id !== 'sugaragent') continue;
+      generation = normalizeGenerationConfig(
+        plugin.generation,
+        plugin.runtimeMode ?? plugin.runtime,
+      ) ?? generation;
+    }
+  }
+
+  return generation;
 }
 
 function isValidCompletionRule(value: unknown): value is SugarAgentCompletionRule {
@@ -306,6 +362,10 @@ export function parseSugarAgentAuthoringBundle(raw: unknown): SugarAgentAuthorin
       name: toNonEmptyString(source.name),
     },
     policy: {
+      generation: normalizeGenerationConfig(
+        policy.generation,
+        policy.runtimeMode ?? policy.runtime,
+      ),
       runtimeMode: normalizeRuntimeMode(policy.runtimeMode ?? policy.runtime),
       globalSafetyBounds: normalizeStringArray(policy.globalSafetyBounds ?? policy.safetyBounds),
     },
@@ -493,6 +553,7 @@ export function buildSugarAgentAuthoringBundle(project: SugarAgentPackProject): 
 
   const globalSafetyBounds = extractGlobalSafetyBounds(project);
   const runtimeMode = extractRuntimeMode(project);
+  const generation = extractGenerationConfig(project) ?? normalizeGenerationConfig(undefined, runtimeMode ?? 'llama');
 
   const bundle: SugarAgentAuthoringBundleV1 = {
     schemaVersion: 1,
@@ -502,6 +563,7 @@ export function buildSugarAgentAuthoringBundle(project: SugarAgentPackProject): 
       name: toNonEmptyString(project.meta?.name),
     },
     policy: {
+      generation,
       runtimeMode,
       globalSafetyBounds,
     },

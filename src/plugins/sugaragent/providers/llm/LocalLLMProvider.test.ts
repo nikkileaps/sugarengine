@@ -58,13 +58,38 @@ describe('LocalLLMProvider', () => {
   });
 
   it('proxies health status from runtime bridge', async () => {
+    let capturedHealthRequest: any = null;
     const provider = new LocalLLMProvider({
-      runtime: new MockLocalRuntimeBridge({ mode: 'valid' }),
+      runtime: {
+        async health(request) {
+          capturedHealthRequest = request;
+          return { ok: true, detail: 'mock-runtime-ready' };
+        },
+        async loadModel() {},
+        async generateStructured() {
+          return { jsonText: '{}' };
+        },
+        async embed() {
+          return [];
+        },
+        async unloadModel() {},
+      },
+      defaultGenerationConfig: {
+        provider: 'openai',
+        selfHosted: {
+          runtimeMode: 'llama',
+        },
+        openai: {
+          model: 'gpt-5-mini',
+          baseUrl: 'https://api.openai.com/v1',
+        },
+      },
     });
 
     const status = await provider.health();
     expect(status.ok).toBe(true);
     expect(status.detail).toBe('mock-runtime-ready');
+    expect(capturedHealthRequest?.generation?.provider).toBe('openai');
   });
 
   it('falls back when runtime throws during generation attempts', async () => {
@@ -261,6 +286,12 @@ describe('LocalLLMProvider', () => {
         relatedLoreScopes: ['npc.baker.family'],
       },
       globalSafetyBounds: ['no legal advice'],
+      generation: {
+        provider: 'openai',
+        openai: {
+          model: 'gpt-5-mini',
+        },
+      },
       context: {
         gameId: 'wordlark',
         regionPath: 'station',
@@ -279,6 +310,12 @@ describe('LocalLLMProvider', () => {
       relatedLoreScopes: ['npc.baker.family'],
     });
     expect(capturedRequest?.globalSafetyBounds).toEqual(['no legal advice']);
+    expect(capturedRequest?.generation).toEqual({
+      provider: 'openai',
+      openai: {
+        model: 'gpt-5-mini',
+      },
+    });
     expect(capturedRequest?.context).toEqual({
       gameId: 'wordlark',
       regionPath: 'station',

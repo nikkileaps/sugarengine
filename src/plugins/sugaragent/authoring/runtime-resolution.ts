@@ -21,6 +21,12 @@ import type {
   PluginAgentProfile,
   PluginQuestSnapshot,
 } from '../../../engine/plugins';
+import type {
+  ResolvedSugarAgentGenerationConfig,
+} from '../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js';
+import {
+  resolveSugarAgentGenerationConfig,
+} from '../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js';
 import {
   findSugarAgentProfile,
   type SugarAgentAuthoringBundleV1,
@@ -29,6 +35,7 @@ import {
 } from './artifacts';
 
 export interface ResolvedSugarAgentPolicy {
+  generation: ResolvedSugarAgentGenerationConfig;
   runtimeMode: 'llama' | 'auto' | 'mock';
   globalSafetyBounds: string[];
 }
@@ -89,8 +96,14 @@ export function resolveSugarAgentPolicy(
   bundle: SugarAgentAuthoringBundleV1 | null | undefined,
   fallbackRuntimeMode: 'llama' | 'auto' | 'mock' = 'llama',
 ): ResolvedSugarAgentPolicy {
+  const generation = resolveSugarAgentGenerationConfig({
+    generation: bundle?.policy.generation,
+    legacyRuntimeMode: bundle?.policy.runtimeMode ?? fallbackRuntimeMode,
+    fallbackRuntimeMode,
+  });
   return {
-    runtimeMode: bundle?.policy.runtimeMode ?? fallbackRuntimeMode,
+    generation,
+    runtimeMode: generation.selfHosted.runtimeMode,
     globalSafetyBounds: dedupeStrings(bundle?.policy.globalSafetyBounds ?? []),
   };
 }

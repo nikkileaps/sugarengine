@@ -13,12 +13,16 @@ import type { LocalRuntimeBridge } from '../../runtime/types';
 import type { SugarAgentRuntimeMode } from '../../runtime/types';
 import type { RuntimeGenerateStructuredResponse } from '../../runtime/types';
 import type { PluginAgentTurnDiagnostics } from '../../../../engine/plugins/types';
+import type {
+  SugarAgentGenerationConfig,
+} from '../../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js';
 
 export interface LocalLLMProviderOptions {
   runtime: LocalRuntimeBridge;
   modelId?: string;
   maxAttempts?: number;
   defaultRuntimeMode?: SugarAgentRuntimeMode;
+  defaultGenerationConfig?: SugarAgentGenerationConfig;
 }
 
 function fallbackOutput(playerMessage: string): SugarAgentTurnOutput {
@@ -47,6 +51,7 @@ export class LocalLLMProvider implements LLMProvider {
   private readonly modelId: string;
   private readonly maxAttempts: number;
   private readonly defaultRuntimeMode?: SugarAgentRuntimeMode;
+  private readonly defaultGenerationConfig?: SugarAgentGenerationConfig;
   private loaded = false;
 
   constructor(options: LocalLLMProviderOptions) {
@@ -54,11 +59,13 @@ export class LocalLLMProvider implements LLMProvider {
     this.modelId = options.modelId ?? 'chat-fast';
     this.maxAttempts = Math.max(1, options.maxAttempts ?? 2);
     this.defaultRuntimeMode = options.defaultRuntimeMode;
+    this.defaultGenerationConfig = options.defaultGenerationConfig;
   }
 
   async health(): Promise<LLMHealthStatus> {
     const status = await this.runtime.health({
       runtimeMode: this.defaultRuntimeMode,
+      generation: this.defaultGenerationConfig,
     });
     return {
       ok: status.ok,
@@ -74,6 +81,7 @@ export class LocalLLMProvider implements LLMProvider {
     logger?.debug?.('[sugaragent][llm-provider][start]', {
       provider: this.name,
       runtimeMode: request.context?.runtimeMode ?? this.defaultRuntimeMode ?? 'llama',
+      generationProvider: request.generation?.provider ?? this.defaultGenerationConfig?.provider ?? 'selfHosted',
       npcId: request.npcId,
       messageLength: trimmedMessage.length,
       hasProfile: Boolean(request.npcProfile),
@@ -118,6 +126,7 @@ export class LocalLLMProvider implements LLMProvider {
           playerMessage: request.playerMessage,
           attempt,
           repair: attempt > 1,
+          generation: request.generation ?? this.defaultGenerationConfig,
           npcProfile: request.npcProfile,
           globalSafetyBounds: request.globalSafetyBounds,
           context: runtimeContext,

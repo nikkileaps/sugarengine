@@ -386,6 +386,23 @@ function normalizeScopeToken(value) {
   return trimmed;
 }
 
+function expandScopeAliases(scope) {
+  const normalized = normalizeScopeToken(scope);
+  if (!normalized) return [];
+  const aliases = new Set([normalized]);
+  const placeScopeMatch = normalized.match(/^(town|city|place|region|location|locations)\.([a-z0-9._-]+)$/);
+  if (placeScopeMatch?.[2]) {
+    const placeId = placeScopeMatch[2];
+    const tail = placeId.split('.').pop();
+    aliases.add(`locations.${placeId}`);
+    if (tail && tail.length >= 3) {
+      aliases.add(tail);
+      aliases.add(`locations.${tail}`);
+    }
+  }
+  return [...aliases];
+}
+
 function normalizeQueryType(value) {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
@@ -435,6 +452,54 @@ function collectChunkEntityIds(chunk) {
     .map((entry) => entry.toLowerCase());
 }
 
+function collectChunkLocationIds(chunk) {
+  const chunkMetadata = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+  return normalizeStringArray(chunkMetadata.location_ids)
+    .map((entry) => entry.toLowerCase());
+}
+
+function collectChunkFactionIds(chunk) {
+  const chunkMetadata = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+  return normalizeStringArray(chunkMetadata.faction_ids)
+    .map((entry) => entry.toLowerCase());
+}
+
+function collectChunkAliasBoundaryTokens(chunk) {
+  const chunkMetadata = typeof chunk.metadata === 'object' && chunk.metadata !== null ? chunk.metadata : {};
+  const rawCandidates = [
+    chunk.title,
+    chunk.sectionHeading,
+    chunk.pageId,
+    chunkMetadata.id,
+    ...(normalizeStringArray(chunkMetadata.location_ids)),
+    chunk.summary,
+    chunk.content,
+  ];
+
+  const tokens = new Set();
+  for (const candidate of rawCandidates) {
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.trim().toLowerCase();
+    if (!normalized) continue;
+    tokens.add(normalized);
+    for (const part of normalized.split(/[.#/_\-\s]+/)) {
+      if (part.length >= 3) {
+        tokens.add(part);
+      }
+    }
+    const withoutLorePrefix = normalizeScopeToken(candidate);
+    if (withoutLorePrefix) {
+      tokens.add(withoutLorePrefix);
+      for (const part of withoutLorePrefix.split(/[.#/_\-\s]+/)) {
+        if (part.length >= 3) {
+          tokens.add(part);
+        }
+      }
+    }
+  }
+  return tokens;
+}
+
 function poolRank(pool) {
   if (pool === 'self') return 0;
   if (pool === 'related') return 1;
@@ -458,6 +523,15 @@ function buildIdentityRetrievalConfig(options = {}) {
     ...selfLoreScopes,
     ...relatedLoreScopes,
   ]));
+  const rawFilters = typeof options.filters === 'object' && options.filters !== null ? options.filters : {};
+  const retrievalFilters = {
+    entityIds: normalizeStringArray(rawFilters.entityIds).map((entry) => entry.toLowerCase()),
+    locationIds: normalizeStringArray(rawFilters.locationIds).map((entry) => entry.toLowerCase()),
+    factionIds: normalizeStringArray(rawFilters.factionIds).map((entry) => entry.toLowerCase()),
+    aliases: normalizeStringArray(rawFilters.aliases)
+      .map((entry) => normalizeScopeToken(entry))
+      .filter((entry) => typeof entry === 'string' && entry.length >= 3),
+  };
   return {
     queryType,
     selfEntityId,
@@ -465,6 +539,7 @@ function buildIdentityRetrievalConfig(options = {}) {
     selfLoreScopes,
     relatedLoreScopes,
     scopeFilters,
+    retrievalFilters,
   };
 }
 
@@ -506,12 +581,49 @@ function matchesLoreScope(chunk, scopeFilters) {
   if (scopeFilters.length === 0) return true;
   const chunkTokens = collectChunkScopeTokens(chunk);
   for (const scope of scopeFilters) {
-    if (chunkTokens.has(scope)) {
-      return true;
-    }
-    for (const token of chunkTokens) {
-      if (token.startsWith(`${scope}.`) || token.endsWith(`.${scope}`)) {
+    for (const alias of expandScopeAliases(scope)) {
+      if (chunkTokens.has(alias)) {
         return true;
+      }
+      for (const token of chunkTokens) {
+        if (token.startsWith(`${alias}.`) || token.endsWith(`.${alias}`)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function matchesRetrievalFilters(chunk, retrievalFilters) {
+  const entityIds = Array.isArray(retrievalFilters?.entityIds) ? retrievalFilters.entityIds : [];
+  const locationIds = Array.isArray(retrievalFilters?.locationIds) ? retrievalFilters.locationIds : [];
+  const factionIds = Array.isArray(retrievalFilters?.factionIds) ? retrievalFilters.factionIds : [];
+  const aliases = Array.isArray(retrievalFilters?.aliases) ? retrievalFilters.aliases : [];
+  const hasFilter = entityIds.length > 0 || locationIds.length > 0 || factionIds.length > 0 || aliases.length > 0;
+  if (!hasFilter) return true;
+
+  const chunkEntityIds = collectChunkEntityIds(chunk);
+  const chunkLocationIds = collectChunkLocationIds(chunk);
+  const chunkFactionIds = collectChunkFactionIds(chunk);
+
+  if (entityIds.length > 0 && entityIds.some((id) => chunkEntityIds.includes(id))) {
+    return true;
+  }
+  if (locationIds.length > 0 && locationIds.some((id) => chunkLocationIds.includes(id))) {
+    return true;
+  }
+  if (factionIds.length > 0 && factionIds.some((id) => chunkFactionIds.includes(id))) {
+    return true;
+  }
+  if (aliases.length > 0) {
+    const chunkTokens = collectChunkAliasBoundaryTokens(chunk);
+    for (const alias of aliases) {
+      if (chunkTokens.has(alias)) return true;
+      for (const token of chunkTokens) {
+        if (token.startsWith(`${alias}.`) || token.endsWith(`.${alias}`)) {
+          return true;
+        }
       }
     }
   }
@@ -519,6 +631,7 @@ function matchesLoreScope(chunk, scopeFilters) {
 }
 
 function shouldIncludeChunkForRetrieval(chunk, identityConfig) {
+  if (!matchesRetrievalFilters(chunk, identityConfig.retrievalFilters)) return false;
   if (matchesLoreScope(chunk, identityConfig.scopeFilters)) return true;
   const isSelfQuery = identityConfig.queryType === 'self_query';
   if (!isSelfQuery || !identityConfig.selfEntityId) return false;

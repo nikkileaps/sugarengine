@@ -1711,6 +1711,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           npcId: request.npcId,
           npcName: request.npcName ?? 'Friend',
           playerMessage: message,
+          generation: resolvedPolicy.generation,
           npcProfile,
           globalSafetyBounds: resolvedPolicy.globalSafetyBounds,
           context: runtimeContext,
@@ -2201,6 +2202,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
       runtime: runtimeBridge,
       maxAttempts: 3,
       defaultRuntimeMode: resolvedRuntimeMode,
+      defaultGenerationConfig: resolvedPolicy.generation,
     });
 
     try {

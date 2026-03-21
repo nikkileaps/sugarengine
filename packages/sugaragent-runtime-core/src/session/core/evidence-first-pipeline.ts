@@ -23,7 +23,7 @@ import {
   maxSpecificityForMode,
   deterministicHedgePrefix,
 } from './claim-planning.js';
-import { tokenizeForPlan } from './retrieval-text.js';
+import { lexicalOverlapScore, tokenizeForPlan } from './retrieval-text.js';
 import {
   extractFacetQueryTokens,
   expandFacetQueryTokenVariants,
@@ -110,6 +110,7 @@ interface EvidenceFirstPlannerInput {
   npcId: string;
   npcName: string;
   playerMessage: string;
+  recentNpcReplies?: string[];
   queryType: QueryType | string;
   routing?: PipelineRoutingInput | null;
   evidencePack: EvidencePackLike;
@@ -136,6 +137,7 @@ interface ValidatedTurnPlanResult extends ValidatedTurnPlan {
 
 interface RunEvidenceFirstPipelineInput {
   playerMessage: string;
+  recentNpcReplies?: string[];
   routing: PipelineRoutingInput;
   snapshot: NpcStateSnapshot;
   evidencePack: EvidencePackLike;
@@ -374,6 +376,7 @@ function buildDeterministicSocialReply(
   playerMessage: string,
   snapshot: NpcStateSnapshot,
   adaptationContext?: LanguageAdaptationContext | null,
+  recentNpcReplies: string[] = [],
 ): SugarAgentTurnOutput {
   const message = String(playerMessage ?? '').trim();
   const npcName = normalizeClaimText(snapshot?.npcName || '') || 'friend';
@@ -381,6 +384,7 @@ function buildDeterministicSocialReply(
   const declaredName = extractDeclaredIdentityName(message, targetLanguage);
   const safeDeclaredName = declaredName ? capitalizeName(declaredName) : '';
   const asksIdentity = shouldAnswerWithNpcName(message);
+  const hasPriorNpcReply = recentNpcReplies.some((entry) => normalizeClaimText(entry).length > 0);
   const frustration = /\b(i was pretty clear|i was clear|that was clear|pretty clear|be serious|come on)\b/i.test(message);
   const acknowledgement = detectSocialAcknowledgement(message, targetLanguage);
   const smallTalkQuery = isLikelySmallTalkQuery(message, targetLanguage);
@@ -420,7 +424,7 @@ function buildDeterministicSocialReply(
   }
   if (safeDeclaredName) {
     return {
-      utterance: localizeSimpleSocialReply('nice_to_meet_you', targetLanguage, {
+      utterance: localizeSimpleSocialReply(hasPriorNpcReply ? 'nice_to_meet_you_brief' : 'nice_to_meet_you', targetLanguage, {
         npcName,
         playerName: safeDeclaredName,
       }),
@@ -433,7 +437,7 @@ function buildDeterministicSocialReply(
   }
   if (isLikelyGreetingOnlyMessage(message, targetLanguage)) {
     return {
-      utterance: localizeSimpleSocialReply('hi_im_npc', targetLanguage, { npcName }),
+      utterance: localizeSimpleSocialReply(hasPriorNpcReply ? 'hi' : 'hi_im_npc', targetLanguage, { npcName }),
       emotion: 'warm',
       intent: 'conversation',
       proposedIntents: [],
@@ -592,6 +596,47 @@ function assessKnowledgeEvidenceRelevance(
   };
 }
 
+function playerExplicitlyRequestsRepeat(playerMessage: unknown): boolean {
+  return /\b(again|repeat|say that again|what did you say|one more time)\b/i.test(String(playerMessage ?? ''));
+}
+
+function isCurrentLocationRoutineStateItem(
+  item: EpistemicEvidenceItem | null | undefined,
+): boolean {
+  return item?.sourceType === 'routine_state' && item?.provenance?.kind === 'current_location';
+}
+
+function isExplicitCurrentLocationQuestion(playerMessage: unknown): boolean {
+  return /\b(where are we|where am i|where is this|what place is this|this place|right now|currently|here)\b/i.test(
+    String(playerMessage ?? ''),
+  );
+}
+
+function isGenericWorldLoreInterpretation(
+  playerMessageOrInterpretation: string | QueryInterpretation,
+): boolean {
+  if (!playerMessageOrInterpretation || typeof playerMessageOrInterpretation !== 'object') return false;
+  return playerMessageOrInterpretation.target === 'world'
+    && playerMessageOrInterpretation.facet === 'general_lore';
+}
+
+function recentReplyOverlapPenalty(
+  item: EpistemicEvidenceItem,
+  recentNpcReplies: string[],
+  playerMessage: string,
+): number {
+  if (recentNpcReplies.length === 0 || playerExplicitlyRequestsRepeat(playerMessage)) {
+    return 0;
+  }
+  const evidenceText = buildEvidenceRelevanceText(item);
+  const maxOverlap = recentNpcReplies.reduce((best, reply) => {
+    return Math.max(best, lexicalOverlapScore(evidenceText, reply));
+  }, 0);
+  if (maxOverlap >= 0.72) return 0.32;
+  if (maxOverlap >= 0.48) return 0.18;
+  return 0;
+}
+
 export function hasDirectAnswerableStateEvidence(
   items: EpistemicEvidenceItem[],
   playerMessageOrInterpretation: string | QueryInterpretation,
@@ -605,22 +650,73 @@ export function hasDirectAnswerableStateEvidence(
 function selectClaimableKnowledgeEvidence(
   items: EpistemicEvidenceItem[],
   playerMessageOrInterpretation: string | QueryInterpretation,
+  options: {
+    playerMessage?: string;
+    recentNpcReplies?: string[];
+  } = {},
 ): EpistemicEvidenceItem[] {
-  return (Array.isArray(items) ? items : [])
+  const recentNpcReplies = Array.isArray(options.recentNpcReplies)
+    ? options.recentNpcReplies
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .slice(-3)
+    : [];
+  const genericWorldLore = isGenericWorldLoreInterpretation(playerMessageOrInterpretation);
+  const currentLocationQuestion = isExplicitCurrentLocationQuestion(options.playerMessage ?? '');
+  const ranked = (Array.isArray(items) ? items : [])
     .map((item) => {
       const relevance = assessKnowledgeEvidenceRelevance(item, playerMessageOrInterpretation);
+      const currentLocationPenalty = isCurrentLocationRoutineStateItem(item) && !currentLocationQuestion
+        ? (genericWorldLore ? 0.42 : 0.28)
+        : 0;
+      const loreChunkBoost = genericWorldLore && item?.sourceType === 'lore_chunk' ? 0.08 : 0;
+      const repeatPenalty = recentReplyOverlapPenalty(
+        item,
+        recentNpcReplies,
+        options.playerMessage ?? '',
+      );
       return {
         item,
         relevance,
+        priority: Number((
+          (relevance.coverage * 0.62)
+          + (relevance.matchedTokens * 0.14)
+          + ((item?.confidence ?? 0) * 0.22)
+          + loreChunkBoost
+          - currentLocationPenalty
+          - repeatPenalty
+        ).toFixed(4)),
       };
     })
     .sort((a, b) => (
-      b.relevance.coverage - a.relevance.coverage
+      b.priority - a.priority
+      || b.relevance.coverage - a.relevance.coverage
       || b.relevance.matchedTokens - a.relevance.matchedTokens
       || (b.item?.confidence ?? 0) - (a.item?.confidence ?? 0)
     ))
-    .filter((entry) => entry.relevance.claimable)
-    .map((entry) => entry.item);
+    .filter((entry) => entry.relevance.claimable);
+
+  if (currentLocationQuestion) {
+    const currentLocationEntries = ranked.filter((entry) => isCurrentLocationRoutineStateItem(entry.item));
+    if (currentLocationEntries.length > 0) {
+      return [
+        ...currentLocationEntries.map((entry) => entry.item),
+        ...ranked
+          .filter((entry) => !isCurrentLocationRoutineStateItem(entry.item))
+          .map((entry) => entry.item),
+      ];
+    }
+  }
+
+  if (!currentLocationQuestion) {
+    const hasNonLocationClaimable = ranked.some((entry) => !isCurrentLocationRoutineStateItem(entry.item));
+    if (hasNonLocationClaimable) {
+      return ranked
+        .filter((entry) => !isCurrentLocationRoutineStateItem(entry.item))
+        .map((entry) => entry.item);
+    }
+  }
+
+  return ranked.map((entry) => entry.item);
 }
 
 function pickPrimaryEvidenceForMode(
@@ -702,6 +798,7 @@ export function createEvidenceFirstTurnPlanV2(
     npcId,
     npcName,
     playerMessage,
+    recentNpcReplies,
     queryType,
     routing,
     evidencePack,
@@ -781,7 +878,10 @@ export function createEvidenceFirstTurnPlanV2(
   }
 
   // Pick top evidence items (already ranked by the evidence pack builder)
-  const selected = selectClaimableKnowledgeEvidence(availableItems, interpretationOrMessage).slice(0, 5);
+  const selected = selectClaimableKnowledgeEvidence(availableItems, interpretationOrMessage, {
+    playerMessage,
+    recentNpcReplies,
+  }).slice(0, 5);
   let claimIndex = 0;
   const claims: PlannedClaim[] = [];
   const seenClaimTexts = new Set();
@@ -1082,6 +1182,7 @@ export function runEvidenceFirstPipeline(
 ): EvidenceFirstPipelineResult {
   const {
     playerMessage,
+    recentNpcReplies,
     routing,
     snapshot,
     evidencePack,
@@ -1141,7 +1242,12 @@ export function runEvidenceFirstPipeline(
       abstention: null,
     };
 
-    const socialTurn = buildDeterministicSocialReply(playerMessage, snapshot, adaptationContext ?? null);
+    const socialTurn = buildDeterministicSocialReply(
+      playerMessage,
+      snapshot,
+      adaptationContext ?? null,
+      Array.isArray(recentNpcReplies) ? recentNpcReplies : [],
+    );
     // Verify social response doesn't leak facts
     if (checkSocialResponseForFactualLeakage(socialTurn.utterance)) {
       // Reroute to grounded — fall through to grounded path below
@@ -1166,6 +1272,7 @@ export function runEvidenceFirstPipeline(
     npcId: snapshot.npcId,
     npcName: snapshot.npcName,
     playerMessage,
+    recentNpcReplies,
     queryType,
     routing: normalizedRouting,
     evidencePack: enrichedPack,

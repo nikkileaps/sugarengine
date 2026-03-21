@@ -95,6 +95,8 @@ export class HttpGameApiRuntimeBridge implements LocalRuntimeBridge {
       request: {
         runtimeMode: request?.runtimeMode ?? this.runtimeMode,
         gameId: request?.gameId ?? this.gameId,
+        // Hosted generation selection is backend-owned. The browser bridge
+        // preserves transport semantics but does not override deploy/runtime config.
       },
     });
     return {

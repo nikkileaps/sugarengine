@@ -92,4 +92,40 @@ describe('delivery-contract', () => {
       failureReason: 'delivery_max_knowledge_claims:3>2',
     });
   });
+
+  it('rejects B0 social replies that are too long even when the generic sentence budget would allow them', () => {
+    expect(validateReplyAgainstDeliveryContract({
+      deliveryContract: {
+        detailLevel: 'minimal',
+        maxSentences: 1,
+        maxSentenceLength: 8,
+      },
+      learnerBand: 'B0',
+      supportLanguagePolicy: 'full_support',
+      utterance: 'Hola, Mim, colega; quieres queso y una sonrisa?',
+      acceptedClaimOrdinals: [],
+      knowledgePartCount: 0,
+    })).toEqual({
+      ok: false,
+      failureReason: 'delivery_b0_social_word_budget:8>4',
+    });
+  });
+
+  it('rejects B0 social replies with ornate punctuation', () => {
+    expect(validateReplyAgainstDeliveryContract({
+      deliveryContract: {
+        detailLevel: 'minimal',
+        maxSentences: 1,
+        maxSentenceLength: 8,
+      },
+      learnerBand: 'B0',
+      supportLanguagePolicy: 'light_support',
+      utterance: 'Hola, Mim; bien.',
+      acceptedClaimOrdinals: [],
+      knowledgePartCount: 0,
+    })).toEqual({
+      ok: false,
+      failureReason: 'delivery_b0_plain_punctuation',
+    });
+  });
 });

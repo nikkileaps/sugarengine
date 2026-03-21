@@ -11,6 +11,7 @@ interface RuntimeBridgeRequest {
   op: 'health' | 'loadModel' | 'generateStructured' | 'embed' | 'unloadModel';
   runtimeMode?: SugarAgentRuntimeMode;
   gameId?: string;
+  generation?: RuntimeHealthRequest['generation'];
   modelId?: string;
   request?: RuntimeGenerateStructuredRequest;
   texts?: string[];
@@ -70,6 +71,7 @@ export class HttpLocalRuntimeBridge implements LocalRuntimeBridge {
       op: 'health',
       runtimeMode: request?.runtimeMode ?? this.runtimeMode,
       gameId: request?.gameId ?? this.gameId,
+      generation: request?.generation,
     });
     return {
       ok: result.ok === true,

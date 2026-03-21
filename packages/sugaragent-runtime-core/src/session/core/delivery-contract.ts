@@ -37,8 +37,17 @@ function normalizeOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function normalizeLearnerBand(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? normalized.toUpperCase() : undefined;
+}
+
 function containsExactNumber(text: string): boolean {
   return /\b\d[\d,.:/-]*\b/.test(text);
+}
+
+function containsBeginnerComplexPunctuation(text: string): boolean {
+  return /[;:¿¡]/.test(text);
 }
 
 function looksAbstractDetail(text: string): boolean {
@@ -162,13 +171,62 @@ function estimateLongestSentenceWords(text: string): number {
   }, 0);
 }
 
+function countWords(text: string): number {
+  return String(text ?? '')
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .length;
+}
+
 export function validateReplyAgainstDeliveryContract(input: {
   deliveryContract?: DeliveryContract | null;
   utterance: string;
   acceptedClaimOrdinals: number[];
   knowledgePartCount: number;
+  learnerBand?: string;
+  supportLanguagePolicy?: string;
 }): DeliveryContractCheckResult {
   const normalized = normalizeDeliveryContract(input.deliveryContract);
+  const learnerBand = normalizeLearnerBand(input.learnerBand);
+  const supportLanguagePolicy = normalizeOptionalString(input.supportLanguagePolicy);
+  const utteranceWordCount = countWords(input.utterance);
+
+  if (
+    learnerBand === 'B0'
+    && input.knowledgePartCount === 0
+    && utteranceWordCount > 4
+  ) {
+    return {
+      ok: false,
+      failureReason: `delivery_b0_social_word_budget:${utteranceWordCount}>4`,
+    };
+  }
+
+  if (
+    learnerBand === 'B0'
+    && input.knowledgePartCount === 0
+    && containsBeginnerComplexPunctuation(input.utterance)
+  ) {
+    return {
+      ok: false,
+      failureReason: 'delivery_b0_plain_punctuation',
+    };
+  }
+
+  if (
+    learnerBand === 'B0'
+    && (supportLanguagePolicy === 'full_support' || supportLanguagePolicy === 'heavy_support')
+    && input.knowledgePartCount === 0
+    && utteranceWordCount > 3
+  ) {
+    return {
+      ok: false,
+      failureReason: `delivery_b0_support_reply_too_long:${utteranceWordCount}>3`,
+    };
+  }
+
   if (!normalized) return { ok: true };
 
   if (

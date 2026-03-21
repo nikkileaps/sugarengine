@@ -1,4 +1,6 @@
 import type { GameRootPaths } from './fs-paths';
+import type { SugarAgentGenerationConfig } from '../../../packages/sugaragent-runtime-core/src/runtime/generation-config';
+import { resolveSugarAgentGenerationConfig } from '../../../packages/sugaragent-runtime-core/src/runtime/generation-config';
 
 export type WebPublishTarget = 'web';
 export type WebPublishEnvironment = 'staging' | 'production';
@@ -15,6 +17,9 @@ export interface WebPublishProfile {
   environment: WebPublishEnvironment;
   profilePath: string;
   frontend: WebPublishFrontendConfig;
+  sugaragent: {
+    generation: SugarAgentGenerationConfig;
+  };
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -85,6 +90,14 @@ export function parseWebPublishProfile(
   if (!gameApiBaseUrl) {
     throw new Error(`Web publish profile ${profilePath} is missing frontend.gameApiBaseUrl.`);
   }
+  const rawSugarAgent = typeof profile.sugaragent === 'object' && profile.sugaragent !== null
+    ? profile.sugaragent as Record<string, unknown>
+    : {};
+  const resolvedGeneration = resolveSugarAgentGenerationConfig({
+    generation: (typeof rawSugarAgent.generation === 'object' && rawSugarAgent.generation !== null)
+      ? rawSugarAgent.generation as SugarAgentGenerationConfig
+      : undefined,
+  });
 
   return {
     target,
@@ -94,6 +107,18 @@ export function parseWebPublishProfile(
       gameApiBaseUrl,
       backendRequired: parseBooleanFlag(rawFrontend?.backendRequired, true),
       credentials: normalizeWebPublishCredentials(rawFrontend?.credentials, 'include'),
+    },
+    sugaragent: {
+      generation: {
+        provider: resolvedGeneration.provider,
+        selfHosted: {
+          runtimeMode: resolvedGeneration.selfHosted.runtimeMode,
+        },
+        openai: {
+          model: resolvedGeneration.openai.model,
+          baseUrl: resolvedGeneration.openai.baseUrl,
+        },
+      },
     },
   };
 }

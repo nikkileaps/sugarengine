@@ -111,7 +111,9 @@ export function localizeGroundedUncertaintyReply(
 
 export function localizeSimpleSocialReply(
   key:
+    | 'hi'
     | 'hi_im_npc'
+    | 'nice_to_meet_you_brief'
     | 'nice_to_meet_you'
     | 'status_good_and_you'
     | 'any_time'
@@ -132,7 +134,9 @@ export function localizeSimpleSocialReply(
 
   if (language === 'es') {
     switch (key) {
+      case 'hi': return 'Hola.';
       case 'hi_im_npc': return `Hola. Soy ${npcName}.`;
+      case 'nice_to_meet_you_brief': return `Mucho gusto, ${playerName}.`;
       case 'nice_to_meet_you': return `Mucho gusto, ${playerName}. Soy ${npcName}.`;
       case 'status_good_and_you': return 'Estoy bien. Y tu?';
       case 'any_time': return 'De nada.';
@@ -149,7 +153,9 @@ export function localizeSimpleSocialReply(
 
   if (language === 'fr') {
     switch (key) {
+      case 'hi': return 'Bonjour.';
       case 'hi_im_npc': return `Bonjour. Je suis ${npcName}.`;
+      case 'nice_to_meet_you_brief': return `Ravi de te rencontrer, ${playerName}.`;
       case 'nice_to_meet_you': return `Ravi de te rencontrer, ${playerName}. Je suis ${npcName}.`;
       case 'status_good_and_you': return 'Je vais bien. Et toi ?';
       case 'any_time': return 'Avec plaisir.';
@@ -166,7 +172,9 @@ export function localizeSimpleSocialReply(
 
   if (language === 'de') {
     switch (key) {
+      case 'hi': return 'Hallo.';
       case 'hi_im_npc': return `Hallo. Ich bin ${npcName}.`;
+      case 'nice_to_meet_you_brief': return `Freut mich, ${playerName}.`;
       case 'nice_to_meet_you': return `Freut mich, ${playerName}. Ich bin ${npcName}.`;
       case 'status_good_and_you': return 'Mir geht es gut. Und dir?';
       case 'any_time': return 'Gern geschehen.';
@@ -183,7 +191,9 @@ export function localizeSimpleSocialReply(
 
   if (language === 'it') {
     switch (key) {
+      case 'hi': return 'Ciao.';
       case 'hi_im_npc': return `Ciao. Sono ${npcName}.`;
+      case 'nice_to_meet_you_brief': return `Piacere, ${playerName}.`;
       case 'nice_to_meet_you': return `Piacere, ${playerName}. Sono ${npcName}.`;
       case 'status_good_and_you': return 'Sto bene. E tu?';
       case 'any_time': return 'Di niente.';
@@ -200,7 +210,9 @@ export function localizeSimpleSocialReply(
 
   if (language === 'pt') {
     switch (key) {
+      case 'hi': return 'Ola.';
       case 'hi_im_npc': return `Ola. Eu sou ${npcName}.`;
+      case 'nice_to_meet_you_brief': return `Prazer, ${playerName}.`;
       case 'nice_to_meet_you': return `Prazer, ${playerName}. Eu sou ${npcName}.`;
       case 'status_good_and_you': return 'Estou bem. E voce?';
       case 'any_time': return 'De nada.';
@@ -216,7 +228,9 @@ export function localizeSimpleSocialReply(
   }
 
   switch (key) {
+    case 'hi': return 'Hi.';
     case 'hi_im_npc': return `Hi. I'm ${npcName}.`;
+    case 'nice_to_meet_you_brief': return `Nice to meet you, ${playerName}.`;
     case 'nice_to_meet_you': return `Nice to meet you, ${playerName}. I'm ${npcName}.`;
     case 'status_good_and_you': return "I'm doing well. And you?";
     case 'any_time': return 'Any time.';

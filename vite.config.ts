@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'path';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -20,17 +20,23 @@ import {
   parseWebPublishProfile,
   resolveWebPublishProfilePath,
 } from './src/editor/game-root/web-publish-profile';
-import type { SugarAgentSessionRuntime } from './packages/sugaragent-runtime-core/src';
+import type {
+  HostedSugarAgentRuntimeServices,
+} from './packages/sugaragent-runtime-core/src';
 
-export default defineConfig({
-  plugins: [
-    react(),
-    {
+export default defineConfig(({ mode }) => {
+  const loadedEnv = loadEnv(mode, process.cwd(), '');
+  Object.assign(process.env, loadedEnv);
+
+  return {
+    plugins: [
+      react(),
+      {
       name: 'sugarengine-active-game-sync',
       configureServer(server) {
         const projectRoot = process.cwd();
         const defaultLoreDir = resolve(projectRoot, 'src', 'plugins', 'sugaragent', 'lore', 'generated');
-        const sessionCache = new Map<string, Promise<SugarAgentSessionRuntime>>();
+        const runtimeServicesCache = new Map<string, Promise<HostedSugarAgentRuntimeServices>>();
         const registeredGameRoots = new Map<string, string>();
         const loreResolutionWarnings = new Set<string>();
 
@@ -1315,14 +1321,8 @@ export default defineConfig({
 
         const clearSessionForNpc = async (npcId: string, requestedGameId?: string) => {
           const slug = await resolveRuntimeGameSlug(requestedGameId);
-          const cachePrefix = `${slug || 'default'}:`;
-          let removedCacheEntries = 0;
-          for (const key of [...sessionCache.keys()]) {
-            if (key === `${cachePrefix}${npcId}:llama` || key === `${cachePrefix}${npcId}:auto` || key === `${cachePrefix}${npcId}:mock`) {
-              sessionCache.delete(key);
-              removedCacheEntries += 1;
-            }
-          }
+          const removedCacheEntries = runtimeServicesCache.size;
+          runtimeServicesCache.clear();
           const sessionId = buildPreviewSessionId(slug, npcId);
           const sessionFile = resolve(projectRoot, '.sugaragent-sim-sessions', `${sessionId}.json`);
           let removedFile = false;
@@ -1341,14 +1341,8 @@ export default defineConfig({
 
         const clearSessionsForGame = async (requestedGameId?: string) => {
           const slug = await resolveRuntimeGameSlug(requestedGameId);
-          const cacheKeyPrefix = `${slug || 'default'}:`;
-          let removedCacheEntries = 0;
-          for (const key of [...sessionCache.keys()]) {
-            if (key.startsWith(cacheKeyPrefix)) {
-              sessionCache.delete(key);
-              removedCacheEntries += 1;
-            }
-          }
+          const removedCacheEntries = runtimeServicesCache.size;
+          runtimeServicesCache.clear();
 
           const sessionDir = resolve(projectRoot, '.sugaragent-sim-sessions');
           const filePrefix = `preview-${slug || 'default'}-`;
@@ -1477,7 +1471,7 @@ export default defineConfig({
             embeddingModelId: LOCAL_EMBEDDING_MODEL_ID,
           });
           const written = writeLoreArtifacts(outputDir, artifacts);
-          sessionCache.clear();
+          runtimeServicesCache.clear();
           const clearedSessions = await clearSessionsForGame(slug);
 
           return {
@@ -1494,43 +1488,35 @@ export default defineConfig({
           };
         };
 
-        const getSugarAgentSession = async (
-          npcId: string,
+        const getPreviewRuntimeServices = async (
           requestedGameId?: string,
           runtimeModeInput?: unknown,
+          generationInput?: unknown,
         ) => {
           const slug = await resolveRuntimeGameSlug(requestedGameId);
           const runtimeMode = normalizeRuntimeMode(runtimeModeInput);
-          const cacheKey = `${slug || 'default'}:${npcId}:${runtimeMode}`;
           const loreConfig = resolveSessionLoreConfig(slug);
-          let pending = sessionCache.get(cacheKey);
-          if (pending) {
-            const cachedSession = await pending;
-            if (!shouldRebuildCachedSugarAgentSession(cachedSession, loreConfig)) {
-              return cachedSession;
-            }
-            sessionCache.delete(cacheKey);
-            pending = undefined;
-          }
+          const cacheKey = JSON.stringify({
+            slug: slug || 'default',
+            runtimeMode,
+            generation: generationInput ?? null,
+            loreDir: loreConfig.loreDir,
+            useLore: loreConfig.useLore,
+            missingGameLoreBundle: loreConfig.missingGameLoreBundle === true,
+          });
+          let pending = runtimeServicesCache.get(cacheKey);
           if (!pending) {
             pending = (async () => {
-              const { createSugarAgentSession } = await server.ssrLoadModule('/src/plugins/sugaragent/session/runtime.ts') as {
-                createSugarAgentSession: (options: Record<string, unknown>) => Promise<SugarAgentSessionRuntime>;
+              const { createHostedSugarAgentRuntimeServices } = await server.ssrLoadModule('/packages/sugaragent-runtime-core/src/hosted.ts') as {
+                createHostedSugarAgentRuntimeServices: (options: Record<string, unknown>) => HostedSugarAgentRuntimeServices;
               };
 
-              const sessionId = buildPreviewSessionId(slug, npcId);
-
-              // Important boundary note:
-              // This preview-session bridge is not the authoritative source of SugarAgent authoring.
-              // The main preview/game plugin builds SugarAgent authoring directly from the loaded project
-              // document in memory. This session runtime only receives resolved npcProfile overrides per turn.
-              return createSugarAgentSession({
-                npc: npcId,
-                provider: 'local',
-                runtime: runtimeMode,
-                rerankerClass: 'learned',
-                simulateInvalidJson: process.env.SUGARAGENT_SIM_INVALID_JSON ?? 'never',
-                session: sessionId,
+              return createHostedSugarAgentRuntimeServices({
+                gameId: slug || 'default',
+                runtimeMode,
+                generation: (typeof generationInput === 'object' && generationInput !== null)
+                  ? generationInput as Record<string, unknown>
+                  : undefined,
                 loreDir: loreConfig.loreDir,
                 useLore: process.env.SUGARAGENT_USE_LORE === 'false'
                   ? false
@@ -1539,7 +1525,7 @@ export default defineConfig({
                 requireLoreScopeForRetrieval: false,
               });
             })();
-            sessionCache.set(cacheKey, pending);
+            runtimeServicesCache.set(cacheKey, pending);
           }
           return pending;
         };
@@ -1600,11 +1586,22 @@ export default defineConfig({
               try {
                 const requestedGameId = normalizeOptionalString(body.gameId);
                 const runtimeMode = normalizeRuntimeMode(body.runtimeMode);
-                const session = await getSugarAgentSession('health-check', requestedGameId, runtimeMode);
+                const runtimeServices = await getPreviewRuntimeServices(
+                  requestedGameId,
+                  runtimeMode,
+                  body.generation,
+                );
+                const health = await runtimeServices.health({
+                  gameId: requestedGameId,
+                  runtimeMode,
+                  generation: (typeof body.generation === 'object' && body.generation !== null)
+                    ? body.generation as Record<string, unknown>
+                    : undefined,
+                });
                 const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
                 writeJson(res, 200, {
-                  ok: true,
-                  detail: session.startup?.runtime?.health?.detail ?? 'local-runtime-ready',
+                  ok: health.ok,
+                  detail: health.detail ?? 'local-runtime-ready',
                   embedding: embeddingHealth,
                 });
               } catch (error) {
@@ -1649,24 +1646,45 @@ export default defineConfig({
                 return;
               }
 
-              const session = await getSugarAgentSession(npcId, requestedGameId, runtimeMode);
-              const result = await session.runTurn(playerMessage, {
-                npcName,
-                npcProfileOverride: npcProfile,
-                globalSafetyBoundsOverride: globalSafetyBounds,
-                context: requestContext,
+              const runtimeServices = await getPreviewRuntimeServices(
+                requestedGameId,
+                runtimeMode,
+                request.generation,
+              );
+              const result = await runtimeServices.generateStructured({
+                npcId,
+                npcName: npcName ?? npcId,
+                playerMessage,
                 attempt,
                 repair,
+                generation: (typeof request.generation === 'object' && request.generation !== null)
+                  ? request.generation as Record<string, unknown>
+                  : undefined,
+                npcProfile,
+                globalSafetyBounds,
+                context: requestContext,
               });
               const diagnostics = buildTurnDiagnostics({
-                ...result,
-                authoring: (typeof session.startup?.authoring === 'object' && session.startup.authoring !== null)
-                  ? session.startup.authoring as Record<string, unknown>
+                output: JSON.parse(result.jsonText),
+                attempts: result.attempts ?? attempt,
+                usedFallback: result.usedFallback ?? false,
+                fallbackKind: result.fallbackKind,
+                validationErrors: Array.isArray(result.validationErrors) ? result.validationErrors : [],
+                loreMatches: [],
+                routing: (typeof result.diagnostics?.routing === 'object' && result.diagnostics?.routing !== null)
+                  ? result.diagnostics.routing as Record<string, unknown>
                   : undefined,
+                pipeline: (typeof result.diagnostics?.pipeline === 'object' && result.diagnostics?.pipeline !== null)
+                  ? result.diagnostics.pipeline as Record<string, unknown>
+                  : undefined,
+                grounding: (typeof result.diagnostics?.grounding === 'object' && result.diagnostics?.grounding !== null)
+                  ? result.diagnostics.grounding as Record<string, unknown>
+                  : undefined,
+                authoring: undefined,
               }, requestContext);
               writeJson(res, 200, {
                 ok: true,
-                jsonText: JSON.stringify(result.output),
+                jsonText: result.jsonText,
                 attempts: result.attempts,
                 usedFallback: result.usedFallback,
                 fallbackKind: result.fallbackKind,
@@ -1707,7 +1725,7 @@ export default defineConfig({
             }
 
             if (op === 'unloadModel') {
-              sessionCache.clear();
+              runtimeServicesCache.clear();
               writeJson(res, 200, { ok: true, detail: 'runtime cache cleared' });
               return;
             }
@@ -1827,25 +1845,26 @@ export default defineConfig({
           : undefined;
         configureServer?.(server);
       },
+      },
+    ],
+    clearScreen: false,
+    server: {
+      port: 7777,
+      strictPort: true,
     },
-  ],
-  clearScreen: false,
-  server: {
-    port: 7777,
-    strictPort: true,
-  },
-  envPrefix: ['VITE_', 'TAURI_'],
-  build: {
-    target: 'esnext',
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
-    sourcemap: !!process.env.TAURI_DEBUG,
-    rollupOptions: {
-      // Externalize Tauri modules - they're only available at runtime in Tauri context
-      external: ['@tauri-apps/api/path', '@tauri-apps/plugin-fs'],
-      input: {
-        main: resolve(__dirname, 'index.html'),
-        preview: resolve(__dirname, 'preview.html'),
+    envPrefix: ['VITE_', 'TAURI_'],
+    build: {
+      target: 'esnext',
+      minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+      sourcemap: !!process.env.TAURI_DEBUG,
+      rollupOptions: {
+        // Externalize Tauri modules - they're only available at runtime in Tauri context
+        external: ['@tauri-apps/api/path', '@tauri-apps/plugin-fs'],
+        input: {
+          main: resolve(__dirname, 'index.html'),
+          preview: resolve(__dirname, 'preview.html'),
+        },
       },
     },
-  },
+  };
 });

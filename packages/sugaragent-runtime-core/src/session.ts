@@ -7,6 +7,12 @@ export interface SugarAgentSessionStartup {
       ok?: boolean;
       detail?: string;
     };
+    generation?: {
+      provider?: 'selfHosted' | 'openai';
+      model?: string;
+      baseUrl?: string;
+      runtimeMode?: string;
+    };
   };
   session?: {
     id?: string;

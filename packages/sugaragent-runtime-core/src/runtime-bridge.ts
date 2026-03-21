@@ -1,4 +1,5 @@
 import type { PluginPedagogyContext } from './pedagogy.js';
+import type { SugarAgentGenerationConfig } from './runtime/generation-config.js';
 
 export type SugarAgentRuntimeMode = 'llama' | 'auto' | 'mock';
 
@@ -15,6 +16,7 @@ export interface RuntimeHealthStatus {
 export interface RuntimeHealthRequest {
   runtimeMode?: SugarAgentRuntimeMode;
   gameId?: string;
+  generation?: SugarAgentGenerationConfig;
 }
 
 export interface RuntimeGenerateStructuredRequest {
@@ -23,6 +25,7 @@ export interface RuntimeGenerateStructuredRequest {
   playerMessage: string;
   attempt: number;
   repair: boolean;
+  generation?: SugarAgentGenerationConfig;
   npcProfile?: {
     persona?: string;
     tone?: string;

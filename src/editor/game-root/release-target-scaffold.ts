@@ -131,6 +131,19 @@ function buildProfileContent(gameId: string, environment: 'staging' | 'productio
       sharedAlphaUsernameSecretName: `${serviceName}-shared-alpha-username`,
       sharedAlphaPasswordHashSecretName: `${serviceName}-shared-alpha-password-hash`,
     },
+    sugaragent: {
+      generation: {
+        provider: 'selfHosted',
+        selfHosted: {
+          runtimeMode: 'llama',
+        },
+        openai: {
+          model: 'gpt-5-mini',
+          baseUrl: 'https://api.openai.com/v1',
+        },
+      },
+      openAiApiKeySecretName: `${serviceName}-sugaragent-openai-api-key`,
+    },
     sugaragentAssets: {
       runtimeArchiveUrl: 'https://github.com/ggml-org/llama.cpp/releases/download/b8182/llama-b8182-bin-ubuntu-x64.tar.gz',
       runtimeBinaryName: 'llama-completion',
@@ -302,7 +315,10 @@ GAME_API_PROTECTED_SESSION_MAX=120
 GAME_API_SUGARAGENT_SESSION_WINDOW_MS=60000
 GAME_API_SUGARAGENT_SESSION_MAX=30
 GAME_API_SUGARAGENT_RUNTIME_MODE=llama
-GAME_API_SUGARAGENT_PROVIDER=local
+GAME_API_SUGARAGENT_GENERATION_PROVIDER=selfHosted
+GAME_API_SUGARAGENT_OPENAI_MODEL=gpt-5-mini
+GAME_API_SUGARAGENT_OPENAI_BASE_URL=https://api.openai.com/v1
+GAME_API_SUGARAGENT_OPENAI_API_KEY=
 GAME_API_SUGARAGENT_USE_LORE=true
 GAME_API_SUGARAGENT_LORE_DIR=../../../plugins/sugaragent/lore/generated
 GAME_API_SUGARAGENT_MISSING_GAME_LORE_BUNDLE=false
@@ -345,7 +361,16 @@ export interface AppConfig {
   auth: AuthConfig;
   sugaragent: {
     runtimeMode: 'llama' | 'auto' | 'mock';
-    provider: 'local' | 'echo';
+    generation: {
+      provider: 'selfHosted' | 'openai';
+      selfHosted: {
+        runtimeMode: 'llama' | 'auto' | 'mock';
+      };
+      openai: {
+        model: string;
+        baseUrl: string;
+      };
+    };
     useLore: boolean;
     loreDir: string;
     missingGameLoreBundle: boolean;
@@ -408,8 +433,8 @@ function parseRuntimeMode(value: string | undefined): AppConfig['sugaragent']['r
   return value === 'auto' || value === 'mock' || value === 'llama' ? value : 'llama';
 }
 
-function parseProvider(value: string | undefined): AppConfig['sugaragent']['provider'] {
-  return value === 'echo' || value === 'local' ? value : 'local';
+function parseGenerationProvider(value: string | undefined): AppConfig['sugaragent']['generation']['provider'] {
+  return value === 'openai' ? value : 'selfHosted';
 }
 
 function buildRateLimitPolicy(windowValue: string | undefined, maxValue: string | undefined, fallbackWindowMs: number, fallbackMax: number): RateLimitPolicy {
@@ -443,7 +468,16 @@ export function loadConfig(): AppConfig {
     },
     sugaragent: {
       runtimeMode: parseRuntimeMode(process.env.GAME_API_SUGARAGENT_RUNTIME_MODE),
-      provider: parseProvider(process.env.GAME_API_SUGARAGENT_PROVIDER),
+      generation: {
+        provider: parseGenerationProvider(process.env.GAME_API_SUGARAGENT_GENERATION_PROVIDER),
+        selfHosted: {
+          runtimeMode: parseRuntimeMode(process.env.GAME_API_SUGARAGENT_RUNTIME_MODE),
+        },
+        openai: {
+          model: process.env.GAME_API_SUGARAGENT_OPENAI_MODEL ?? 'gpt-5-mini',
+          baseUrl: (process.env.GAME_API_SUGARAGENT_OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, ''),
+        },
+      },
       useLore: parseBoolean(process.env.GAME_API_SUGARAGENT_USE_LORE, true),
       loreDir: path.resolve(process.cwd(), process.env.GAME_API_SUGARAGENT_LORE_DIR ?? '../../../plugins/sugaragent/lore/generated'),
       missingGameLoreBundle: parseBoolean(process.env.GAME_API_SUGARAGENT_MISSING_GAME_LORE_BUNDLE, false),
@@ -1001,6 +1035,7 @@ export function initializeSugarAgentRuntimeServices(config: AppConfig): HostedSu
   runtimeServices = createHostedSugarAgentRuntimeServices({
     gameId: config.gameId,
     runtimeMode: config.sugaragent.runtimeMode,
+    generation: config.sugaragent.generation,
     provider: config.sugaragent.provider,
     loreDir: config.sugaragent.loreDir,
     useLore: config.sugaragent.useLore,
@@ -1062,6 +1097,11 @@ async function main() {
     auth_cookie_secret_name: profile.auth.cookieSecretName,
     auth_username_secret_name: profile.auth.sharedAlphaUsernameSecretName,
     auth_password_hash_secret_name: profile.auth.sharedAlphaPasswordHashSecretName,
+    sugaragent_generation_provider: profile.sugaragent.generation.provider,
+    sugaragent_runtime_mode: profile.sugaragent.generation.selfHosted?.runtimeMode ?? 'llama',
+    sugaragent_openai_model: profile.sugaragent.generation.openai?.model ?? 'gpt-5-mini',
+    sugaragent_openai_base_url: profile.sugaragent.generation.openai?.baseUrl ?? 'https://api.openai.com/v1',
+    sugaragent_openai_api_key_secret_name: profile.sugaragent.openAiApiKeySecretName,
     release_metadata_output_path: path.resolve(root, profile.releaseMetadata.outputPath),
     sugaragent_runtime_archive_url: profile.sugaragentAssets.runtimeArchiveUrl,
     sugaragent_runtime_binary_name: profile.sugaragentAssets.runtimeBinaryName,
@@ -1237,8 +1277,8 @@ jobs:
           --cpu "\${{ steps.profile.outputs.cloud_run_cpu }}"
           --memory "\${{ steps.profile.outputs.cloud_run_memory }}"
           --no-allow-unauthenticated
-          --set-env-vars "GAME_API_ENV=\${{ steps.profile.outputs.environment }},GAME_API_GAME_ID=\${{ steps.profile.outputs.game_slug }},GAME_API_PORT=\${{ steps.profile.outputs.backend_port }},GAME_API_HOSTED_SAVE_ENABLED=\${{ steps.profile.outputs.hosted_save_enabled }}"
-          --set-secrets "GAME_API_COOKIE_SECRET=\${{ steps.profile.outputs.auth_cookie_secret_name }}:latest,GAME_API_SHARED_ALPHA_USERNAME=\${{ steps.profile.outputs.auth_username_secret_name }}:latest,GAME_API_SHARED_ALPHA_PASSWORD_HASH=\${{ steps.profile.outputs.auth_password_hash_secret_name }}:latest"
+          --set-env-vars "GAME_API_ENV=\${{ steps.profile.outputs.environment }},GAME_API_GAME_ID=\${{ steps.profile.outputs.game_slug }},GAME_API_PORT=\${{ steps.profile.outputs.backend_port }},GAME_API_HOSTED_SAVE_ENABLED=\${{ steps.profile.outputs.hosted_save_enabled }},GAME_API_SUGARAGENT_GENERATION_PROVIDER=\${{ steps.profile.outputs.sugaragent_generation_provider }},GAME_API_SUGARAGENT_RUNTIME_MODE=\${{ steps.profile.outputs.sugaragent_runtime_mode }},GAME_API_SUGARAGENT_OPENAI_MODEL=\${{ steps.profile.outputs.sugaragent_openai_model }},GAME_API_SUGARAGENT_OPENAI_BASE_URL=\${{ steps.profile.outputs.sugaragent_openai_base_url }}"
+          --set-secrets "GAME_API_COOKIE_SECRET=\${{ steps.profile.outputs.auth_cookie_secret_name }}:latest,GAME_API_SHARED_ALPHA_USERNAME=\${{ steps.profile.outputs.auth_username_secret_name }}:latest,GAME_API_SHARED_ALPHA_PASSWORD_HASH=\${{ steps.profile.outputs.auth_password_hash_secret_name }}:latest,GAME_API_SUGARAGENT_OPENAI_API_KEY=\${{ steps.profile.outputs.sugaragent_openai_api_key_secret_name }}:latest"
 
       - name: Deploy frontend to Netlify
         env:

@@ -15,6 +15,9 @@ import {
   LOCAL_EMBEDDING_MODEL_ID,
 } from '../runtime/local-embeddings-service.js';
 import { createLocalLlamaGenerationService } from '../runtime/local-generation-service.js';
+import type {
+  ResolvedSugarAgentGenerationConfig,
+} from '../runtime/generation-config.js';
 import {
   collectLoreEntityRouteMatches,
   isKnowledgeSeekingQueryType,
@@ -105,6 +108,7 @@ import {
 } from './core/routing.js';
 import {
   isLikelySmallTalkQuery,
+  isProtectedShortSocialTurn,
 } from './core/social-cues.js';
 import {
   computeNoveltyState,
@@ -201,6 +205,14 @@ function emitPlanRealizationStatusLog(input: {
   allowedSupportSlots?: string[];
   validationMode?: string;
   auditRawPreview?: string;
+  allowedClaimPreviews?: Array<{
+    claimOrdinal: number;
+    mode: string;
+    text: string;
+    supportSlotIds?: string[];
+  }>;
+  candidatePartsPreview?: Array<Record<string, unknown>>;
+  auditPartsPreview?: Array<Record<string, unknown>>;
 }) {
   const pedagogyContext = getPedagogyContext(input.turnContext);
   const targetLanguage = normalizeLanguageCode(pedagogyContext?.targetLanguage);
@@ -226,9 +238,97 @@ function emitPlanRealizationStatusLog(input: {
     allowedClaimOrdinals: input.allowedClaimOrdinals,
     acceptedClaimOrdinals: input.acceptedClaimOrdinals,
     allowedSupportSlots: input.allowedSupportSlots,
+    knowledgeCoverage: Array.isArray(input.allowedClaimOrdinals) && input.allowedClaimOrdinals.length > 0
+      ? ((input.acceptedClaimOrdinals?.length ?? 0) > 0 ? 'covered' : 'available_but_not_covered')
+      : 'no_allowed_claims',
     failureReason: input.failureReason,
     rawPreview: input.rawPreview ? sanitizePromptText(input.rawPreview).slice(0, 240) : undefined,
     auditRawPreview: input.auditRawPreview ? sanitizePromptText(input.auditRawPreview).slice(0, 240) : undefined,
+    allowedClaimPreviews: Array.isArray(input.allowedClaimPreviews)
+      ? input.allowedClaimPreviews.slice(0, 3).map((claim) => ({
+        claimOrdinal: claim.claimOrdinal,
+        mode: sanitizePromptText(claim.mode).slice(0, 24),
+        text: sanitizePromptText(claim.text).slice(0, 160),
+        supportSlotIds: Array.isArray(claim.supportSlotIds) ? claim.supportSlotIds.slice(0, 6) : undefined,
+      }))
+      : undefined,
+    candidatePartsPreview: Array.isArray(input.candidatePartsPreview)
+      ? input.candidatePartsPreview.slice(0, 3)
+      : undefined,
+    auditPartsPreview: Array.isArray(input.auditPartsPreview)
+      ? input.auditPartsPreview.slice(0, 3)
+      : undefined,
+  });
+}
+
+function emitRoutingRefinementDebugLog(input: {
+  npcId?: string;
+  playerMessage?: string;
+  routeIntent?: string;
+  queryType?: string;
+  matches?: Array<{
+    entityId?: string;
+    entityType?: string;
+    matchedText?: string;
+    filterKind?: string | null;
+  }>;
+  retrievalFilters?: {
+    entityIds?: string[];
+    locationIds?: string[];
+    factionIds?: string[];
+    aliases?: string[];
+  } | null;
+}) {
+  console.debug('[sugaragent][routing-refinement]', {
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    playerPreview: sanitizePromptText(input.playerMessage).slice(0, 120),
+    matches: Array.isArray(input.matches)
+      ? input.matches.slice(0, 6).map((match) => ({
+        entityId: normalizeOptionalString(match?.entityId),
+        entityType: normalizeOptionalString(match?.entityType),
+        matchedText: sanitizePromptText(match?.matchedText ?? '').slice(0, 60),
+        filterKind: match?.filterKind ?? null,
+      }))
+      : [],
+    retrievalFilters: input.retrievalFilters ?? null,
+  });
+}
+
+function emitRetrievalTopMatchesDebugLog(input: {
+  npcId?: string;
+  routeIntent?: string;
+  queryType?: string;
+  retrievalFilters?: {
+    entityIds?: string[];
+    locationIds?: string[];
+    factionIds?: string[];
+    aliases?: string[];
+  } | null;
+  matches?: Array<Record<string, unknown>>;
+}) {
+  const topMatches = Array.isArray(input.matches) ? input.matches.slice(0, 5) : [];
+  console.debug('[sugaragent][retrieval-top]', {
+    npcId: input.npcId,
+    routeIntent: input.routeIntent,
+    queryType: input.queryType,
+    retrievalFilters: input.retrievalFilters ?? null,
+    topMatches: topMatches.map((entry) => {
+      const chunk = isRecord(entry?.chunk) ? entry.chunk : null;
+      const metadata = isRecord(chunk?.metadata) ? chunk.metadata : null;
+      return {
+        chunkId: normalizeOptionalString(chunk?.chunkId),
+        title: normalizeOptionalString(chunk?.title),
+        score: typeof entry?.score === 'number' && Number.isFinite(entry.score)
+          ? Number(entry.score.toFixed(4))
+          : undefined,
+        pool: normalizeOptionalString(entry?.pool),
+        entityIds: Array.isArray(metadata?.entity_ids) ? metadata.entity_ids.slice(0, 4) : [],
+        locationIds: Array.isArray(metadata?.location_ids) ? metadata.location_ids.slice(0, 4) : [],
+        tags: Array.isArray(metadata?.tags) ? metadata.tags.slice(0, 4) : [],
+      };
+    }),
   });
 }
 
@@ -283,8 +383,9 @@ function getNormalizedDeliveryContract(turnContext: unknown) {
 
 interface SessionOptions {
   npc: string;
-  provider: 'local' | 'echo';
+  debugProvider?: 'echo';
   runtime: 'llama' | 'mock' | 'auto';
+  generation?: ResolvedSugarAgentGenerationConfig;
   session: string | null;
   loreDir: string;
   useLore: boolean;
@@ -908,6 +1009,7 @@ function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): 
       queryType: 'conversation',
       routingIntent: 'social_chat',
     };
+  const socialVocabularyBlock = buildB0SocialVocabularyBlock(turnContext, playerMessage);
 
   const blocks = [
     `You are ${sanitizePromptText(npcName || 'NPC')}, an NPC in a game.`,
@@ -927,6 +1029,7 @@ function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): 
     buildNpcProfileBlock(safeInput.npcProfile),
     buildTurnContextBlock(turnContext),
     buildPedagogyBlock(turnContext),
+    socialVocabularyBlock,
     buildMemoryFactBlock(safeInput.memoryFacts),
     buildHistoryBlock(safeInput.history),
     buildReplyPartsPrompt({
@@ -948,6 +1051,63 @@ function buildSocialFastReplyPartsPrompt(input: RecordLike | null | undefined): 
   ].filter(Boolean);
 
   return blocks.join('\n');
+}
+
+function buildB0SocialVocabularyBlock(turnContext: unknown, playerMessage: unknown): string | null {
+  const pedagogyContext = getPedagogyContext(turnContext);
+  const learnerBand = normalizeOptionalString(pedagogyContext?.learnerBand)?.toUpperCase();
+  if (learnerBand !== 'B0') return null;
+
+  const targetLanguage = normalizeOptionalString(pedagogyContext?.targetLanguage);
+  const supportLanguage = normalizeOptionalString(pedagogyContext?.supportLanguage);
+  const supportPolicy = normalizeOptionalString(pedagogyContext?.supportLanguagePolicy);
+  const message = normalizeOptionalString(playerMessage) ?? '';
+  const vocabulary: string[] = [];
+
+  if (targetLanguage === 'es') {
+    if (isLikelyGreetingOnlyMessage(message, targetLanguage)) {
+      vocabulary.push('hola', 'si', 'no', 'gracias', 'no se');
+    } else {
+      const acknowledgement = detectSocialAcknowledgement(message, targetLanguage);
+      if (acknowledgement === 'gratitude') {
+        vocabulary.push('de nada', 'gracias', 'si', 'no');
+      } else if (isLikelySmallTalkQuery(message, targetLanguage)) {
+        vocabulary.push('bien', 'mal', 'y tu', 'hola', 'no se');
+      } else {
+        vocabulary.push('hola', 'si', 'no', 'gracias', 'no se');
+      }
+    }
+  }
+
+  const deduped = Array.from(new Set(
+    vocabulary
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  )).slice(0, 8);
+  if (deduped.length === 0) return null;
+
+  const lines = [
+    `B0 preferred social vocabulary for this turn: ${deduped.join(', ')}.`,
+    'Strongly prefer these words or equally basic variants. Do not add decorative target-language words unless they are necessary.',
+  ];
+  if (
+    targetLanguage
+    && supportLanguage
+    && (supportPolicy === 'full_support' || supportPolicy === 'heavy_support')
+  ) {
+    lines.push(`If extra warmth is needed, keep it in ${supportLanguage} rather than introducing richer ${targetLanguage} vocabulary.`);
+  }
+  return lines.join('\n');
+}
+
+function shouldPreferDeterministicB0SocialTurn(turnContext: unknown, playerMessage: unknown): boolean {
+  const pedagogyContext = getPedagogyContext(turnContext);
+  const learnerBand = normalizeOptionalString(pedagogyContext?.learnerBand)?.toUpperCase();
+  if (learnerBand !== 'B0') return false;
+  return isProtectedShortSocialTurn(
+    playerMessage,
+    pedagogyContext?.targetLanguage,
+  );
 }
 
 async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | null | undefined) {
@@ -992,6 +1152,12 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
   const allowedSupportSlots = allSupportSlots.filter((slot) => (
     claimMetadata.deliveryClaims.some((claim) => claim.supportSlotIds.includes(slot.slotId))
   ));
+  const allowedClaimPreviews = claimMetadata.deliveryClaims.map((claim) => ({
+    claimOrdinal: claim.claimOrdinal,
+    mode: claim.mode,
+    text: claim.text,
+    supportSlotIds: claim.supportSlotIds,
+  }));
 
   await ensureModelLoaded();
   generationDiagnostics.draft.attempted = true;
@@ -1085,6 +1251,7 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         rawPreview: replyPartsSourceText,
         allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
         allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        allowedClaimPreviews,
         validationMode: 'generator_auditor',
       });
       continue;
@@ -1148,6 +1315,8 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         auditRawPreview: auditSourceText,
         allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
         allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        allowedClaimPreviews,
+        candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
         validationMode: 'generator_auditor',
       });
       continue;
@@ -1191,6 +1360,9 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
         acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
         allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        allowedClaimPreviews,
+        candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
+        auditPartsPreview: generationDiagnostics.replyParts.auditPartsPreview,
         validationMode: 'generator_auditor',
       });
       continue;
@@ -1236,6 +1408,9 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
         acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
         allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        allowedClaimPreviews,
+        candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
+        auditPartsPreview: generationDiagnostics.replyParts.auditPartsPreview,
         validationMode: 'generator_auditor',
       });
       continue;
@@ -1294,6 +1469,9 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
         acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
         allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        allowedClaimPreviews,
+        candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
+        auditPartsPreview: generationDiagnostics.replyParts.auditPartsPreview,
         validationMode: 'generator_auditor',
       });
       continue;
@@ -1304,6 +1482,8 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
       utterance: materialized.utterance,
       acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
       knowledgePartCount: realizedKnowledgeParts,
+      learnerBand: getPedagogyContext(safeInput.turnContext)?.learnerBand,
+      supportLanguagePolicy: getPedagogyContext(safeInput.turnContext)?.supportLanguagePolicy,
     });
     if (!deliveryContractCheck.ok) {
       repairReason = deliveryContractCheck.failureReason ?? 'delivery_contract_rejected';
@@ -1326,6 +1506,9 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
         allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
         acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
         allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+        allowedClaimPreviews,
+        candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
+        auditPartsPreview: generationDiagnostics.replyParts.auditPartsPreview,
         validationMode: 'generator_auditor',
       });
       continue;
@@ -1348,6 +1531,9 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
       allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
       acceptedClaimOrdinals: auditedTurnResult.acceptedClaimOrdinals,
       allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+      allowedClaimPreviews,
+      candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
+      auditPartsPreview: generationDiagnostics.replyParts.auditPartsPreview,
       validationMode: 'generator_auditor',
     });
     return materialized;
@@ -1365,6 +1551,9 @@ async function realizeValidatedPlanWithReplyPartsTransport(input: RecordLike | n
     failureReason: generationDiagnostics.replyParts.failureReason,
     allowedClaimOrdinals: claimMetadata.allowedClaimOrdinals,
     allowedSupportSlots: allowedSupportSlots.map((slot) => slot.slotId),
+    allowedClaimPreviews,
+    candidatePartsPreview: generationDiagnostics.replyParts.rawPartsPreview,
+    auditPartsPreview: generationDiagnostics.replyParts.auditPartsPreview,
     validationMode: 'generator_auditor',
   });
   return null;
@@ -1434,6 +1623,11 @@ async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null
     isFirstMeeting,
     generationDiagnostics,
   } = safeInput;
+
+  if (shouldPreferDeterministicB0SocialTurn(turnContext, playerMessage)) {
+    generationDiagnostics.replyParts.skippedReason = 'b0_deterministic_social_lane';
+    return null;
+  }
 
   await ensureModelLoaded();
   generationDiagnostics.draft.attempted = true;
@@ -1552,6 +1746,33 @@ async function realizeSocialFastWithReplyPartsTransport(input: RecordLike | null
       estimatedLanguage: languageEstimate.estimatedLanguage,
       mismatchSuspected: languageEstimate.mismatchSuspected,
       failureReason: 'social_fast_language_mismatch',
+      validationMode: 'social_reply_parts',
+    });
+    return null;
+  }
+
+  const deliveryContractCheck = validateReplyAgainstDeliveryContract({
+    deliveryContract: getPedagogyContext(turnContext)?.deliveryContract,
+    utterance: materialized.utterance,
+    acceptedClaimOrdinals: [],
+    knowledgePartCount: 0,
+    learnerBand: getPedagogyContext(turnContext)?.learnerBand,
+    supportLanguagePolicy: getPedagogyContext(turnContext)?.supportLanguagePolicy,
+  });
+  if (!deliveryContractCheck.ok) {
+    generationDiagnostics.draft.success = false;
+    generationDiagnostics.draft.failureReason = deliveryContractCheck.failureReason ?? 'social-fast-delivery-contract-rejected';
+    generationDiagnostics.replyParts.success = false;
+    generationDiagnostics.replyParts.failureReason = deliveryContractCheck.failureReason ?? 'social_fast_delivery_contract_rejected';
+    emitPlanRealizationStatusLog({
+      stage: 'delivery-contract-rejected',
+      strategy: 'social_fast_reply_parts',
+      attempt: 1,
+      turnContext,
+      routeIntent: 'social_chat',
+      queryType: 'conversation',
+      turnPath: 'social_fast',
+      failureReason: generationDiagnostics.replyParts.failureReason,
       validationMode: 'social_reply_parts',
     });
     return null;
@@ -1676,6 +1897,7 @@ function buildLanguageInstructionLines(turnContext: unknown): string[] {
   const targetLanguage = normalizeOptionalString(pedagogyContext?.targetLanguage);
   const supportLanguage = normalizeOptionalString(pedagogyContext?.supportLanguage);
   const supportPolicy = normalizeOptionalString(pedagogyContext?.supportLanguagePolicy);
+  const learnerBand = normalizeOptionalString(pedagogyContext?.learnerBand)?.toUpperCase();
   const deliveryContract = normalizeDeliveryContract(pedagogyContext?.deliveryContract);
 
   if (!targetLanguage) {
@@ -1699,6 +1921,10 @@ function buildLanguageInstructionLines(turnContext: unknown): string[] {
   if (deliveryContract?.allowExactNumbers === false) {
     lines.push('Avoid exact numeric details unless they are essential to answer the question.');
   }
+  if (learnerBand === 'B0') {
+    lines.push('B0 learner band: keep the reply extremely simple and beginner-safe.');
+    lines.push('Prefer 1 very short sentence. Avoid idioms, slang, ornate punctuation, and uncommon synonyms.');
+  }
 
   if (supportPolicy === 'target_only') {
     lines.push('Do not include support-language words or translations in the visible reply.');
@@ -1712,6 +1938,11 @@ function buildLanguageInstructionLines(turnContext: unknown): string[] {
       `${supportLanguage ? `If a gloss is necessary, keep it short and in ${supportLanguage}.` : 'If a gloss is necessary, keep it very short.'}` +
       ' The target-language reply should still lead.',
     );
+    if (learnerBand === 'B0') {
+      lines.push(
+        `${supportLanguage ? `For B0, a short mixed ${targetLanguage}/${supportLanguage} reply is better than a longer all-${targetLanguage} sentence.` : `For B0, keep the ${targetLanguage} reply to about 2-4 simple words when possible.`}`,
+      );
+    }
   }
 
   return lines;
@@ -2491,8 +2722,9 @@ function mergeTurnContext(base: unknown, override: unknown): RecordLike {
 
 const DEFAULT_SESSION_OPTIONS: SessionOptions = {
   npc: 'baker',
-  provider: 'local',
+  debugProvider: undefined,
   runtime: 'llama',
+  generation: undefined,
   session: null,
   loreDir: 'plugins/sugaragent/lore/generated',
   useLore: true,
@@ -2512,15 +2744,25 @@ function normalizeSessionOptions(options: RecordLike = {}): SessionOptions {
   const normalized = {
     ...DEFAULT_SESSION_OPTIONS,
     ...options,
-  } as SessionOptions;
+  } as SessionOptions & {
+    provider?: unknown;
+    debugProvider?: unknown;
+  };
   // The session runtime does not currently load packed SugarAgent authoring artifacts.
   // Preview callers must pass resolved npcProfile/globalSafetyBounds from the host/plugin layer.
   if (typeof normalized.npc !== 'string' || normalized.npc.trim().length === 0) {
     throw new Error('Invalid npc value.');
   }
-  if (normalized.provider !== 'local' && normalized.provider !== 'echo') {
-    throw new Error('Invalid provider. Use "local" or "echo".');
+  const legacyProvider = normalized.provider;
+  if (legacyProvider !== undefined && legacyProvider !== 'local' && legacyProvider !== 'echo') {
+    throw new Error('Invalid provider. Use "echo" for the legacy debug path.');
   }
+  if (normalized.debugProvider !== undefined && normalized.debugProvider !== 'echo') {
+    throw new Error('Invalid debugProvider. Use "echo" for the legacy debug path.');
+  }
+  normalized.debugProvider = normalized.debugProvider === 'echo' || legacyProvider === 'echo'
+    ? 'echo'
+    : undefined;
   normalized.npc = normalized.npc.trim();
   normalized.useLore = normalized.useLore !== false;
   normalized.llamaTimeoutMs = Number.isFinite(normalized.llamaTimeoutMs)
@@ -2611,6 +2853,20 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
       runtime: {
         mode: runtimeMode,
         health: runtimeHealth,
+        generation: args.generation
+          ? {
+            provider: args.generation.provider,
+            model: args.generation.provider === 'openai'
+              ? args.generation.openai.model
+              : undefined,
+            baseUrl: args.generation.provider === 'openai'
+              ? args.generation.openai.baseUrl
+              : undefined,
+            runtimeMode: args.generation.provider === 'selfHosted'
+              ? args.generation.selfHosted.runtimeMode
+              : undefined,
+          }
+          : undefined,
       },
       session: {
         id: sessionId,
@@ -2746,12 +3002,20 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
           ? explicit
           : routeIntentToQueryType(resolvedRouting.intent);
       })();
+      emitRoutingRefinementDebugLog({
+        npcId: args.npc,
+        playerMessage: message,
+        routeIntent: resolvedRouting.intent,
+        queryType,
+        matches: routingRefinement.matches,
+        retrievalFilters: routingRefinement.retrievalFilters,
+      });
       turnContext.queryType = queryType;
       turnContext.routingIntent = resolvedRouting.intent;
       turnContext.routingPolicyPath = resolvedRouting.policyPath;
       const generationDiagnostics = createGenerationDiagnostics();
 
-      if (args.provider === 'echo') {
+      if (args.debugProvider === 'echo') {
         const output = createEchoReply(message);
         generationDiagnostics.draft.skippedReason = 'echo_provider';
         generationDiagnostics.replyParts.skippedReason = 'echo_provider';
@@ -2848,6 +3112,13 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
         governance: governedRetrieval.governance,
         embeddingDegradedReason,
       };
+      emitRetrievalTopMatchesDebugLog({
+        npcId: args.npc,
+        routeIntent: resolvedRouting.intent,
+        queryType,
+        retrievalFilters: routingRefinement.retrievalFilters,
+        matches: retrieval.matches,
+      });
       const groundingEvidenceEntries = buildGroundingEvidenceEntries({
         loreMatches: retrieval.matches,
         loreArtifacts,
@@ -2951,6 +3222,10 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
       // Run the evidence-first pipeline
       const efResult = await runEvidenceFirstPipeline({
         playerMessage: message,
+        recentNpcReplies: history
+          .filter((entry) => isRecord(entry) && entry.role === 'npc' && typeof entry.text === 'string')
+          .slice(-3)
+          .map((entry) => String(entry.text ?? '')),
         routing: resolvedRouting,
         snapshot,
         evidencePack: evidencePackForPipeline,

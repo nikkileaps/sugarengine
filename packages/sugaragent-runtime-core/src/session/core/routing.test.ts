@@ -116,5 +116,6 @@ describe('routing core', () => {
     expect(refined.route.intent).toBe('lore_world');
     expect(refined.route.policyPath).toBe('lore_knowledge');
     expect(refined.retrievalFilters.locationIds).toEqual(['locations.earendale']);
+    expect(refined.retrievalFilters.aliases).toEqual(['earendale']);
   });
 });

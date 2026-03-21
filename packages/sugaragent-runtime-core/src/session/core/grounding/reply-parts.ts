@@ -81,34 +81,80 @@ export const REPLY_PARTS_JSON_SCHEMA = JSON.stringify({
           },
           text: { type: 'string' },
           support: {
-            type: 'array',
-            items: { type: 'string' },
+            anyOf: [
+              {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              {
+                type: 'null',
+              },
+            ],
           },
         },
-        required: ['kind', 'text'],
+        required: ['kind', 'text', 'support'],
         additionalProperties: false,
       },
     },
     emotion: { type: 'string' },
     intent: { type: 'string' },
-    proposedIntents: { type: 'array', items: { type: 'object' } },
-    beatEvidence: {
-      type: 'object',
-      properties: {
-        beatId: { type: 'string' },
-        coveredFacts: { type: 'array', items: { type: 'string' } },
-        uncoveredFacts: { type: 'array', items: { type: 'string' } },
-        completionSignal: {
-          type: 'string',
-          enum: ['none', 'player_ack', 'player_action', 'engine_flag'],
+    proposedIntents: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          intent: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'null' },
+            ],
+          },
+          confidence: {
+            anyOf: [
+              { type: 'number' },
+              { type: 'null' },
+            ],
+          },
+          reason: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'null' },
+            ],
+          },
         },
-        confidence: { type: 'number' },
+        required: ['intent', 'confidence', 'reason'],
+        additionalProperties: false,
       },
-      required: ['coveredFacts', 'uncoveredFacts', 'completionSignal', 'confidence'],
-      additionalProperties: false,
+    },
+    beatEvidence: {
+      anyOf: [
+        {
+          type: 'object',
+          properties: {
+            beatId: {
+              anyOf: [
+                { type: 'string' },
+                { type: 'null' },
+              ],
+            },
+            coveredFacts: { type: 'array', items: { type: 'string' } },
+            uncoveredFacts: { type: 'array', items: { type: 'string' } },
+            completionSignal: {
+              type: 'string',
+              enum: ['none', 'player_ack', 'player_action', 'engine_flag'],
+            },
+            confidence: { type: 'number' },
+          },
+          required: ['beatId', 'coveredFacts', 'uncoveredFacts', 'completionSignal', 'confidence'],
+          additionalProperties: false,
+        },
+        {
+          type: 'null',
+        },
+      ],
     },
   },
-  required: ['parts', 'emotion', 'intent', 'proposedIntents'],
+  required: ['parts', 'emotion', 'intent', 'proposedIntents', 'beatEvidence'],
   additionalProperties: false,
 });
 

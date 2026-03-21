@@ -86,6 +86,36 @@ describe('session runtime social fast path', () => {
     expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
   });
 
+  it('avoids repeating self-introductions on later greeting turns', async () => {
+    const sessionId = makeSessionId('repeat-greeting');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const first = await session.runTurn('hello', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc_rick',
+      },
+    });
+    const second = await session.runTurn('hello', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc_rick',
+      },
+    });
+
+    expect(first.output.utterance).toBe("Hi. I'm Rick Cheese Roll.");
+    expect(second.output.utterance).toBe('Hi.');
+    expect(second.output.utterance).not.toContain('Rick Cheese Roll');
+    expect(second.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+  });
+
   it('acknowledges player introductions naturally on the social fast path', async () => {
     const sessionId = makeSessionId('intro');
     createdSessionIds.add(sessionId);
@@ -243,6 +273,45 @@ describe('session runtime social fast path', () => {
     expect(result.output.utterance).toBe('Sto bene. E tu?');
   });
 
+  it('uses the deterministic B0 social lane for tiny Spanish greetings', async () => {
+    const sessionId = makeSessionId('spanish-b0-greeting');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'station-clerk',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: false,
+    });
+
+    const result = await session.runTurn('hola', {
+      npcName: 'Station Clerk',
+      context: {
+        pedagogyContext: {
+          learnerBand: 'B0',
+          targetLanguage: 'es',
+          supportLanguage: 'en',
+          supportLanguagePolicy: 'full_support',
+          deliveryContract: {
+            detailLevel: 'minimal',
+            maxKnowledgeClaims: 1,
+            maxKnowledgeParts: 1,
+            maxSentences: 1,
+            maxSentenceLength: 8,
+            maxClauseDepth: 1,
+            allowExactNumbers: false,
+            allowEnrichmentFacts: false,
+            preferConcreteFacts: true,
+            preferHighFrequencyLexicon: true,
+          },
+        },
+      },
+    });
+
+    expect(result.pipeline.evidenceFirst.turnPath).toBe('social_fast');
+    expect(result.output.utterance).toBe('Hola. Soy Station Clerk.');
+  });
+
   it('recognizes Spanish self-introductions on the social fast path', async () => {
     const sessionId = makeSessionId('spanish-intro');
     createdSessionIds.add(sessionId);
@@ -365,6 +434,90 @@ describe('session runtime social fast path', () => {
     expect(result.routing.intent).toBe('lore_world');
     expect(result.output.utterance).toContain('Earendale');
     expect(result.output.intent).toBe('answer');
+  });
+
+  it('prefers world lore over current-location state for generic place-lore follow-ups', async () => {
+    const loreDir = createTempLoreDir([
+      {
+        chunkId: 'lore.locations.earendale#overview-followup',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'Overview',
+        summary: 'Earendale is a market town with a busy station.',
+        content: 'Earendale is a market town with a busy station.',
+        tokens: ['earendale', 'market', 'town', 'busy', 'station'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+      {
+        chunkId: 'lore.locations.earendale#history-followup',
+        pageId: 'lore.locations.earendale',
+        title: 'Earendale',
+        sectionHeading: 'History',
+        summary: 'Earendale was founded after the rail line opened.',
+        content: 'Earendale was founded after the rail line opened.',
+        tokens: ['earendale', 'founded', 'rail', 'line', 'opened'],
+        canonLevel: 'hard',
+        metadata: {
+          id: 'lore.locations.earendale',
+          title: 'Earendale',
+          canon_level: 'hard',
+          entity_ids: [],
+          location_ids: ['locations.earendale'],
+          faction_ids: [],
+          tags: ['earendale', 'history'],
+          beat_ids: [],
+          fact_ids: [],
+        },
+      },
+    ]);
+    const sessionId = makeSessionId('earendale-followup-lore');
+    createdSessionIds.add(sessionId);
+    const session = await createSugarAgentSession({
+      npc: 'npc_rick',
+      provider: 'local',
+      runtime: 'mock',
+      session: sessionId,
+      useLore: true,
+      loreDir,
+      turnContext: {
+        regionName: 'Earendale Station',
+        regionPath: 'regions.earendale_station',
+      },
+    });
+
+    const first = await session.runTurn('Where are we right now?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+    });
+    const second = await session.runTurn('What do you know about Earendale?', {
+      npcName: 'Rick Cheese Roll',
+      npcProfile: {
+        selfEntityId: 'npc.rick-roll',
+        loreScopes: ['town.earendale'],
+      },
+    });
+
+    expect(first.output.utterance).toContain('Earendale Station');
+    expect(second.routing.intent).toBe('lore_world');
+    expect(second.output.intent).toBe('answer');
+    expect(second.output.utterance).toContain('Earendale');
+    expect(second.output.utterance.toLowerCase()).not.toContain('earendale station');
+    expect(second.output.utterance.toLowerCase()).not.toContain('right now');
+    expect(second.output.utterance).not.toBe(first.output.utterance);
   });
 
   it('applies concise delivery budgets before grounded generation', async () => {

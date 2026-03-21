@@ -731,10 +731,12 @@ function normalizeRetrievalFiltersForCache(filters: unknown): string {
   const entityIds = normalizeStringArray(value.entityIds).map((entry) => entry.toLowerCase());
   const locationIds = normalizeStringArray(value.locationIds).map((entry) => entry.toLowerCase());
   const factionIds = normalizeStringArray(value.factionIds).map((entry) => entry.toLowerCase());
+  const aliases = normalizeStringArray(value.aliases).map((entry) => entry.toLowerCase());
   return [
     `e=${entityIds.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
     `l=${locationIds.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
     `f=${factionIds.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
+    `a=${aliases.sort((a, b) => a.localeCompare(b)).join(',') || 'none'}`,
   ].join(';');
 }
 

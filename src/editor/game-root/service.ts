@@ -38,6 +38,7 @@ interface GameRootResponse {
   environment?: WebPublishEnvironment;
   profilePath?: string;
   frontend?: WebPublishFrontendConfig;
+  sugaragent?: WebPublishProfile['sugaragent'];
   error?: string;
 }
 
@@ -341,6 +342,20 @@ export async function loadWebPublishProfile(
       backendRequired: response.frontend.backendRequired === true,
       credentials: response.frontend.credentials,
     },
+    sugaragent: response.sugaragent && typeof response.sugaragent === 'object'
+      ? response.sugaragent as LoadWebPublishProfileResult['sugaragent']
+      : {
+        generation: {
+          provider: 'selfHosted',
+          selfHosted: {
+            runtimeMode: 'llama',
+          },
+          openai: {
+            model: 'gpt-5-mini',
+            baseUrl: 'https://api.openai.com/v1',
+          },
+        },
+      },
   };
 }
 

@@ -51,6 +51,7 @@ interface RetrievalFilters {
   entityIds?: string[];
   locationIds?: string[];
   factionIds?: string[];
+  aliases?: string[];
 }
 
 type RerankCache = Map<string, { ranked: Array<Record<string, unknown>> }>;

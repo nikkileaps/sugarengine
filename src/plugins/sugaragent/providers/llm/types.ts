@@ -1,5 +1,8 @@
 import type { SugarAgentTurnOutput } from '../../contracts/turn';
 import type {
+  SugarAgentGenerationConfig,
+} from '../../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js';
+import type {
   PluginAgentTurnDiagnostics,
   PluginPedagogyContext,
 } from '../../../../engine/plugins/types';
@@ -8,6 +11,7 @@ export interface LLMGenerateRequest {
   npcId: string;
   npcName: string;
   playerMessage: string;
+  generation?: SugarAgentGenerationConfig;
   npcProfile?: {
     persona?: string;
     tone?: string;

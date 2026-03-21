@@ -54,10 +54,20 @@ export const GROUNDED_REPLY_AUDIT_JSON_SCHEMA = JSON.stringify({
             type: 'array',
             items: { type: 'integer', minimum: 1 },
           },
-          hedgeSufficient: { type: 'boolean' },
-          notes: { type: 'string' },
+          hedgeSufficient: {
+            anyOf: [
+              { type: 'boolean' },
+              { type: 'null' },
+            ],
+          },
+          notes: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'null' },
+            ],
+          },
         },
-        required: ['partIndex', 'role', 'claimOrdinals'],
+        required: ['partIndex', 'role', 'claimOrdinals', 'hedgeSufficient', 'notes'],
         additionalProperties: false,
       },
     },

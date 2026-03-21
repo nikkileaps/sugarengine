@@ -33,6 +33,7 @@ export interface LoreEntityRouteRefinement {
     entityIds?: string[];
     locationIds?: string[];
     factionIds?: string[];
+    aliases?: string[];
   };
 }
 
@@ -248,6 +249,16 @@ export function refineRouteWithLoreEntityMentions(input: {
     } else if (match.filterKind === 'factionIds') {
       retrievalFilters.factionIds = [...(retrievalFilters.factionIds ?? []), match.entityId];
     }
+  }
+  const aliasSet = new Set<string>();
+  for (const match of matches) {
+    const normalizedAlias = normalizeLoreAlias(match.matchedText);
+    if (normalizedAlias) aliasSet.add(normalizedAlias);
+    const entityAlias = aliasFromId(match.entityId);
+    if (entityAlias) aliasSet.add(entityAlias);
+  }
+  if (aliasSet.size > 0) {
+    retrievalFilters.aliases = [...aliasSet];
   }
 
   const normalizedMessage = normalizeRouteLookupText(input.playerMessage);

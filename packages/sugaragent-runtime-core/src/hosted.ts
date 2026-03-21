@@ -16,6 +16,12 @@ import type {
   EmbeddingsRuntimeService,
   JsonGenerationService,
 } from './services.js';
+import type {
+  SugarAgentGenerationConfig,
+} from './runtime/generation-config.js';
+import {
+  resolveGenerationServiceWithConfig,
+} from './runtime/generation-service-resolver.js';
 
 export interface HostedSugarAgentRuntimeServices {
   health(request?: RuntimeHealthRequest): Promise<RuntimeHealthStatus>;
@@ -29,7 +35,8 @@ export interface HostedSugarAgentRuntimeServiceOptions {
   gameId: string;
   loreDir: string;
   runtimeMode?: SugarAgentRuntimeMode;
-  provider?: 'local' | 'echo';
+  debugProvider?: 'echo';
+  generation?: SugarAgentGenerationConfig | null;
   useLore?: boolean;
   missingGameLoreBundle?: boolean;
   requireLoreScopeForRetrieval?: boolean;
@@ -38,6 +45,7 @@ export interface HostedSugarAgentRuntimeServiceOptions {
   llamaTimeoutMs?: number;
   llamaBinArgs?: string[];
   llamaArgs?: string[];
+  openAiApiKey?: string | null;
   generationService?: JsonGenerationService;
   embeddingsService?: EmbeddingsRuntimeService;
 }
@@ -85,8 +93,19 @@ export function createHostedSugarAgentRuntimeServices(
   options: HostedSugarAgentRuntimeServiceOptions,
 ): HostedSugarAgentRuntimeServices {
   const sessionCache = new Map<string, Promise<SugarAgentSessionRuntime>>();
-  const defaultRuntimeMode = options.runtimeMode ?? 'llama';
+  const resolvedGeneration = resolveGenerationServiceWithConfig({
+    generation: options.generation,
+    legacyRuntimeMode: options.runtimeMode ?? 'llama',
+    llamaBin: options.llamaBin,
+    modelPath: options.modelPath,
+    llamaTimeoutMs: options.llamaTimeoutMs,
+    llamaBinArgs: options.llamaBinArgs,
+    llamaArgs: options.llamaArgs,
+    openAiApiKey: options.openAiApiKey,
+  });
+  const defaultRuntimeMode = resolvedGeneration.generation.selfHosted.runtimeMode;
   const embeddingsService = options.embeddingsService ?? createLocalEmbeddingsService();
+  const generationService = options.generationService ?? resolvedGeneration.generationService;
 
   async function getSession(
     input: Pick<RuntimeGenerateStructuredRequest, 'npcId'> & {
@@ -108,7 +127,7 @@ export function createHostedSugarAgentRuntimeServices(
 
     const created = createSugarAgentSession({
       npc: input.npcId,
-      provider: options.provider ?? 'local',
+      debugProvider: options.debugProvider === 'echo' ? 'echo' : undefined,
       runtime: runtimeMode,
       session: cacheKey,
       loreDir: options.loreDir,
@@ -120,7 +139,8 @@ export function createHostedSugarAgentRuntimeServices(
       llamaTimeoutMs: options.llamaTimeoutMs,
       llamaBinArgs: options.llamaBinArgs ?? [],
       llamaArgs: options.llamaArgs ?? [],
-      generationService: options.generationService,
+      generation: resolvedGeneration.generation,
+      generationService,
       embeddingsService,
     });
     sessionCache.set(cacheKey, created);

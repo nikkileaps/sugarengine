@@ -57,6 +57,16 @@ const bundle = {
 describe('runtime-resolution', () => {
   it('resolves runtime policy and npc profile from the bundle', () => {
     expect(resolveSugarAgentPolicy(bundle, 'llama')).toEqual({
+      generation: {
+        provider: 'selfHosted',
+        selfHosted: {
+          runtimeMode: 'auto',
+        },
+        openai: {
+          model: 'gpt-5-mini',
+          baseUrl: 'https://api.openai.com/v1',
+        },
+      },
       runtimeMode: 'auto',
       globalSafetyBounds: ['no profanity'],
     });

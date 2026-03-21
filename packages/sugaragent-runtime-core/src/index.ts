@@ -50,3 +50,27 @@ export {
 export type {
   LocalLlamaGenerationServiceOptions,
 } from './runtime/local-generation-service.js';
+export type {
+  ResolveSugarAgentGenerationConfigInput,
+  ResolvedSugarAgentGenerationConfig,
+  SugarAgentGenerationConfig,
+  SugarAgentGenerationProvider,
+  SugarAgentOpenAiGenerationConfig,
+  SugarAgentSelfHostedGenerationConfig,
+} from './runtime/generation-config.js';
+export {
+  resolveSugarAgentGenerationConfig,
+  serializeResolvedGenerationConfig,
+} from './runtime/generation-config.js';
+export {
+  createOpenAIGenerationService,
+} from './runtime/openai-generation-service.js';
+export type {
+  OpenAIGenerationServiceOptions,
+} from './runtime/openai-generation-service.js';
+export {
+  resolveGenerationServiceWithConfig,
+} from './runtime/generation-service-resolver.js';
+export type {
+  ResolveGenerationServiceOptions,
+} from './runtime/generation-service-resolver.js';

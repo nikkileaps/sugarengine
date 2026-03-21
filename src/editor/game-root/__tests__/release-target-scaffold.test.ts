@@ -94,6 +94,8 @@ describe('release-target-scaffold', () => {
     expect(envExample?.content).toContain('GAME_API_SHARED_ALPHA_PASSWORD_HASH=sha256:replace-me');
     expect(envExample?.content).toContain('GAME_API_LOGIN_IP_MAX=10');
     expect(envExample?.content).toContain('GAME_API_SUGARAGENT_RUNTIME_MODE=llama');
+    expect(envExample?.content).toContain('GAME_API_SUGARAGENT_GENERATION_PROVIDER=selfHosted');
+    expect(envExample?.content).toContain('GAME_API_SUGARAGENT_OPENAI_MODEL=gpt-5-mini');
     expect(envExample?.content).toContain('GAME_API_SUGARAGENT_LORE_DIR=../../../plugins/sugaragent/lore/generated');
     expect(envExample?.content).toContain('SUGARAGENT_RUNTIME_BUNDLE_DIR=');
     expect(envExample?.content).toContain('SUGARAGENT_EMBEDDING_MODEL_DIR=');
@@ -133,6 +135,7 @@ describe('release-target-scaffold', () => {
     expect(sugaragentRuntimeServices?.content).toContain('createHostedSugarAgentRuntimeServices');
     expect(sugaragentRuntimeServices?.content).toContain('initializeSugarAgentRuntimeServices');
     expect(sugaragentRuntimeServices?.content).toContain('config.sugaragent.runtimeMode');
+    expect(sugaragentRuntimeServices?.content).toContain('generation: config.sugaragent.generation');
     expect(sugaragentRuntimeServices?.content).not.toContain('not configured yet.');
   });
 
@@ -149,9 +152,12 @@ describe('release-target-scaffold', () => {
 
     expect(appFile?.content).toContain('initializeSugarAgentRuntimeServices(config)');
     expect(configFile?.content).toContain('GAME_API_SUGARAGENT_RUNTIME_MODE');
+    expect(configFile?.content).toContain('GAME_API_SUGARAGENT_GENERATION_PROVIDER');
+    expect(configFile?.content).toContain('GAME_API_SUGARAGENT_OPENAI_MODEL');
     expect(configFile?.content).toContain('path.resolve(process.cwd(), process.env.GAME_API_SUGARAGENT_LORE_DIR');
     expect(typesFile?.content).toContain("runtimeMode: 'llama' | 'auto' | 'mock'");
-    expect(typesFile?.content).toContain("provider: 'local' | 'echo'");
+    expect(typesFile?.content).toContain("provider: 'selfHosted' | 'openai'");
+    expect(typesFile?.content).not.toContain("provider: 'local' | 'echo'");
   });
 
   it('scaffolds phase-7 deployment automation, release metadata helpers, and artifact-driven web deploy contract', () => {
@@ -186,6 +192,8 @@ describe('release-target-scaffold', () => {
     expect(stagingWorkflow?.content).toContain('write-release-metadata.mjs');
     expect(stagingWorkflow?.content).toContain('release/targets/web/profile.staging.json');
     expect(stagingWorkflow?.content).toContain('${{ steps.profile.outputs.backend_image }}:${{ github.sha }}');
+    expect(stagingWorkflow?.content).toContain('GAME_API_SUGARAGENT_GENERATION_PROVIDER=${{ steps.profile.outputs.sugaragent_generation_provider }}');
+    expect(stagingWorkflow?.content).toContain('GAME_API_SUGARAGENT_OPENAI_API_KEY=${{ steps.profile.outputs.sugaragent_openai_api_key_secret_name }}:latest');
     expect(stagingWorkflow?.content).toContain('SUGARAGENT_RUNTIME_ARCHIVE_URL="${{ steps.profile.outputs.sugaragent_runtime_archive_url }}"');
     expect(stagingWorkflow?.content).toContain('SUGARAGENT_EMBEDDING_TOKENIZER_URL="${{ steps.profile.outputs.sugaragent_embedding_tokenizer_url }}"');
 

@@ -43,6 +43,13 @@ import {
   buildProjectDocumentFromSnapshot,
   type EditorProjectDocument,
 } from './game-root/project-document';
+import type {
+  SugarAgentGenerationConfig,
+  SugarAgentGenerationProvider,
+} from '../../packages/sugaragent-runtime-core/src/runtime/generation-config';
+import {
+  resolveSugarAgentGenerationConfig,
+} from '../../packages/sugaragent-runtime-core/src/runtime/generation-config';
 
 const BASE_TABS: { value: EditorTab; label: string; icon: string }[] = [
   { value: 'dialogues', label: 'Dialogues', icon: '💬' },
@@ -80,6 +87,11 @@ const SUGARAGENT_RUNTIME_MODE_OPTIONS = [
   { value: 'mock', label: 'mock (testing only)' },
 ] as const;
 type SugarAgentRuntimeMode = (typeof SUGARAGENT_RUNTIME_MODE_OPTIONS)[number]['value'];
+
+const SUGARAGENT_GENERATION_PROVIDER_OPTIONS = [
+  { value: 'selfHosted', label: 'Self-hosted' },
+  { value: 'openai', label: 'OpenAI' },
+] as const;
 
 const WEB_PUBLISH_TARGET_OPTIONS = [
   { value: 'web', label: 'web' },
@@ -140,6 +152,10 @@ function normalizePlugins(rawPlugins: unknown): PluginConfigData[] {
       enabled: record.enabled === false ? false : true,
     } as PluginConfigData;
     if (pluginId === 'sugaragent') {
+      normalizedEntry.generation = normalizeSugarAgentGenerationConfigValue(
+        normalizedEntry.generation,
+        normalizedEntry.runtimeMode ?? normalizedEntry.runtime,
+      );
       normalizedEntry.runtimeMode = normalizeSugarAgentRuntimeMode(
         normalizedEntry.runtimeMode ?? normalizedEntry.runtime,
       );
@@ -168,6 +184,32 @@ function normalizeSugarAgentRuntimeMode(value: unknown): SugarAgentRuntimeMode {
     return value;
   }
   return 'llama';
+}
+
+function normalizeSugarAgentGenerationProvider(value: unknown): SugarAgentGenerationProvider {
+  return value === 'openai' ? value : 'selfHosted';
+}
+
+function normalizeSugarAgentGenerationConfigValue(
+  generation: unknown,
+  legacyRuntimeMode?: unknown,
+): SugarAgentGenerationConfig {
+  const resolved = resolveSugarAgentGenerationConfig({
+    generation: (typeof generation === 'object' && generation !== null)
+      ? generation as SugarAgentGenerationConfig
+      : undefined,
+    legacyRuntimeMode: normalizeSugarAgentRuntimeMode(legacyRuntimeMode),
+  });
+  return {
+    provider: resolved.provider,
+    selfHosted: {
+      runtimeMode: resolved.selfHosted.runtimeMode,
+    },
+    openai: {
+      model: resolved.openai.model,
+      baseUrl: resolved.openai.baseUrl,
+    },
+  };
 }
 
 function normalizeStringArrayValue(value: unknown): string[] {
@@ -305,6 +347,11 @@ export function Editor() {
   const [sugarAgentRuntimeMessage, setSugarAgentRuntimeMessage] = useState<{
     kind: 'success' | 'error' | 'info';
     text: string;
+  } | null>(null);
+  const [checkingSugarAgentHealth, setCheckingSugarAgentHealth] = useState(false);
+  const [sugarAgentHealthStatus, setSugarAgentHealthStatus] = useState<{
+    ok: boolean;
+    detail: string;
   } | null>(null);
 
   const [saveFlashVisible, setSaveFlashVisible] = useState(false);
@@ -855,9 +902,12 @@ export function Editor() {
       enabled,
     };
     if (pluginId === 'sugaragent' && enabled) {
-      nextConfig.runtimeMode = normalizeSugarAgentRuntimeMode(
+      const generation = normalizeSugarAgentGenerationConfigValue(
+        nextConfig.generation,
         nextConfig.runtimeMode ?? nextConfig.runtime,
       );
+      nextConfig.generation = generation;
+      nextConfig.runtimeMode = generation.selfHosted?.runtimeMode ?? 'llama';
       delete nextConfig.runtime;
     }
     nextPlugins.push(nextConfig);
@@ -873,47 +923,177 @@ export function Editor() {
   const sugarAgentGlobalSafetyBounds = normalizeStringArrayValue(
     sugarAgentPluginConfig?.globalSafetyBounds ?? sugarAgentPluginConfig?.safetyBounds,
   );
-  const sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
+  const sugarAgentGeneration = normalizeSugarAgentGenerationConfigValue(
+    sugarAgentPluginConfig?.generation,
     sugarAgentPluginConfig?.runtimeMode ?? sugarAgentPluginConfig?.runtime,
   );
+  const sugarAgentGenerationProvider = normalizeSugarAgentGenerationProvider(sugarAgentGeneration.provider);
+  const sugarAgentRuntimeMode = normalizeSugarAgentRuntimeMode(
+    sugarAgentGeneration.selfHosted?.runtimeMode,
+  );
+  const sugarAgentOpenAiModel = sugarAgentGeneration.openai?.model ?? 'gpt-5-mini';
+  const sugarAgentOpenAiBaseUrl = sugarAgentGeneration.openai?.baseUrl ?? 'https://api.openai.com/v1';
+
+  const updateSugarAgentPluginConfig = (
+    update: (existing: PluginConfigData | null, baseGeneration: SugarAgentGenerationConfig) => PluginConfigData,
+  ) => {
+    const existing = sugarAgentPluginConfig;
+    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
+    const baseGeneration = normalizeSugarAgentGenerationConfigValue(
+      existing?.generation,
+      existing?.runtimeMode ?? existing?.runtime,
+    );
+    const nextConfig = update(existing, baseGeneration);
+    delete nextConfig.runtime;
+    nextPlugins.push(nextConfig);
+    setPlugins(nextPlugins);
+    setDirty(true);
+  };
 
   const handleSetSugarAgentGlobalSafetyBounds = (value: string) => {
     const nextBounds = parseStringList(value);
-    const existing = sugarAgentPluginConfig;
-    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
-    const nextConfig: PluginConfigData = {
+    updateSugarAgentPluginConfig((existing, baseGeneration) => {
+      const nextConfig: PluginConfigData = {
+        ...(existing ?? {}),
+        id: 'sugaragent',
+        enabled: existing?.enabled === false ? false : true,
+        generation: baseGeneration,
+        runtimeMode: baseGeneration.selfHosted?.runtimeMode ?? 'llama',
+      };
+      if (nextBounds.length > 0) {
+        nextConfig.globalSafetyBounds = nextBounds;
+      } else {
+        delete nextConfig.globalSafetyBounds;
+      }
+      delete nextConfig.safetyBounds;
+      return nextConfig;
+    });
+  };
+
+  const handleSetSugarAgentGenerationProvider = (value: string | null) => {
+    const provider = normalizeSugarAgentGenerationProvider(value ?? sugarAgentGeneration.provider);
+    updateSugarAgentPluginConfig((existing, baseGeneration) => ({
       ...(existing ?? {}),
       id: 'sugaragent',
       enabled: existing?.enabled === false ? false : true,
-      runtimeMode: normalizeSugarAgentRuntimeMode(existing?.runtimeMode ?? existing?.runtime),
-    };
-    if (nextBounds.length > 0) {
-      nextConfig.globalSafetyBounds = nextBounds;
-    } else {
-      delete nextConfig.globalSafetyBounds;
-    }
-    delete nextConfig.safetyBounds;
-    delete nextConfig.runtime;
-    nextPlugins.push(nextConfig);
-    setPlugins(nextPlugins);
-    setDirty(true);
+      generation: {
+        ...baseGeneration,
+        provider,
+      },
+      runtimeMode: baseGeneration.selfHosted?.runtimeMode ?? 'llama',
+    }));
   };
 
   const handleSetSugarAgentRuntimeMode = (value: string | null) => {
-    const existing = sugarAgentPluginConfig;
-    const mode = normalizeSugarAgentRuntimeMode(value ?? existing?.runtimeMode ?? existing?.runtime);
-    const nextPlugins = plugins.filter((entry) => entry.id !== 'sugaragent');
-    const nextConfig: PluginConfigData = {
+    const mode = normalizeSugarAgentRuntimeMode(value ?? sugarAgentGeneration.selfHosted?.runtimeMode);
+    updateSugarAgentPluginConfig((existing, baseGeneration) => ({
       ...(existing ?? {}),
       id: 'sugaragent',
       enabled: existing?.enabled === false ? false : true,
+      generation: {
+        ...baseGeneration,
+        selfHosted: {
+          ...(baseGeneration.selfHosted ?? {}),
+          runtimeMode: mode,
+        },
+      },
       runtimeMode: mode,
-    };
-    delete nextConfig.runtime;
-    nextPlugins.push(nextConfig);
-    setPlugins(nextPlugins);
-    setDirty(true);
+    }));
   };
+
+  const handleSetSugarAgentOpenAiModel = (value: string) => {
+    updateSugarAgentPluginConfig((existing, baseGeneration) => ({
+      ...(existing ?? {}),
+      id: 'sugaragent',
+      enabled: existing?.enabled === false ? false : true,
+      generation: {
+        ...baseGeneration,
+        provider: 'openai',
+        openai: {
+          ...(baseGeneration.openai ?? {}),
+          model: value.trim() || 'gpt-5-mini',
+        },
+      },
+      runtimeMode: baseGeneration.selfHosted?.runtimeMode ?? 'llama',
+    }));
+  };
+
+  const handleSetSugarAgentOpenAiBaseUrl = (value: string) => {
+    updateSugarAgentPluginConfig((existing, baseGeneration) => ({
+      ...(existing ?? {}),
+      id: 'sugaragent',
+      enabled: existing?.enabled === false ? false : true,
+      generation: {
+        ...baseGeneration,
+        provider: 'openai',
+        openai: {
+          ...(baseGeneration.openai ?? {}),
+          baseUrl: value.trim() || 'https://api.openai.com/v1',
+        },
+      },
+      runtimeMode: baseGeneration.selfHosted?.runtimeMode ?? 'llama',
+    }));
+  };
+
+  useEffect(() => {
+    if (!sugarAgentSettingsOpen || !projectLoaded || !isPluginEnabled(plugins, 'sugaragent')) {
+      setSugarAgentHealthStatus(null);
+      setCheckingSugarAgentHealth(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingSugarAgentHealth(true);
+
+    fetch('/__sugaragent/runtime', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        op: 'health',
+        gameId: resolvedGameId,
+        runtimeMode: sugarAgentGeneration.selfHosted?.runtimeMode ?? 'llama',
+        generation: sugarAgentGeneration,
+      }),
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({} as { ok?: boolean; detail?: string }));
+        if (cancelled) return;
+        setSugarAgentHealthStatus({
+          ok: payload.ok === true,
+          detail: typeof payload.detail === 'string'
+            ? payload.detail
+            : payload.ok === true
+              ? 'SugarAgent runtime ready.'
+              : 'SugarAgent runtime unavailable.',
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        setSugarAgentHealthStatus({
+          ok: false,
+          detail,
+        });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCheckingSugarAgentHealth(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sugarAgentSettingsOpen,
+    projectLoaded,
+    plugins,
+    resolvedGameId,
+    sugarAgentGeneration.provider,
+    sugarAgentGeneration.selfHosted?.runtimeMode,
+    sugarAgentGeneration.openai?.model,
+    sugarAgentGeneration.openai?.baseUrl,
+  ]);
 
   const handleResetSugarAgentRuntime = async () => {
     if (resettingSugarAgentRuntime) return;
@@ -1580,14 +1760,62 @@ export function Editor() {
             disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
           />
           <Select
-            label="Local Runtime Mode"
-            description="Default is llama. Use mock only for deterministic testing."
-            data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
-            value={sugarAgentRuntimeMode}
-            onChange={handleSetSugarAgentRuntimeMode}
+            label="Generation Provider"
+            description="Choose which backend family SugarAgent preview should target."
+            data={SUGARAGENT_GENERATION_PROVIDER_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+            value={sugarAgentGenerationProvider}
+            onChange={handleSetSugarAgentGenerationProvider}
             allowDeselect={false}
             disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
           />
+          {sugarAgentGenerationProvider === 'selfHosted' ? (
+            <Select
+              label="Self-Hosted Runtime Mode"
+              description="Used when the generation provider is Self-hosted."
+              data={SUGARAGENT_RUNTIME_MODE_OPTIONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+              value={sugarAgentRuntimeMode}
+              onChange={handleSetSugarAgentRuntimeMode}
+              allowDeselect={false}
+              disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+            />
+          ) : null}
+          {sugarAgentGenerationProvider === 'openai' ? (
+            <>
+              <TextInput
+                label="OpenAI Model"
+                description="Used when the generation provider is OpenAI."
+                value={sugarAgentOpenAiModel}
+                onChange={(event) => handleSetSugarAgentOpenAiModel(event.currentTarget.value)}
+                placeholder="gpt-5-mini"
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              />
+              <TextInput
+                label="OpenAI Base URL"
+                description="Defaults to the public OpenAI API endpoint."
+                value={sugarAgentOpenAiBaseUrl}
+                onChange={(event) => handleSetSugarAgentOpenAiBaseUrl(event.currentTarget.value)}
+                placeholder="https://api.openai.com/v1"
+                disabled={!projectLoaded || !isPluginEnabled(plugins, 'sugaragent')}
+              />
+            </>
+          ) : null}
+          <Text
+            size="xs"
+            c={
+              checkingSugarAgentHealth
+                ? 'dimmed'
+                : sugarAgentHealthStatus?.ok === true
+                  ? 'green'
+                  : sugarAgentHealthStatus?.ok === false
+                    ? 'red'
+                    : 'dimmed'
+            }
+          >
+            {checkingSugarAgentHealth
+              ? 'Checking SugarAgent runtime health...'
+              : sugarAgentHealthStatus?.detail
+                ?? 'Runtime health will appear here.'}
+          </Text>
           <Group justify="space-between" align="center">
             <Text size="xs" c="dimmed">
               Clear preview runtime cache after lore updates.

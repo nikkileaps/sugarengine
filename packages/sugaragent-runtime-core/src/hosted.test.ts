@@ -25,7 +25,7 @@ describe('hosted runtime services', () => {
       gameId: 'wordlark',
       loreDir: '/tmp/nonexistent-lore-dir',
       runtimeMode: 'mock',
-      provider: 'echo',
+      debugProvider: 'echo',
       useLore: false,
     });
 
@@ -96,7 +96,6 @@ describe('hosted runtime services', () => {
       gameId: 'wordlark',
       loreDir: '/tmp/nonexistent-lore-dir',
       runtimeMode: 'llama',
-      provider: 'local',
       useLore: false,
       generationService,
       embeddingsService,
@@ -123,5 +122,46 @@ describe('hosted runtime services', () => {
     expect(health.ok).toBe(true);
     expect(health.detail).toContain('injected-embeddings-ready');
     expect(embedded).toEqual([[1, 0, 0]]);
+  });
+
+  it('reports missing OpenAI credentials through runtime health before gameplay turns', async () => {
+    const previousHostedKey = process.env.GAME_API_SUGARAGENT_OPENAI_API_KEY;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    delete process.env.GAME_API_SUGARAGENT_OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    try {
+      const runtimeServices = createHostedSugarAgentRuntimeServices({
+        gameId: 'wordlark',
+        loreDir: '/tmp/nonexistent-lore-dir',
+        generation: {
+          provider: 'openai',
+          openai: {
+            model: 'gpt-5-mini',
+            baseUrl: 'https://api.openai.com/v1',
+          },
+        },
+        useLore: false,
+        openAiApiKey: null,
+      });
+
+      const health = await runtimeServices.health({
+        gameId: 'wordlark',
+      });
+
+      expect(health.ok).toBe(false);
+      expect(health.detail).toContain('OpenAI API key not configured');
+    } finally {
+      if (typeof previousHostedKey === 'string') {
+        process.env.GAME_API_SUGARAGENT_OPENAI_API_KEY = previousHostedKey;
+      } else {
+        delete process.env.GAME_API_SUGARAGENT_OPENAI_API_KEY;
+      }
+      if (typeof previousOpenAiKey === 'string') {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      } else {
+        delete process.env.OPENAI_API_KEY;
+      }
+    }
   });
 });

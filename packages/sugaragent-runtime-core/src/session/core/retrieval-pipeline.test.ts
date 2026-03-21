@@ -129,6 +129,100 @@ describe('retrieval-pipeline', () => {
     expect(result.loreMatches[0]?.chunk.chunkId).toContain('earendale');
   });
 
+  it('treats explicit location filters as retrieval gates for world lore queries', async () => {
+    const artifacts = {
+      chunks: [
+        {
+          chunkId: 'lore.locations.earendale#overview',
+          pageId: 'lore.locations.earendale',
+          title: 'Earendale',
+          sectionHeading: 'Overview',
+          summary: 'Earendale is a resort town with a station.',
+          content: 'Earendale is a resort town with a station.',
+          tokens: ['earendale', 'resort', 'town', 'station'],
+          metadata: {
+            id: 'lore.locations.earendale',
+            title: 'Earendale',
+            entity_ids: [],
+            location_ids: ['locations.earendale'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale', 'town'],
+            fact_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.history.earendale-fair#overview',
+          pageId: 'lore.history.earendale-fair',
+          title: 'Earendale Lantern Fair',
+          sectionHeading: 'Overview',
+          summary: 'The Earendale Lantern Fair fills the station square every spring.',
+          content: 'The Earendale Lantern Fair fills the station square every spring.',
+          tokens: ['earendale', 'lantern', 'fair', 'station', 'spring'],
+          metadata: {
+            id: 'lore.history.earendale-fair',
+            title: 'Earendale Lantern Fair',
+            entity_ids: [],
+            location_ids: [],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['earendale', 'festival'],
+            fact_ids: [],
+          },
+        },
+        {
+          chunkId: 'lore.npcs.bippity#family',
+          pageId: 'lore.npcs.bippity',
+          title: 'Bippity Roo',
+          sectionHeading: 'Family',
+          summary: "His wife's name is Janet Roo.",
+          content: "His wife's name is Janet Roo.",
+          tokens: ['wife', 'janet', 'roo', 'family'],
+          metadata: {
+            id: 'lore.npcs.bippity',
+            title: 'Bippity Roo',
+            entity_ids: ['npc.bippity'],
+            location_ids: ['locations.rackwick'],
+            faction_ids: [],
+            beat_ids: [],
+            tags: ['bippity', 'family', 'earendale'],
+            fact_ids: [],
+          },
+        },
+      ],
+      factById: {},
+    };
+
+    const result = await runGovernedLoreRetrieval({
+      loreArtifacts: artifacts,
+      canRetrieveLore: true,
+      shouldAttemptLoreRetrieval: true,
+      playerMessage: 'Do you know anything about Earendale?',
+      mode: 'character',
+      routingIntent: 'lore_world',
+      queryType: 'world_query',
+      activeBeatId: undefined,
+      loreScopes: [],
+      selfLoreScopes: [],
+      relatedLoreScopes: [],
+      selfEntityId: undefined,
+      hasBeatContract: false,
+      rerankCache: undefined,
+      artifactVersion: undefined,
+      modelVersion: undefined,
+      rerankerClass: 'lexical',
+      retrievalFilters: {
+        locationIds: ['locations.earendale'],
+        aliases: ['earendale'],
+      },
+    });
+
+    expect(result.loreMatches.length).toBeGreaterThan(0);
+    expect(result.loreMatches.some((entry) => entry?.chunk?.chunkId?.includes('earendale#overview'))).toBe(true);
+    expect(result.loreMatches.some((entry) => entry?.chunk?.chunkId?.includes('earendale-fair'))).toBe(true);
+    expect(result.loreMatches.some((entry) => entry?.chunk?.chunkId?.includes('bippity'))).toBe(false);
+  });
+
   it('merges lexical and vector candidates and surfaces vector diagnostics', async () => {
     const artifacts = {
       chunks: [

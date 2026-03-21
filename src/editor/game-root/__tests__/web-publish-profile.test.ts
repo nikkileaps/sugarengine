@@ -32,6 +32,7 @@ describe('web-publish-profile', () => {
     expect(profile.frontend.gameApiBaseUrl).toBe('https://api.wordlark.example.com');
     expect(profile.frontend.backendRequired).toBe(true);
     expect(profile.frontend.credentials).toBe('include');
+    expect(profile.sugaragent.generation.provider).toBe('selfHosted');
   });
 
   it('preserves boolean backendRequired values from profile JSON', () => {
@@ -77,5 +78,35 @@ describe('web-publish-profile', () => {
     }, '/games/wordlark/release/targets/web/profile.production.json', 'production')).toThrow(
       'missing frontend.gameApiBaseUrl',
     );
+  });
+
+  it('parses sugaragent generation overrides from the profile', () => {
+    const profile = parseWebPublishProfile({
+      target: 'web',
+      environment: 'production',
+      frontend: {
+        gameApiBaseUrl: 'https://api.wordlark.example.com/',
+        backendRequired: true,
+      },
+      sugaragent: {
+        generation: {
+          provider: 'openai',
+          openai: {
+            model: 'gpt-5-mini',
+          },
+        },
+      },
+    }, '/games/wordlark/release/targets/web/profile.production.json', 'production');
+
+    expect(profile.sugaragent.generation).toEqual({
+      provider: 'openai',
+      selfHosted: {
+        runtimeMode: 'llama',
+      },
+      openai: {
+        model: 'gpt-5-mini',
+        baseUrl: 'https://api.openai.com/v1',
+      },
+    });
   });
 });
