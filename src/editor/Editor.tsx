@@ -40,10 +40,13 @@ import type {
   WebPublishTarget,
 } from './game-root/web-publish-profile';
 import {
-  buildPreviewProjectDocument,
   buildProjectDocumentFromSnapshot,
   type EditorProjectDocument,
 } from './game-root/project-document';
+import {
+  buildRuntimeProjectDocument,
+  buildSugarlangRuntimeConfig,
+} from './game-root/runtime-document.js';
 import type {
   SugarAgentGenerationConfig,
   SugarAgentGenerationProvider,
@@ -629,14 +632,11 @@ export function Editor() {
           : { enabled: true, disabledLanguages: slDisabled };
       }
 
-      const projectData: PreviewProjectData = {
-        version: 1,
-        ...buildPreviewProjectDocument(
-          buildCurrentProjectDocument(),
-          `__sugarengine/game-assets/${resolvedGameId}/`,
-        ),
-        sugarlang: sugarlangConfig,
-      };
+      const projectData: PreviewProjectData = buildRuntimeProjectDocument({
+        project: buildCurrentProjectDocument(),
+        contentBasePath: `__sugarengine/game-assets/${resolvedGameId}/`,
+        sugarlang: buildSugarlangRuntimeConfig(sugarlangConfig),
+      }) as PreviewProjectData;
 
       console.log('[Editor] handlePreview: playerCaster =', playerCaster);
       previewManagerRef.current.openPreviewWithData(projectData, currentEpisodeId || undefined);

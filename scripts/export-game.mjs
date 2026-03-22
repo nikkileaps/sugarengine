@@ -12,6 +12,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { resolveGameSelection } from './lib/active-game.mjs';
+import {
+  buildRuntimeProjectDocument,
+  buildSugarlangRuntimeConfig,
+} from '../src/editor/game-root/runtime-document.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -70,6 +74,56 @@ function normalizeGameMeta(project, slug) {
   };
 }
 
+async function loadPluginArtifacts(pluginDir) {
+  const files = {};
+
+  async function walk(currentDir, prefix = '') {
+    let entries = [];
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch (error) {
+      if (error && error.code === 'ENOENT') return;
+      throw error;
+    }
+
+    for (const entry of entries) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const absolutePath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolutePath, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      files[relativePath] = await fs.readFile(absolutePath, 'utf8');
+    }
+  }
+
+  await walk(pluginDir);
+  return files;
+}
+
+async function loadSugarlangRuntimeInputs(projectPath, project) {
+  const pluginEntries = Array.isArray(project.plugins) ? project.plugins : [];
+  const sugarlangPlugin = pluginEntries.find((entry) => (
+    entry
+    && typeof entry === 'object'
+    && entry.id === 'sugarlang'
+    && entry.enabled !== false
+  ));
+
+  if (!sugarlangPlugin && !('sugarlang' in (project ?? {}))) {
+    return undefined;
+  }
+
+  const disabledLanguages = Array.isArray(sugarlangPlugin?.disabledLanguages)
+    ? sugarlangPlugin.disabledLanguages.filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+  const gameRoot = path.dirname(projectPath);
+  const artifactFiles = await loadPluginArtifacts(path.join(gameRoot, 'plugins', 'sugarlang'));
+
+  return { enabled: true, artifacts: artifactFiles, disabledLanguages };
+}
+
 async function exportGame() {
   const args = parseArgs(process.argv.slice(2));
   const selection = await resolveGameSelection({
@@ -98,12 +152,16 @@ async function exportGame() {
   try {
     const content = await fs.readFile(projectPath, 'utf-8');
     const project = JSON.parse(content);
+    const sugarlangInputs = await loadSugarlangRuntimeInputs(projectPath, project);
 
-    const gameData = {
-      ...project,
-      meta: normalizeGameMeta(project, slug),
-      defaultEpisode: project.defaultEpisode || project.episodes?.[0]?.id,
-    };
+    const gameData = buildRuntimeProjectDocument({
+      project: {
+        ...project,
+        meta: normalizeGameMeta(project, slug),
+      },
+      contentBasePath: `games/${slug}/assets/`,
+      sugarlang: buildSugarlangRuntimeConfig(sugarlangInputs),
+    });
 
     // Ensure output directory exists
     await fs.mkdir(path.dirname(outputPath), { recursive: true });

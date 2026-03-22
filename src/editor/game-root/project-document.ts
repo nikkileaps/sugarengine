@@ -304,31 +304,6 @@ export function buildProjectDocumentFromSnapshot(
   };
 }
 
-export function buildPreviewProjectDocument(
-  project: EditorProjectDocument,
-  previewContentBasePath: string,
-): EditorProjectDocument {
-  return {
-    ...project,
-    meta: {
-      ...project.meta,
-      contentBasePath: previewContentBasePath,
-    },
-  };
-}
-
-export function buildRuntimeExportDocument(project: EditorProjectDocument): Record<string, unknown> {
-  return {
-    version: 1,
-    ...project,
-    meta: {
-      ...project.meta,
-      contentBasePath: `games/${project.meta.gameId}/assets/`,
-    },
-    defaultEpisode: project.defaultEpisode ?? project.episodes[0]?.id,
-  };
-}
-
 export function stringifyProjectDocument(project: EditorProjectDocument): string {
   return `${JSON.stringify(project, null, 2)}\n`;
 }
