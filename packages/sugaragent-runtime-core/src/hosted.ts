@@ -22,6 +22,9 @@ import type {
 import {
   resolveGenerationServiceWithConfig,
 } from './runtime/generation-service-resolver.js';
+import {
+  getRuntimeCoreIdentity,
+} from './runtime/runtime-identity.js';
 
 export interface HostedSugarAgentRuntimeServices {
   health(request?: RuntimeHealthRequest): Promise<RuntimeHealthStatus>;
@@ -92,6 +95,7 @@ function formatHostedHealthDetail(input: {
 export function createHostedSugarAgentRuntimeServices(
   options: HostedSugarAgentRuntimeServiceOptions,
 ): HostedSugarAgentRuntimeServices {
+  const runtimeIdentity = getRuntimeCoreIdentity();
   const sessionCache = new Map<string, Promise<SugarAgentSessionRuntime>>();
   const resolvedGeneration = resolveGenerationServiceWithConfig({
     generation: options.generation,
@@ -164,11 +168,13 @@ export function createHostedSugarAgentRuntimeServices(
             runtimeDetail: session.startup?.runtime?.health?.detail,
             embeddingDetail: embeddingHealth.detail,
           }),
+          runtimeIdentity,
         };
       } catch (error) {
         return {
           ok: false,
           detail: error instanceof Error ? error.message : String(error),
+          runtimeIdentity,
         };
       }
     },

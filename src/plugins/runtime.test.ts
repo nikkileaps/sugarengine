@@ -59,7 +59,7 @@ describe('buildRuntimePluginsFromProject', () => {
     expect(plugins).toHaveLength(0);
   });
 
-  it('passes explicit SugarAgent bridge options through the runtime plugin builder', async () => {
+  it('passes explicit SugarAgent turn-gateway options through the runtime plugin builder', async () => {
     let capturedRequest: unknown;
     const hostedBridge = {
       async health() {
@@ -95,7 +95,7 @@ describe('buildRuntimePluginsFromProject', () => {
       { plugins: ['sugaragent'] },
       {
         sugarAgent: {
-          runtimeBridge: hostedBridge,
+          turnGateway: hostedBridge,
         },
       },
     );

@@ -15,6 +15,9 @@ import {
   LOCAL_EMBEDDING_MODEL_ID,
 } from '../runtime/local-embeddings-service.js';
 import { createLocalLlamaGenerationService } from '../runtime/local-generation-service.js';
+import {
+  getRuntimeCoreIdentity,
+} from '../runtime/runtime-identity.js';
 import type {
   ResolvedSugarAgentGenerationConfig,
 } from '../runtime/generation-config.js';
@@ -3042,6 +3045,7 @@ export async function createSugarAgentSession(options: RecordLike = {}): Promise
       runtime: {
         mode: runtimeMode,
         health: runtimeHealth,
+        runtimeIdentity: getRuntimeCoreIdentity(),
         generation: args.generation
           ? {
             provider: args.generation.provider,

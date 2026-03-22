@@ -1092,14 +1092,15 @@ export function Editor() {
     let cancelled = false;
     setCheckingSugarAgentHealth(true);
 
-    fetch('/__sugaragent/runtime', {
+    fetch('/sugaragent/health', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        op: 'health',
-        gameId: resolvedGameId,
-        runtimeMode: sugarAgentGeneration.selfHosted?.runtimeMode ?? 'llama',
-        generation: sugarAgentGeneration,
+        request: {
+          gameId: resolvedGameId,
+          runtimeMode: sugarAgentGeneration.selfHosted?.runtimeMode ?? 'llama',
+          generation: sugarAgentGeneration,
+        },
       }),
     })
       .then(async (response) => {

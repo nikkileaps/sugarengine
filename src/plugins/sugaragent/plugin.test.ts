@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PLUGIN_API_VERSION } from '../../engine/plugins';
 import type { SugarAgentAuthoringBundleV1 } from './authoring/artifacts';
 import { createSugarAgentPlugin } from './plugin';
-import { MockLocalRuntimeBridge } from './runtime';
+import { MockAgentTurnGateway } from './gateway';
 
 function createAuthoringBundle(overrides: Partial<SugarAgentAuthoringBundleV1> = {}): SugarAgentAuthoringBundleV1 {
   return {
@@ -51,7 +51,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     });
   });
 
-  it('returns explicit provider-unavailable output when no runtime bridge is available', async () => {
+  it('returns explicit provider-unavailable output when no turn gateway is available', async () => {
     const plugin = createSugarAgentPlugin();
     const turn = await plugin.runAgentTurn?.({
       npcId: 'npc-baker',
@@ -62,9 +62,9 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     expect(turn?.utterance.toLowerCase()).toContain('local language runtime is unavailable');
   });
 
-  it('uses LocalLLMProvider when a runtime bridge is configured', async () => {
+  it('uses the configured turn gateway when one is available', async () => {
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: new MockLocalRuntimeBridge({ mode: 'valid' }),
+      turnGateway: new MockAgentTurnGateway({ mode: 'valid' }),
     });
     await plugin.init({
       getNearbyInteraction: () => null,
@@ -111,7 +111,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   it('forwards Sugarlang pedagogy context into the runtime request', async () => {
     let capturedRequest: any;
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -219,7 +219,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   it('requires a reply-parts contract for grounded turns and converts legacy grounded output to uncertainty', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -285,7 +285,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
 
   it('accepts mixed social and factual turns when the runtime supplies reply-parts validation', async () => {
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -359,7 +359,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
 
   it('trusts evidence-first runtime diagnostics without requiring legacy reply-parts markers', async () => {
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -439,7 +439,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   it('trusts deterministic evidence-first runtime fallbacks instead of treating them as provider fallback failures', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -541,7 +541,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   it('emits an explicit warning when embeddings degrade and lexical-only fallback is in use', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -645,7 +645,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
 
   it('preserves mixed-initiative decision metadata from provider diagnostics', async () => {
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -715,7 +715,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
   it('uses abstain initiative when provider fails and returns provider-unavailable output', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -764,9 +764,9 @@ describe('createSugarAgentPlugin (phase 3)', () => {
     errorSpy.mockRestore();
   });
 
-  it('does not run grounding against provider fallback output returned by the runtime bridge', async () => {
+  it('does not run grounding against provider fallback output returned by the turn gateway', async () => {
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },
@@ -826,7 +826,7 @@ describe('createSugarAgentPlugin (phase 3)', () => {
 
   it('preserves runtime reply-parts fallback as uncertainty instead of provider-unavailable output', async () => {
     const plugin = createSugarAgentPlugin({
-      runtimeBridge: {
+      turnGateway: {
         async health() {
           return { ok: true, detail: 'test-runtime-ready' };
         },

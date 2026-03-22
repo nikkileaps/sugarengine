@@ -1,5 +1,6 @@
 import type { PluginPedagogyContext } from './pedagogy.js';
 import type { SugarAgentGenerationConfig } from './runtime/generation-config.js';
+import type { RuntimeCoreIdentity } from './runtime/runtime-identity.js';
 
 export type SugarAgentRuntimeMode = 'llama' | 'auto' | 'mock';
 
@@ -11,6 +12,7 @@ export type RuntimeFallbackKind =
 export interface RuntimeHealthStatus {
   ok: boolean;
   detail?: string;
+  runtimeIdentity?: RuntimeCoreIdentity;
 }
 
 export interface RuntimeHealthRequest {

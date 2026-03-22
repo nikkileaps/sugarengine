@@ -7,6 +7,9 @@ import {
   buildHostedSugarAgentSessionKey,
   createHostedSugarAgentRuntimeServices,
 } from './hosted.js';
+import {
+  getRuntimeCoreIdentity,
+} from './runtime/runtime-identity.js';
 import type {
   EmbeddingsRuntimeService,
   JsonGenerationRequest,
@@ -73,6 +76,11 @@ describe('hosted runtime services', () => {
     expect(response.jsonText).toContain('Echo: Hello there');
     expect(response.usedFallback).toBe(false);
     expect(response.attempts).toBe(1);
+    expect(response.diagnostics?.startup).toMatchObject({
+      runtime: {
+        runtimeIdentity: getRuntimeCoreIdentity(),
+      },
+    });
   });
 
   it('uses injected generation and embeddings services instead of package-internal natives', async () => {
@@ -148,6 +156,7 @@ describe('hosted runtime services', () => {
 
     expect(health.ok).toBe(true);
     expect(health.detail).toContain('injected-embeddings-ready');
+    expect(health.runtimeIdentity).toEqual(getRuntimeCoreIdentity());
     expect(embedded).toEqual([[1, 0, 0]]);
   });
 
@@ -178,6 +187,7 @@ describe('hosted runtime services', () => {
 
       expect(health.ok).toBe(false);
       expect(health.detail).toContain('OpenAI API key not configured');
+      expect(health.runtimeIdentity).toEqual(getRuntimeCoreIdentity());
     } finally {
       if (typeof previousHostedKey === 'string') {
         process.env.GAME_API_SUGARAGENT_OPENAI_API_KEY = previousHostedKey;
@@ -305,5 +315,10 @@ describe('hosted runtime services', () => {
     expect(response.attempts).toBeGreaterThan(0);
     expect(typeof response.jsonText).toBe('string');
     expect(response.jsonText.length).toBeGreaterThan(0);
+    expect(response.diagnostics?.startup).toMatchObject({
+      runtime: {
+        runtimeIdentity: getRuntimeCoreIdentity(),
+      },
+    });
   });
 });

@@ -1,4 +1,5 @@
 import type { RuntimeFallbackKind } from './runtime-bridge.js';
+import type { RuntimeCoreIdentity } from './runtime/runtime-identity.js';
 
 export interface SugarAgentSessionStartup {
   runtime?: {
@@ -7,6 +8,7 @@ export interface SugarAgentSessionStartup {
       ok?: boolean;
       detail?: string;
     };
+    runtimeIdentity?: RuntimeCoreIdentity;
     generation?: {
       provider?: 'selfHosted' | 'openai';
       model?: string;

@@ -11,7 +11,6 @@ import {
 } from './scripts/lib/active-game.mjs';
 import {
   embedTexts as embedTextsWithLocalRuntime,
-  getLocalEmbeddingRuntimeHealth,
   LOCAL_EMBEDDING_MODEL_ID,
 } from './src/plugins/sugaragent/runtime/local-embedding-runtime';
 import {
@@ -237,7 +236,7 @@ export default defineConfig(({ mode }) => {
             options: { gameId: string; gameName: string },
           ) => {
             directories: string[];
-            files: Array<{ path: string; content: string; overwrite: 'never' }>;
+            files: Array<{ path: string; content: string; overwrite: 'never' | 'always' }>;
           };
         }> | null = null;
 
@@ -257,7 +256,7 @@ export default defineConfig(({ mode }) => {
                   options: { gameId: string; gameName: string },
                 ) => {
                   directories: string[];
-                  files: Array<{ path: string; content: string; overwrite: 'never' }>;
+                  files: Array<{ path: string; content: string; overwrite: 'never' | 'always' }>;
                 };
               };
               return {
@@ -1614,6 +1613,27 @@ export default defineConfig(({ mode }) => {
           return pending;
         };
 
+        const loadSugarAgentRuntimeHttpModule = async () => {
+          return server.ssrLoadModule('/packages/sugaragent-runtime-core/src/http/runtime-http.ts') as Promise<{
+            handleSugarAgentEmbedHttpRequest: (input: {
+              runtimeServices: HostedSugarAgentRuntimeServices;
+              texts?: string[];
+            }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
+            handleSugarAgentGenerateStructuredHttpRequest: (input: {
+              runtimeServices: HostedSugarAgentRuntimeServices;
+              request?: Record<string, unknown>;
+              gameId?: string;
+              sessionScopeId?: string;
+            }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
+            handleSugarAgentHealthHttpRequest: (input: {
+              runtimeServices: HostedSugarAgentRuntimeServices;
+              request?: Record<string, unknown>;
+              gameId?: string;
+              sessionId?: string | null;
+            }) => Promise<{ statusCode: number; body: Record<string, unknown> }>;
+          }>;
+        };
+
         server.middlewares.use('/__sugarengine/active-game', async (req, res) => {
           if (req.method !== 'POST') {
             res.statusCode = 405;
@@ -1653,6 +1673,94 @@ export default defineConfig(({ mode }) => {
           res.end();
         });
 
+        server.middlewares.use('/sugaragent/health', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          try {
+            const body = await readRequestBody(req);
+            const request = (typeof body.request === 'object' && body.request !== null)
+              ? body.request as Record<string, unknown>
+              : undefined;
+            const requestedGameId = normalizeOptionalString(request?.gameId);
+            const runtimeMode = normalizeRuntimeMode(request?.runtimeMode);
+            const runtimeServices = await getPreviewRuntimeServices(
+              requestedGameId,
+              runtimeMode,
+              request?.generation,
+            );
+            const { handleSugarAgentHealthHttpRequest } = await loadSugarAgentRuntimeHttpModule();
+            const result = await handleSugarAgentHealthHttpRequest({
+              runtimeServices,
+              request,
+              gameId: requestedGameId,
+            });
+            writeJson(res, result.statusCode, result.body);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            writeJson(res, 503, { ok: false, error: message });
+          }
+        });
+
+        server.middlewares.use('/sugaragent/generateStructured', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          try {
+            const body = await readRequestBody(req);
+            const request = (typeof body.request === 'object' && body.request !== null)
+              ? body.request as Record<string, unknown>
+              : undefined;
+            const requestContext = (typeof request?.context === 'object' && request.context !== null)
+              ? request.context as Record<string, unknown>
+              : {};
+            const requestedGameId = normalizeOptionalString(requestContext.gameId);
+            const runtimeMode = normalizeRuntimeMode(requestContext.runtimeMode);
+            const runtimeServices = await getPreviewRuntimeServices(
+              requestedGameId,
+              runtimeMode,
+              request?.generation,
+            );
+            const { handleSugarAgentGenerateStructuredHttpRequest } = await loadSugarAgentRuntimeHttpModule();
+            const result = await handleSugarAgentGenerateStructuredHttpRequest({
+              runtimeServices,
+              request,
+              gameId: requestedGameId,
+            });
+            writeJson(res, result.statusCode, result.body);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            writeJson(res, 503, { ok: false, error: message });
+          }
+        });
+
+        server.middlewares.use('/sugaragent/embed', async (req, res) => {
+          if (req.method !== 'POST') {
+            writeJson(res, 405, { ok: false, error: 'Method not allowed' });
+            return;
+          }
+
+          try {
+            const body = await readRequestBody(req);
+            const runtimeServices = await getPreviewRuntimeServices();
+            const { handleSugarAgentEmbedHttpRequest } = await loadSugarAgentRuntimeHttpModule();
+            const result = await handleSugarAgentEmbedHttpRequest({
+              runtimeServices,
+              texts: Array.isArray(body.texts)
+                ? body.texts.filter((entry): entry is string => typeof entry === 'string')
+                : [],
+            });
+            writeJson(res, result.statusCode, result.body);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            writeJson(res, 503, { ok: false, error: message });
+          }
+        });
+
         server.middlewares.use('/__sugaragent/runtime', async (req, res) => {
           if (req.method !== 'POST') {
             writeJson(res, 405, { ok: false, error: 'Method not allowed' });
@@ -1662,151 +1770,6 @@ export default defineConfig(({ mode }) => {
           try {
             const body = await readRequestBody(req);
             const op = typeof body.op === 'string' ? body.op : '';
-            const request = (typeof body.request === 'object' && body.request !== null)
-              ? body.request as Record<string, unknown>
-              : {};
-
-            if (op === 'health') {
-              try {
-                const requestedGameId = normalizeOptionalString(body.gameId);
-                const runtimeMode = normalizeRuntimeMode(body.runtimeMode);
-                const runtimeServices = await getPreviewRuntimeServices(
-                  requestedGameId,
-                  runtimeMode,
-                  body.generation,
-                );
-                const health = await runtimeServices.health({
-                  gameId: requestedGameId,
-                  runtimeMode,
-                  generation: (typeof body.generation === 'object' && body.generation !== null)
-                    ? body.generation as Record<string, unknown>
-                    : undefined,
-                });
-                const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
-                writeJson(res, 200, {
-                  ok: health.ok,
-                  detail: health.detail ?? 'local-runtime-ready',
-                  embedding: embeddingHealth,
-                });
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                writeJson(res, 200, { ok: false, detail: message });
-              }
-              return;
-            }
-
-            if (op === 'loadModel') {
-              writeJson(res, 200, { ok: true, detail: 'loadModel acknowledged' });
-              return;
-            }
-
-            if (op === 'generateStructured') {
-              const npcId = typeof request.npcId === 'string' && request.npcId.trim().length > 0
-                ? request.npcId.trim()
-                : 'unknown-npc';
-              const npcName = typeof request.npcName === 'string' && request.npcName.trim().length > 0
-                ? request.npcName.trim()
-                : undefined;
-              const playerMessage = typeof request.playerMessage === 'string'
-                ? request.playerMessage.trim()
-                : '';
-              const requestContext = (typeof request.context === 'object' && request.context !== null)
-                ? request.context as Record<string, unknown>
-                : {};
-              const requestedGameId = typeof requestContext.gameId === 'string'
-                ? requestContext.gameId.trim()
-                : undefined;
-              const runtimeMode = normalizeRuntimeMode(requestContext.runtimeMode);
-              const npcProfile = (typeof request.npcProfile === 'object' && request.npcProfile !== null)
-                ? request.npcProfile as Record<string, unknown>
-                : undefined;
-              const globalSafetyBounds = normalizeStringArray(request.globalSafetyBounds);
-              const attempt = Number.isFinite(request.attempt)
-                ? Math.max(1, Math.floor(Number(request.attempt)))
-                : 1;
-              const repair = request.repair === true;
-              if (!playerMessage) {
-                writeJson(res, 400, { ok: false, error: 'Missing playerMessage' });
-                return;
-              }
-
-              const runtimeServices = await getPreviewRuntimeServices(
-                requestedGameId,
-                runtimeMode,
-                request.generation,
-              );
-              const result = await runtimeServices.generateStructured({
-                npcId,
-                npcName: npcName ?? npcId,
-                playerMessage,
-                attempt,
-                repair,
-                generation: (typeof request.generation === 'object' && request.generation !== null)
-                  ? request.generation as Record<string, unknown>
-                  : undefined,
-                npcProfile,
-                globalSafetyBounds,
-                context: requestContext,
-              });
-              const diagnostics = buildTurnDiagnostics({
-                output: JSON.parse(result.jsonText),
-                attempts: result.attempts ?? attempt,
-                usedFallback: result.usedFallback ?? false,
-                fallbackKind: result.fallbackKind,
-                validationErrors: Array.isArray(result.validationErrors) ? result.validationErrors : [],
-                loreMatches: [],
-                routing: (typeof result.diagnostics?.routing === 'object' && result.diagnostics?.routing !== null)
-                  ? result.diagnostics.routing as Record<string, unknown>
-                  : undefined,
-                pipeline: (typeof result.diagnostics?.pipeline === 'object' && result.diagnostics?.pipeline !== null)
-                  ? result.diagnostics.pipeline as Record<string, unknown>
-                  : undefined,
-                grounding: (typeof result.diagnostics?.grounding === 'object' && result.diagnostics?.grounding !== null)
-                  ? result.diagnostics.grounding as Record<string, unknown>
-                  : undefined,
-                authoring: undefined,
-              }, requestContext);
-              writeJson(res, 200, {
-                ok: true,
-                jsonText: result.jsonText,
-                attempts: result.attempts,
-                usedFallback: result.usedFallback,
-                fallbackKind: result.fallbackKind,
-                validationErrors: result.validationErrors,
-                detail: result.fallbackKind === 'provider_unavailable'
-                  ? 'provider-unavailable'
-                  : result.fallbackKind === 'validation_fallback'
-                    ? 'validation-fallback'
-                    : result.fallbackKind === 'deterministic_runtime'
-                      ? 'runtime-deterministic'
-                      : 'provider-ok',
-                diagnostics,
-              });
-              return;
-            }
-
-            if (op === 'embed') {
-              const texts = Array.isArray(body.texts)
-                ? body.texts.filter((entry) => typeof entry === 'string')
-                : [];
-              try {
-                const vectors = await embedTextsWithLocalRuntime(texts);
-                const embeddingHealth = await getLocalEmbeddingRuntimeHealth();
-                writeJson(res, 200, {
-                  ok: true,
-                  vectors,
-                  detail: embeddingHealth.detail,
-                  embedding: embeddingHealth,
-                });
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                writeJson(res, 503, {
-                  ok: false,
-                  error: `embedding runtime unavailable: ${message}`,
-                });
-              }
-              return;
-            }
 
             if (op === 'unloadModel') {
               runtimeServicesCache.clear();

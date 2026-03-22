@@ -46,6 +46,26 @@ describe('release-target-scaffold', () => {
     expect(productionProfile?.content).toContain('"modelFileName": "qwen3-4b-instruct-2507-q4_k_m.gguf"');
   });
 
+  it('marks publisher-managed infrastructure files to refresh on publish while preserving profiles', () => {
+    const paths = resolveGameRootPaths('/Users/nikki/projects/wordlark');
+    const scaffold = buildWebReleaseTargetScaffold(paths, {
+      gameId: 'wordlark',
+      gameName: 'Wordlark',
+    });
+
+    const sugaragentRoute = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/game-api/src/routes/sugaragent.ts'));
+    const runtimeServices = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/game-api/src/services/sugaragent/runtime-services.ts'));
+    const workflow = scaffold.files.find((file) => file.path.endsWith('/.github/workflows/deploy-web-production.yml'));
+    const productionProfile = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/profile.production.json'));
+    const readme = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/README.md'));
+
+    expect(sugaragentRoute?.overwrite).toBe('always');
+    expect(runtimeServices?.overwrite).toBe('always');
+    expect(workflow?.overwrite).toBe('always');
+    expect(productionProfile?.overwrite).toBe('never');
+    expect(readme?.overwrite).toBe('never');
+  });
+
   it('scaffolds a bootable game-api skeleton with readiness and player bootstrap semantics', () => {
     const paths = resolveGameRootPaths('/Users/nikki/projects/wordlark');
     const scaffold = buildWebReleaseTargetScaffold(paths, {
@@ -126,9 +146,10 @@ describe('release-target-scaffold', () => {
     const sugaragentRuntimeServices = scaffold.files.find((file) => file.path.endsWith('/release/targets/web/game-api/src/services/sugaragent/runtime-services.ts'));
 
     expect(sugaragentRoute?.content).toContain("from '@nikkileaps/sugaragent-runtime-core'");
-    expect(sugaragentRoute?.content).toContain('getSugarAgentRuntimeServices().health');
-    expect(sugaragentRoute?.content).toContain('getSugarAgentRuntimeServices().generateStructured');
-    expect(sugaragentRoute?.content).toContain('getSugarAgentRuntimeServices().embed');
+    expect(sugaragentRoute?.content).toContain('handleSugarAgentHealthHttpRequest');
+    expect(sugaragentRoute?.content).toContain('handleSugarAgentGenerateStructuredHttpRequest');
+    expect(sugaragentRoute?.content).toContain('handleSugarAgentEmbedHttpRequest');
+    expect(sugaragentRoute?.content).toContain('runtimeServices: getSugarAgentRuntimeServices()');
     expect(sugaragentRoute?.content).toContain('sessionScopeId: request.authSession?.sessionId ?? \'anonymous\'');
     expect(sugaragentRoute?.content).toContain('gameId: app.gameApiConfig.gameId');
     expect(sugaragentService?.content).toContain('buildSugarAgentTransportError');

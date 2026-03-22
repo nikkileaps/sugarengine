@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-import { HttpGameApiRuntimeBridge } from './HttpGameApiRuntimeBridge';
+import { HttpAgentTurnGateway } from './HttpAgentTurnGateway';
 
-describe('HttpGameApiRuntimeBridge', () => {
+describe('HttpAgentTurnGateway', () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
@@ -14,21 +14,26 @@ describe('HttpGameApiRuntimeBridge', () => {
   });
 
   it('posts health checks to the hosted sugaragent health route with credentialed requests', async () => {
+    const runtimeIdentity = {
+      packageName: '@nikkileaps/sugaragent-runtime-core',
+      version: '0.0.1-test',
+      buildId: 'abc123',
+    };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ ok: true, detail: 'hosted-ready' }),
+      json: async () => ({ ok: true, detail: 'hosted-ready', runtimeIdentity }),
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const bridge = new HttpGameApiRuntimeBridge({
+    const gateway = new HttpAgentTurnGateway({
       baseUrl: 'https://api.wordlark.example.com',
       runtimeMode: 'llama',
       gameId: 'wordlark',
     });
 
-    const status = await bridge.health();
+    const status = await gateway.health();
 
-    expect(status).toEqual({ ok: true, detail: 'hosted-ready' });
+    expect(status).toEqual({ ok: true, detail: 'hosted-ready', runtimeIdentity });
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.wordlark.example.com/sugaragent/health',
       expect.objectContaining({
@@ -42,7 +47,7 @@ describe('HttpGameApiRuntimeBridge', () => {
     expect(String(fetchArgs?.body)).toContain('"gameId":"wordlark"');
   });
 
-  it('maps generateStructured onto the hosted domain route', async () => {
+  it('maps generateStructured onto the shared sugaragent route', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -54,11 +59,11 @@ describe('HttpGameApiRuntimeBridge', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const bridge = new HttpGameApiRuntimeBridge({
+    const gateway = new HttpAgentTurnGateway({
       baseUrl: 'https://api.wordlark.example.com',
     });
 
-    const result = await bridge.generateStructured({
+    const result = await gateway.generateStructured({
       npcId: 'npc-1',
       npcName: 'Rick',
       playerMessage: 'hola',
@@ -78,10 +83,10 @@ describe('HttpGameApiRuntimeBridge', () => {
     expect(fetchArgs?.headers).toMatchObject({
       'Content-Type': 'application/json',
     });
-    expect(String((fetchArgs?.headers as Record<string, string>)['X-Trace-Id'] ?? '')).toMatch(/^trace_bridge_\d+_\d+$/);
+    expect(String((fetchArgs?.headers as Record<string, string>)['X-Trace-Id'] ?? '')).toMatch(/^trace_gateway_\d+_\d+$/);
   });
 
-  it('forwards the conversation trace id as a hosted request header when present', async () => {
+  it('forwards the conversation trace id as a request header when present', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -91,11 +96,11 @@ describe('HttpGameApiRuntimeBridge', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const bridge = new HttpGameApiRuntimeBridge({
+    const gateway = new HttpAgentTurnGateway({
       baseUrl: 'https://api.wordlark.example.com',
     });
 
-    await bridge.generateStructured({
+    await gateway.generateStructured({
       npcId: 'npc-1',
       npcName: 'Rick',
       playerMessage: 'ciao',
@@ -121,11 +126,11 @@ describe('HttpGameApiRuntimeBridge', () => {
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const bridge = new HttpGameApiRuntimeBridge({
+    const gateway = new HttpAgentTurnGateway({
       baseUrl: 'https://api.wordlark.example.com',
     });
 
-    await expect(() => bridge.generateStructured({
+    await expect(() => gateway.generateStructured({
       npcId: 'npc-1',
       npcName: 'Rick',
       playerMessage: 'hola',
@@ -134,33 +139,36 @@ describe('HttpGameApiRuntimeBridge', () => {
     })).rejects.toThrow('Your hosted play session expired. Sign in again and retry.');
   });
 
-  it('uses the hosted health route to satisfy loadModel readiness semantics', async () => {
+  it('uses the same /sugaragent route contract for local preview without a base URL', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ ok: true, detail: 'ready' }),
+      json: async () => ({
+        ok: true,
+        jsonText: '{"utterance":"hola"}',
+      }),
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    const bridge = new HttpGameApiRuntimeBridge({
-      baseUrl: 'https://api.wordlark.example.com',
+    const gateway = new HttpAgentTurnGateway({
+      runtimeMode: 'llama',
+      gameId: 'wordlark',
     });
 
-    await bridge.loadModel('chat-fast');
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.wordlark.example.com/sugaragent/health');
-  });
-
-  it('treats unloadModel as a no-op because hosted model lifecycle is backend-owned', async () => {
-    const fetchMock = vi.fn();
-    globalThis.fetch = fetchMock as typeof fetch;
-
-    const bridge = new HttpGameApiRuntimeBridge({
-      baseUrl: 'https://api.wordlark.example.com',
+    await gateway.generateStructured({
+      npcId: 'npc-1',
+      npcName: 'Rick',
+      playerMessage: 'hola',
+      attempt: 1,
+      repair: false,
     });
 
-    await bridge.unloadModel('chat-fast');
-
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/sugaragent/generateStructured',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
+    const fetchArgs = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(fetchArgs?.credentials).toBeUndefined();
   });
 });

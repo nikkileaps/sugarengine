@@ -1,15 +1,16 @@
 import type {
-  LocalRuntimeBridge,
   RuntimeGenerateStructuredRequest,
   RuntimeGenerateStructuredResponse,
   RuntimeHealthRequest,
   RuntimeHealthStatus,
   SugarAgentRuntimeMode,
 } from './types';
+import type { AgentTurnGateway } from './types';
 
-interface HostedRuntimeResponse {
+interface GatewayHttpResponse {
   ok?: boolean;
   detail?: string;
+  runtimeIdentity?: RuntimeHealthStatus['runtimeIdentity'];
   jsonText?: string;
   attempts?: number;
   usedFallback?: boolean;
@@ -20,43 +21,37 @@ interface HostedRuntimeResponse {
   error?: string;
 }
 
-export interface HttpGameApiRuntimeBridgeOptions {
+export interface HttpAgentTurnGatewayOptions {
   baseUrl?: string;
   runtimeMode?: SugarAgentRuntimeMode;
   gameId?: string;
   credentials?: RequestCredentials;
 }
 
-let nextBridgeTraceId = 1;
+let nextGatewayTraceId = 1;
 
-function createBridgeTraceId(): string {
-  return `trace_bridge_${nextBridgeTraceId++}_${Date.now()}`;
+function createGatewayTraceId(): string {
+  return `trace_gateway_${nextGatewayTraceId++}_${Date.now()}`;
 }
 
-function formatHostedBridgeError(status: number, fallback: string): string {
+function formatGatewayError(status: number, fallback: string): string {
   if (status === 401) return 'Your hosted play session expired. Sign in again and retry.';
-  if (status === 429) return 'The hosted conversation service is busy right now. Please wait a moment and try again.';
-  if (status >= 500) return 'The hosted conversation service is unavailable right now. Please try again soon.';
+  if (status === 429) return 'The conversation service is busy right now. Please wait a moment and try again.';
+  if (status >= 500) return 'The conversation service is unavailable right now. Please try again soon.';
   return fallback;
 }
 
-/**
- * Hosted browser bridge that talks to the game-api sugaragent routes.
- * It preserves the plugin-facing runtime bridge semantics while switching
- * transport from the local dev op-envelope to domain-routed HTTPS endpoints.
- */
-export class HttpGameApiRuntimeBridge implements LocalRuntimeBridge {
+export class HttpAgentTurnGateway implements AgentTurnGateway {
   private readonly baseUrl: string;
   private readonly runtimeMode?: SugarAgentRuntimeMode;
   private readonly gameId?: string;
-  private readonly credentials: RequestCredentials;
+  private readonly credentials?: RequestCredentials;
 
-  constructor(options: HttpGameApiRuntimeBridgeOptions = {}) {
-    const normalizedBaseUrl = (options.baseUrl ?? '').trim().replace(/\/+$/, '');
-    this.baseUrl = normalizedBaseUrl;
+  constructor(options: HttpAgentTurnGatewayOptions = {}) {
+    this.baseUrl = (options.baseUrl ?? '').trim().replace(/\/+$/, '');
     this.runtimeMode = options.runtimeMode;
     this.gameId = options.gameId;
-    this.credentials = options.credentials ?? 'include';
+    this.credentials = options.credentials ?? (this.baseUrl ? 'include' : undefined);
   }
 
   private urlFor(path: string): string {
@@ -68,26 +63,26 @@ export class HttpGameApiRuntimeBridge implements LocalRuntimeBridge {
     path: string,
     body: Record<string, unknown>,
     traceId?: string,
-  ): Promise<HostedRuntimeResponse> {
+  ): Promise<GatewayHttpResponse> {
     const response = await fetch(this.urlFor(path), {
       method: 'POST',
-      credentials: this.credentials,
+      ...(this.credentials ? { credentials: this.credentials } : {}),
       headers: {
         'Content-Type': 'application/json',
-        'X-Trace-Id': traceId ?? createBridgeTraceId(),
+        'X-Trace-Id': traceId ?? createGatewayTraceId(),
       },
       body: JSON.stringify(body),
     });
 
-    const parsed = await response.json().catch(() => ({} as HostedRuntimeResponse));
+    const parsed = await response.json().catch(() => ({} as GatewayHttpResponse));
     if (!response.ok) {
-      const detail = formatHostedBridgeError(
+      const detail = formatGatewayError(
         response.status,
         parsed?.error || parsed?.detail || `${response.status} ${response.statusText}`,
       );
       throw new Error(detail);
     }
-    return parsed as HostedRuntimeResponse;
+    return parsed as GatewayHttpResponse;
   }
 
   async health(request?: RuntimeHealthRequest): Promise<RuntimeHealthStatus> {
@@ -95,24 +90,19 @@ export class HttpGameApiRuntimeBridge implements LocalRuntimeBridge {
       request: {
         runtimeMode: request?.runtimeMode ?? this.runtimeMode,
         gameId: request?.gameId ?? this.gameId,
-        // Hosted generation selection is backend-owned. The browser bridge
-        // preserves transport semantics but does not override deploy/runtime config.
+        generation: request?.generation,
       },
     });
     return {
       ok: result.ok === true,
       detail: result.detail,
+      runtimeIdentity: result.runtimeIdentity,
     };
   }
 
-  async loadModel(_modelId: string): Promise<void> {
-    await this.health({
-      runtimeMode: this.runtimeMode,
-      gameId: this.gameId,
-    });
-  }
-
-  async generateStructured(request: RuntimeGenerateStructuredRequest): Promise<RuntimeGenerateStructuredResponse> {
+  async generateStructured(
+    request: RuntimeGenerateStructuredRequest,
+  ): Promise<RuntimeGenerateStructuredResponse> {
     const result = await this.post('/sugaragent/generateStructured', {
       request,
     }, request.context?.traceId);
@@ -137,10 +127,5 @@ export class HttpGameApiRuntimeBridge implements LocalRuntimeBridge {
   async embed(texts: string[]): Promise<number[][]> {
     const result = await this.post('/sugaragent/embed', { texts });
     return Array.isArray(result.vectors) ? result.vectors : [];
-  }
-
-  async unloadModel(_modelId: string): Promise<void> {
-    // Hosted model lifecycle is backend-owned. The bridge preserves the
-    // plugin-facing contract but does not expose a player-facing unload route.
   }
 }

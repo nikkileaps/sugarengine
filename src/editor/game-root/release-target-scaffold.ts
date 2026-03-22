@@ -8,7 +8,7 @@ import { joinFsPath, type GameRootPaths } from './fs-paths';
 export interface ScaffoldFile {
   path: string;
   content: string;
-  overwrite: 'never';
+  overwrite: 'never' | 'always';
 }
 
 export interface ReleaseTargetScaffold {
@@ -27,9 +27,10 @@ This directory was scaffolded by SugarEngine for the \`web\` release target for 
 
 ## Ownership
 
-- SugarEngine owns the target shape and may add missing scaffold files later.
-- The game repository owns deployment configuration, workflow customization, and backend implementation details.
-- Existing files should be treated as game-owned once edited; scaffold refreshes should only add missing files.
+- SugarEngine is the publisher and source of truth for generated web-target infrastructure.
+- Publish refreshes publisher-managed scaffold files so backend/runtime transport code stays aligned with SugarEngine.
+- Deployment profiles remain profile-managed and are updated through the publish-profile flow, not by placeholder scaffold refreshes.
+- Human-facing helper files like this README may be preserved when already present.
 
 ## Structure
 
@@ -69,6 +70,22 @@ The web workflows deploy that exported artifact directly. They do not rebuild th
 - The scaffolded \`web\` target assembles Linux SugarAgent runtime assets during the \`game-api\` container build using URLs from the deployment profile.
 
 `;
+}
+
+function preservedScaffoldFile(path: string, content: string): ScaffoldFile {
+  return {
+    path,
+    content,
+    overwrite: 'never',
+  };
+}
+
+function managedScaffoldFile(path: string, content: string): ScaffoldFile {
+  return {
+    path,
+    content,
+    overwrite: 'always',
+  };
 }
 
 function buildProfileContent(gameId: string, environment: 'staging' | 'production'): string {
@@ -681,15 +698,14 @@ function buildSugarAgentRoute(): string {
     `  app.post('/health', { preHandler: [requireSession, enforceSugarAgentSessionRateLimit] }, async (request, reply) => {
     try {
       const body = request.body as { request?: RuntimeHealthRequest } | undefined;
-      const result = await getSugarAgentRuntimeServices().health({
-        ...body?.request,
+      const result = await handleSugarAgentHealthHttpRequest({
+        runtimeServices: getSugarAgentRuntimeServices(),
+        request: body?.request,
         gameId: app.gameApiConfig.gameId,
-      });
-      return {
-        ok: result.ok,
-        detail: result.detail,
         sessionId: request.authSession?.sessionId ?? null,
-      };
+      });
+      reply.code(result.statusCode);
+      return result.body;
     } catch (error) {
       reply.code(503);
       return buildSugarAgentTransportError(error);
@@ -706,19 +722,14 @@ function buildSugarAgentRoute(): string {
           error: 'missing_request',
         };
       }
-      const hostedRequest = {
-        ...body.request,
-        context: {
-          ...(body.request.context ?? {}),
-          gameId: app.gameApiConfig.gameId,
-          sessionScopeId: request.authSession?.sessionId ?? 'anonymous',
-        },
-      };
-      const result = await getSugarAgentRuntimeServices().generateStructured(hostedRequest);
-      return {
-        ok: true,
-        ...result,
-      };
+      const result = await handleSugarAgentGenerateStructuredHttpRequest({
+        runtimeServices: getSugarAgentRuntimeServices(),
+        request: body.request,
+        gameId: app.gameApiConfig.gameId,
+        sessionScopeId: request.authSession?.sessionId ?? 'anonymous',
+      });
+      reply.code(result.statusCode);
+      return result.body;
     } catch (error) {
       reply.code(503);
       return buildSugarAgentTransportError(error);
@@ -728,20 +739,23 @@ function buildSugarAgentRoute(): string {
   app.post('/embed', { preHandler: [requireSession, enforceSugarAgentSessionRateLimit] }, async (request, reply) => {
     try {
       const body = request.body as { texts?: string[] } | undefined;
-      const texts = Array.isArray(body?.texts)
-        ? body.texts.filter((entry): entry is string => typeof entry === 'string')
-        : [];
-      const vectors = await getSugarAgentRuntimeServices().embed(texts);
-      return {
-        ok: true,
-        vectors,
-      };
+      const result = await handleSugarAgentEmbedHttpRequest({
+        runtimeServices: getSugarAgentRuntimeServices(),
+        texts: body?.texts,
+      });
+      reply.code(result.statusCode);
+      return result.body;
     } catch (error) {
       reply.code(503);
       return buildSugarAgentTransportError(error);
     }
   });`,
     `import { requireSession, enforceSugarAgentSessionRateLimit } from '../services/auth/middleware.js';
+import {
+  handleSugarAgentEmbedHttpRequest,
+  handleSugarAgentGenerateStructuredHttpRequest,
+  handleSugarAgentHealthHttpRequest,
+} from '@nikkileaps/sugaragent-runtime-core';
 import type { RuntimeGenerateStructuredRequest, RuntimeHealthRequest } from '@nikkileaps/sugaragent-runtime-core';
 import { buildSugarAgentTransportError } from '../services/sugaragent/index.js';
 import { getSugarAgentRuntimeServices } from '../services/sugaragent/runtime-services.js';
@@ -1339,161 +1353,130 @@ export function buildWebReleaseTargetScaffold(
       rootPaths.githubWorkflowsPath,
     ],
     files: [
-      {
-        path: rootPaths.webTargetReadmePath,
-        content: buildWebTargetReadme(options.gameId, options.gameName),
-        overwrite: 'never',
-      },
-      {
-        path: rootPaths.webTargetGitignorePath,
-        content: buildWebTargetGitignore(),
-        overwrite: 'never',
-      },
-      {
-        path: rootPaths.webProfileStagingPath,
-        content: buildProfileContent(options.gameId, 'staging'),
-        overwrite: 'never',
-      },
-      {
-        path: rootPaths.webProfileProductionPath,
-        content: buildProfileContent(options.gameId, 'production'),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webGameApiPath, 'package.json'),
-        content: buildGameApiPackageJson(options.gameId),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webGameApiPath, 'tsconfig.json'),
-        content: buildGameApiTsconfig(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webGameApiPath, 'src', 'fastify.d.ts'),
-        content: buildFastifyTypeAugmentation(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webGameApiPath, 'Dockerfile'),
-        content: buildGameApiDockerfile(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webGameApiPath, '.dockerignore'),
-        content: buildDockerIgnore(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webGameApiPath, '.env.example'),
-        content: buildEnvExample(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSrcPath, 'index.ts'),
-        content: buildGameApiIndex(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSrcPath, 'app.ts'),
-        content: buildGameApiApp(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSrcPath, 'config.ts'),
-        content: buildGameApiConfig(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSrcPath, 'types.ts'),
-        content: buildGameApiTypes(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiRoutesPath, 'health.ts'),
-        content: buildHealthRoute(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiRoutesPath, 'auth.ts'),
-        content: buildAuthRoute(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiRoutesPath, 'player.ts'),
-        content: buildPlayerRoute(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiRoutesPath, 'save.ts'),
-        content: buildSaveRoute(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiRoutesPath, 'sugaragent.ts'),
-        content: buildSugarAgentRoute(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiAuthServicePath, 'session.ts'),
-        content: buildAuthSessionService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiAuthServicePath, 'credentials.ts'),
-        content: buildAuthCredentialsService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiAuthServicePath, 'rate-limit.ts'),
-        content: buildAuthRateLimitService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiAuthServicePath, 'middleware.ts'),
-        content: buildAuthMiddlewareService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiPlayerServicePath, 'view.ts'),
-        content: buildPlayerService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSaveServicePath, 'index.ts'),
-        content: buildSaveService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSugarAgentServicePath, 'index.ts'),
-        content: buildSugarAgentService(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(webGameApiSugarAgentServicePath, 'runtime-services.ts'),
-        content: buildSugarAgentRuntimeServices(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.githubWorkflowsPath, 'deploy-web-staging.yml'),
-        content: buildWorkflow('staging'),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.githubWorkflowsPath, 'deploy-web-production.yml'),
-        content: buildWorkflow('production'),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webTargetScriptsPath, 'read-profile.mjs'),
-        content: buildReadProfileScript(),
-        overwrite: 'never',
-      },
-      {
-        path: joinFsPath(rootPaths.webTargetScriptsPath, 'write-release-metadata.mjs'),
-        content: buildWriteReleaseMetadataScript(),
-        overwrite: 'never',
-      },
+      preservedScaffoldFile(
+        rootPaths.webTargetReadmePath,
+        buildWebTargetReadme(options.gameId, options.gameName),
+      ),
+      preservedScaffoldFile(
+        rootPaths.webTargetGitignorePath,
+        buildWebTargetGitignore(),
+      ),
+      preservedScaffoldFile(
+        rootPaths.webProfileStagingPath,
+        buildProfileContent(options.gameId, 'staging'),
+      ),
+      preservedScaffoldFile(
+        rootPaths.webProfileProductionPath,
+        buildProfileContent(options.gameId, 'production'),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webGameApiPath, 'package.json'),
+        buildGameApiPackageJson(options.gameId),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webGameApiPath, 'tsconfig.json'),
+        buildGameApiTsconfig(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webGameApiPath, 'src', 'fastify.d.ts'),
+        buildFastifyTypeAugmentation(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webGameApiPath, 'Dockerfile'),
+        buildGameApiDockerfile(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webGameApiPath, '.dockerignore'),
+        buildDockerIgnore(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webGameApiPath, '.env.example'),
+        buildEnvExample(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSrcPath, 'index.ts'),
+        buildGameApiIndex(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSrcPath, 'app.ts'),
+        buildGameApiApp(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSrcPath, 'config.ts'),
+        buildGameApiConfig(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSrcPath, 'types.ts'),
+        buildGameApiTypes(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiRoutesPath, 'health.ts'),
+        buildHealthRoute(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiRoutesPath, 'auth.ts'),
+        buildAuthRoute(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiRoutesPath, 'player.ts'),
+        buildPlayerRoute(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiRoutesPath, 'save.ts'),
+        buildSaveRoute(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiRoutesPath, 'sugaragent.ts'),
+        buildSugarAgentRoute(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiAuthServicePath, 'session.ts'),
+        buildAuthSessionService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiAuthServicePath, 'credentials.ts'),
+        buildAuthCredentialsService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiAuthServicePath, 'rate-limit.ts'),
+        buildAuthRateLimitService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiAuthServicePath, 'middleware.ts'),
+        buildAuthMiddlewareService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiPlayerServicePath, 'view.ts'),
+        buildPlayerService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSaveServicePath, 'index.ts'),
+        buildSaveService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSugarAgentServicePath, 'index.ts'),
+        buildSugarAgentService(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(webGameApiSugarAgentServicePath, 'runtime-services.ts'),
+        buildSugarAgentRuntimeServices(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.githubWorkflowsPath, 'deploy-web-staging.yml'),
+        buildWorkflow('staging'),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.githubWorkflowsPath, 'deploy-web-production.yml'),
+        buildWorkflow('production'),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webTargetScriptsPath, 'read-profile.mjs'),
+        buildReadProfileScript(),
+      ),
+      managedScaffoldFile(
+        joinFsPath(rootPaths.webTargetScriptsPath, 'write-release-metadata.mjs'),
+        buildWriteReleaseMetadataScript(),
+      ),
     ],
   };
 }

@@ -12,10 +12,13 @@ import type {
   PluginEvent,
   InteractionRequest,
 } from '../../engine/plugins';
-import { LocalLLMProvider } from './providers/llm/LocalLLMProvider';
-import type { LLMGenerateResult } from './providers/llm/types';
-import type { LocalRuntimeBridge } from './runtime';
-import { HttpLocalRuntimeBridge } from './runtime';
+import {
+  parseTurnOutput,
+  validateTurnOutput,
+} from './contracts/turn';
+import type { SugarAgentTurnOutput } from './contracts/turn';
+import type { AgentTurnGateway } from './gateway';
+import { HttpAgentTurnGateway } from './gateway';
 import type { SugarAgentAuthoringBundleV1 } from './authoring/artifacts';
 import {
   isObjectiveActiveInQuestSnapshot,
@@ -47,12 +50,12 @@ export interface SugarAgentPluginOptions {
    */
   captureEvents?: boolean;
   /**
-   * Optional runtime bridge override for local-LLM turn generation.
-   * If omitted, browser runtime defaults to HttpLocalRuntimeBridge.
+   * Optional browser-side turn gateway override.
+   * If omitted, browser runtime defaults to HttpAgentTurnGateway.
    */
-  runtimeBridge?: LocalRuntimeBridge;
+  turnGateway?: AgentTurnGateway;
   /**
-   * Disable provider-backed generation and force deterministic turns.
+   * Disable gateway-backed generation and force deterministic turns.
    */
   disableProvider?: boolean;
   /**
@@ -503,11 +506,199 @@ function toSafeNumber(value: unknown, fallback = 0): number {
   return value;
 }
 
+interface GatewayGenerateResult {
+  output: SugarAgentTurnOutput;
+  attempts: number;
+  usedFallback: boolean;
+  fallbackKind?: 'provider_unavailable' | 'validation_fallback' | 'deterministic_runtime';
+  validationErrors: string[];
+  rawResponses: string[];
+  diagnostics?: PluginAgentTurnDiagnostics;
+}
+
+function gatewayFallbackOutput(playerMessage: string): SugarAgentTurnOutput {
+  return {
+    utterance: `I heard you say "${playerMessage}". I need a moment, please try again.`,
+    emotion: 'neutral',
+    intent: 'conversation',
+    proposedIntents: [],
+    citations: [],
+    beatEvidence: {
+      coveredFacts: [],
+      uncoveredFacts: [],
+      completionSignal: 'none',
+      confidence: 0,
+    },
+  };
+}
+
+function parseRuntimeJson(raw: string): unknown {
+  return JSON.parse(raw) as unknown;
+}
+
+function extractPluginDiagnostics(
+  diagnostics: Record<string, unknown> | undefined,
+): PluginAgentTurnDiagnostics | undefined {
+  if (!isRecord(diagnostics)) return undefined;
+  const pipeline = isRecord(diagnostics.pipeline)
+    ? diagnostics.pipeline as PluginAgentTurnDiagnostics
+    : undefined;
+  if (pipeline) return pipeline;
+  return diagnostics as PluginAgentTurnDiagnostics;
+}
+
+async function generateTurnThroughGateway(input: {
+  gateway: AgentTurnGateway;
+  npcId: string;
+  npcName: string;
+  playerMessage: string;
+  generation?: import('../../../../packages/sugaragent-runtime-core/src/runtime/generation-config.js').SugarAgentGenerationConfig;
+  npcProfile?: {
+    persona?: string;
+    tone?: string;
+    constraints?: string[];
+    loreScopes?: string[];
+    selfEntityId?: string;
+    selfLoreScopes?: string[];
+    relatedLoreScopes?: string[];
+  };
+  globalSafetyBounds?: string[];
+  context?: {
+    traceId?: string;
+    gameId?: string;
+    regionPath?: string;
+    regionName?: string;
+    episodeId?: string;
+    runtimeMode?: 'llama' | 'auto' | 'mock';
+    interactionMode?: 'scripted' | 'agent' | 'hybrid';
+    interactionPolicy?: 'scripted-first' | 'agent-first' | 'fallback';
+    isFirstMeeting?: boolean;
+    turnIndexWithNpc?: number;
+    topicCoverage?: {
+      activeTopic?: string;
+      activeTopicNovelty?: number;
+      exhaustedTopics?: string[];
+      trackedTopicCount?: number;
+      exhausted?: boolean;
+    };
+    pedagogyContext?: import('../../engine/plugins').PluginPedagogyContext;
+  };
+  defaultRuntimeMode?: 'llama' | 'auto' | 'mock';
+  maxAttempts: number;
+}): Promise<GatewayGenerateResult> {
+  const validationErrors: string[] = [];
+  const rawResponses: string[] = [];
+  let latestDiagnostics: PluginAgentTurnDiagnostics | undefined;
+
+  for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
+    let gatewayResponse;
+    try {
+      const turnContext = input.context ? { ...input.context } : {};
+      if (!turnContext.runtimeMode && input.defaultRuntimeMode) {
+        turnContext.runtimeMode = input.defaultRuntimeMode;
+      }
+      gatewayResponse = await input.gateway.generateStructured({
+        npcId: input.npcId,
+        npcName: input.npcName,
+        playerMessage: input.playerMessage,
+        attempt,
+        repair: attempt > 1,
+        generation: input.generation,
+        npcProfile: input.npcProfile,
+        globalSafetyBounds: input.globalSafetyBounds,
+        context: turnContext,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      validationErrors.push(`attempt ${attempt}: gateway error: ${message}`);
+      continue;
+    }
+
+    rawResponses.push(gatewayResponse.jsonText);
+    if (isRecord(gatewayResponse.diagnostics)) {
+      latestDiagnostics = extractPluginDiagnostics(gatewayResponse.diagnostics);
+    }
+    const gatewayValidationErrors = Array.isArray(gatewayResponse.validationErrors)
+      ? gatewayResponse.validationErrors.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    const gatewayAttempts = Number.isFinite(gatewayResponse.attempts)
+      ? Math.max(1, Number(gatewayResponse.attempts))
+      : attempt;
+    const gatewayUsedFallback = gatewayResponse.usedFallback === true;
+    const gatewayFallbackKind = gatewayResponse.fallbackKind === 'provider_unavailable'
+      || gatewayResponse.fallbackKind === 'validation_fallback'
+      || gatewayResponse.fallbackKind === 'deterministic_runtime'
+      ? gatewayResponse.fallbackKind
+      : undefined;
+
+    let parsed: unknown;
+    try {
+      parsed = parseRuntimeJson(gatewayResponse.jsonText);
+    } catch {
+      validationErrors.push(`attempt ${attempt}: invalid JSON`);
+      continue;
+    }
+
+    const validation = validateTurnOutput(parsed);
+    if (!validation.valid) {
+      validationErrors.push(`attempt ${attempt}: ${validation.errors.join('; ')}`);
+      continue;
+    }
+
+    const output = parseTurnOutput(parsed);
+    if (!output) {
+      validationErrors.push(`attempt ${attempt}: schema parse returned null`);
+      continue;
+    }
+
+    if (gatewayUsedFallback && gatewayFallbackKind !== 'deterministic_runtime') {
+      const mergedValidationErrors = [
+        ...validationErrors,
+        ...gatewayValidationErrors,
+      ].filter((entry, index, arr) => arr.indexOf(entry) === index);
+      return {
+        output,
+        attempts: gatewayAttempts,
+        usedFallback: true,
+        fallbackKind: gatewayFallbackKind ?? 'validation_fallback',
+        validationErrors: mergedValidationErrors,
+        rawResponses,
+        diagnostics: latestDiagnostics,
+      };
+    }
+
+    return {
+      output,
+      attempts: gatewayAttempts,
+      usedFallback: false,
+      fallbackKind: gatewayFallbackKind,
+      validationErrors: [
+        ...validationErrors,
+        ...gatewayValidationErrors,
+      ].filter((entry, index, arr) => arr.indexOf(entry) === index),
+      rawResponses,
+      diagnostics: latestDiagnostics,
+    };
+  }
+
+  return {
+    output: gatewayFallbackOutput(input.playerMessage),
+    attempts: input.maxAttempts,
+    usedFallback: true,
+    fallbackKind: validationErrors.some((entry) => entry.includes('gateway error'))
+      ? 'provider_unavailable'
+      : 'validation_fallback',
+    validationErrors,
+    rawResponses,
+    diagnostics: latestDiagnostics,
+  };
+}
+
 function enforcePreviewGrounding(
-  generated: LLMGenerateResult,
+  generated: GatewayGenerateResult,
   request: PluginAgentTurnRequest,
 ): {
-  generated: LLMGenerateResult;
+  generated: GatewayGenerateResult;
   usedGroundingFallback: boolean;
   groundingDebug: {
     stage:
@@ -663,7 +854,7 @@ function enforcePreviewGrounding(
   return {
     generated: {
       ...generated,
-      output: createGroundedUncertaintyReply(queryType) as LLMGenerateResult['output'],
+      output: createGroundedUncertaintyReply(queryType) as GatewayGenerateResult['output'],
       validationErrors,
       diagnostics,
     },
@@ -1428,7 +1619,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
   const resolvedRuntimeMode = resolvedPolicy.runtimeMode;
   let state: SugarAgentPluginStateV1 = createDefaultState(Date.now());
   let lastNpcId: string | null = null;
-  let localProvider: LocalLLMProvider | null = null;
+  let turnGateway: AgentTurnGateway | null = null;
 
   const updateRuntimeStatus = (
     patch: Partial<Omit<SugarAgentRuntimeStatusV1, 'provider' | 'healthy'>> & Pick<SugarAgentRuntimeStatusV1, 'provider' | 'healthy'>,
@@ -1450,8 +1641,8 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     const now = Date.now();
     state.runtime = {
       ...(state.runtime ?? {
-        provider: localProvider ? 'local' : 'deterministic',
-        healthy: localProvider !== null,
+        provider: turnGateway ? 'local' : 'deterministic',
+        healthy: turnGateway !== null,
         lastUpdated: now,
       }),
       lastTurnDiagnostics: diagnostics,
@@ -1460,11 +1651,11 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
     state.updatedAt = now;
   };
 
-  function resolveRuntimeBridge(): LocalRuntimeBridge | null {
+  function resolveTurnGateway(): AgentTurnGateway | null {
     if (options.disableProvider) return null;
-    if (options.runtimeBridge) return options.runtimeBridge;
+    if (options.turnGateway) return options.turnGateway;
     if (typeof window !== 'undefined') {
-      return new HttpLocalRuntimeBridge({
+      return new HttpAgentTurnGateway({
         runtimeMode: resolvedRuntimeMode,
       });
     }
@@ -1705,9 +1896,10 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         turnCount: nextBeatTurnCount,
         updatedAt: now,
       };
-    } else if (localProvider) {
+    } else if (turnGateway) {
       try {
-        const generatedFromProvider = await localProvider.generateStructured({
+        const generatedFromProvider = await generateTurnThroughGateway({
+          gateway: turnGateway,
           npcId: request.npcId,
           npcName: request.npcName ?? 'Friend',
           playerMessage: message,
@@ -1715,6 +1907,8 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
           npcProfile,
           globalSafetyBounds: resolvedPolicy.globalSafetyBounds,
           context: runtimeContext,
+          defaultRuntimeMode: resolvedRuntimeMode,
+          maxAttempts: 3,
         });
         const {
           generated,
@@ -2186,32 +2380,28 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
   };
 
   const init = async (): Promise<void> => {
-    const runtimeBridge = resolveRuntimeBridge();
-    if (!runtimeBridge) {
-      localProvider = null;
+    const gateway = resolveTurnGateway();
+    if (!gateway) {
+      turnGateway = null;
       updateRuntimeStatus({
         provider: 'deterministic',
         healthy: false,
-        detail: options.disableProvider ? 'provider-disabled' : 'runtime-bridge-unavailable',
+        detail: options.disableProvider ? 'provider-disabled' : 'turn-gateway-unavailable',
         lastOutcome: 'provider_unavailable',
       });
       return;
     }
 
-    const provider = new LocalLLMProvider({
-      runtime: runtimeBridge,
-      maxAttempts: 3,
-      defaultRuntimeMode: resolvedRuntimeMode,
-      defaultGenerationConfig: resolvedPolicy.generation,
-    });
-
     try {
-      const health = await provider.health();
+      const health = await gateway.health({
+        runtimeMode: resolvedRuntimeMode,
+        generation: resolvedPolicy.generation,
+      });
       if (!health.ok) {
         console.error('[sugaragent][provider][provider_unavailable] initialization-health-check-failed', {
           detail: health.detail,
         });
-        localProvider = null;
+        turnGateway = null;
         updateRuntimeStatus({
           provider: 'deterministic',
           healthy: false,
@@ -2220,7 +2410,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         });
         return;
       }
-      localProvider = provider;
+      turnGateway = gateway;
       updateRuntimeStatus({
         provider: 'local',
         healthy: true,
@@ -2228,7 +2418,7 @@ export function createSugarAgentPlugin(options: SugarAgentPluginOptions = {}): E
         lastOutcome: 'ready',
       });
     } catch (error) {
-      localProvider = null;
+      turnGateway = null;
       const detail = error instanceof Error ? error.message : String(error);
       console.error('[sugaragent][provider][provider_unavailable] initialization-exception', {
         detail,

@@ -38,6 +38,18 @@ export type {
   HostedSugarAgentRuntimeServices,
 } from './hosted.js';
 export {
+  handleSugarAgentEmbedHttpRequest,
+  handleSugarAgentGenerateStructuredHttpRequest,
+  handleSugarAgentHealthHttpRequest,
+} from './http/runtime-http.js';
+export type {
+  SugarAgentRuntimeEmbedHttpBody,
+  SugarAgentRuntimeGenerateStructuredHttpBody,
+  SugarAgentRuntimeHealthHttpBody,
+  SugarAgentRuntimeHttpErrorBody,
+  SugarAgentRuntimeHttpResult,
+} from './http/runtime-http.js';
+export {
   createSugarAgentSession,
 } from './session/runtime.js';
 export {
@@ -74,3 +86,9 @@ export {
 export type {
   ResolveGenerationServiceOptions,
 } from './runtime/generation-service-resolver.js';
+export type {
+  RuntimeCoreIdentity,
+} from './runtime/runtime-identity.js';
+export {
+  getRuntimeCoreIdentity,
+} from './runtime/runtime-identity.js';

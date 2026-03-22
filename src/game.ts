@@ -10,7 +10,7 @@ import { buildTitleScreenConfig } from './engine/core/titleScreenConfig';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
 import { buildRuntimePluginsFromProject } from './plugins/runtime';
 import { extractSugarlangTargetLanguages } from './plugins/sugarlang/project-languages';
-import { HttpGameApiRuntimeBridge } from './plugins/sugaragent/runtime';
+import { HttpAgentTurnGateway } from './plugins/sugaragent/gateway';
 import { ensureHostedPlayerSession } from './release-targets/web/hostedAuth';
 import {
   isHostedWebRuntimeConfig,
@@ -105,7 +105,7 @@ async function runGame(gameData: GameData, gameSlug: string) {
     isHostedWebRuntimeConfig(runtimeConfig)
       ? {
         sugarAgent: {
-          runtimeBridge: new HttpGameApiRuntimeBridge({
+          turnGateway: new HttpAgentTurnGateway({
             baseUrl: runtimeConfig.gameApiBaseUrl,
             credentials: runtimeConfig.credentials,
             gameId,
