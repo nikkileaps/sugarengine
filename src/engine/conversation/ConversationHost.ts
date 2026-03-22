@@ -195,7 +195,7 @@ export class ConversationHost {
       `[ConversationHost] session started → trace=${session.traceId} provider=${session.providerId}` +
       ` engagement=${session.engagementKind}/${session.presentationKind}/${session.driverKind}` +
       ` npc=${npcId} lang=${session.targetLanguage ?? '?'}/${session.supportLanguage ?? '?'}` +
-      ` band=${session.learnerBandOverride ?? 'auto'}`,
+      ` band=${session.learnerBandOverride ?? '?'}`,
     );
 
     this.eventHandlers.onSessionStart?.(session);

@@ -52,6 +52,25 @@ export interface EditorProjectDocument {
     cameraLookAt?: { x: number; y: number; z: number };
     hidePlayer?: boolean;
     transitionDuration?: number;
+    title?: string;
+    subtitle?: string;
+    footerHintText?: string;
+    versionText?: string;
+    menu?: {
+      newGameLabel?: string;
+      continueLabel?: string;
+      quitLabel?: string;
+      showQuit?: boolean;
+    };
+    playerProfile?: {
+      sugarlang?: {
+        enabled?: boolean;
+        targetLanguages?: string[];
+        defaultTargetLanguage?: string;
+        learnerBands?: string[];
+        defaultLearnerBand?: string;
+      };
+    };
   } | null;
   spells: SpellData[];
   resonancePoints: ResonancePointData[];

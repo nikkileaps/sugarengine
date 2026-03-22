@@ -333,6 +333,9 @@ export function Editor() {
   const [gameLifecycleBusy, setGameLifecycleBusy] = useState(false);
   const [gameLifecycleError, setGameLifecycleError] = useState<string | null>(null);
   const [pluginsDialogOpen, setPluginsDialogOpen] = useState(false);
+  const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
+  const [gameSettingsTitle, setGameSettingsTitle] = useState('');
+  const [gameSettingsSubtitle, setGameSettingsSubtitle] = useState('');
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [publishTarget, setPublishTarget] = useState<WebPublishTarget>('web');
   const [publishEnvironment, setPublishEnvironment] = useState<WebPublishEnvironment>('production');
@@ -567,6 +570,25 @@ export function Editor() {
       alert(`Could not load publish settings: ${message}`);
     }
   }, [loadPublishProfileSettings]);
+
+  const openGameSettings = useCallback(() => {
+    setGameSettingsTitle(titleScreen?.title ?? projectName ?? '');
+    setGameSettingsSubtitle(titleScreen?.subtitle ?? '');
+    setGameSettingsOpen(true);
+  }, [projectName, titleScreen?.subtitle, titleScreen?.title]);
+
+  const handleSaveGameSettings = useCallback(() => {
+    const nextTitle = gameSettingsTitle.trim();
+    const nextSubtitle = gameSettingsSubtitle.trim();
+    const nextTitleScreen = {
+      ...(titleScreen ?? {}),
+      title: nextTitle || undefined,
+      subtitle: nextSubtitle || undefined,
+    };
+    setTitleScreen(nextTitleScreen);
+    setDirty(true);
+    setGameSettingsOpen(false);
+  }, [gameSettingsSubtitle, gameSettingsTitle, setDirty, setTitleScreen, titleScreen]);
 
   const handlePublishEnvironmentChange = useCallback(async (value: string | null) => {
     const nextEnvironment: WebPublishEnvironment = value === 'staging' ? 'staging' : 'production';
@@ -1394,6 +1416,7 @@ export function Editor() {
                                         onOpenGame={openOpenGameDialog}
                                         onSaveGame={handleSaveGame}
                                         onExportJson={openPublishDialog}
+                                        onOpenSettings={openGameSettings}
                                         onManagePlugins={() => setPluginsDialogOpen(true)}
                                         projectLoaded={projectLoaded}
                                       />
@@ -1607,6 +1630,46 @@ export function Editor() {
         onBrowsePath={handleBrowseOpenGamePath}
         onSubmit={handleOpenGame}
       />
+
+      <Modal
+        opened={gameSettingsOpen}
+        onClose={() => setGameSettingsOpen(false)}
+        title="Game Settings"
+        centered
+        styles={{
+          header: { background: '#1e1e2e', borderBottom: '1px solid #313244' },
+          title: { color: '#cdd6f4', fontWeight: 600 },
+          body: { background: '#1e1e2e', padding: '20px' },
+          content: { background: '#1e1e2e' },
+          close: { color: '#6c7086', '&:hover': { background: '#313244' } },
+        }}
+      >
+        <Stack gap="md">
+          <TextInput
+            label="Title"
+            value={gameSettingsTitle}
+            onChange={(event) => setGameSettingsTitle(event.currentTarget.value)}
+            placeholder={projectName ?? 'My Game'}
+          />
+          <TextInput
+            label="Subtitle"
+            value={gameSettingsSubtitle}
+            onChange={(event) => setGameSettingsSubtitle(event.currentTarget.value)}
+            placeholder="A cozy adventure awaits"
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={() => setGameSettingsOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSaveGameSettings}>
+              Save
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       {/* Plugins Dialog */}
       <Modal

@@ -14,8 +14,10 @@ import {
   LoadingScreen,
   SugarlangPreviewControls,
 } from './engine';
+import { buildTitleScreenConfig } from './engine/core/titleScreenConfig';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
 import { buildRuntimePluginsFromProject } from './plugins/runtime';
+import { extractSugarlangTargetLanguages } from './plugins/sugarlang/project-languages';
 
 interface ProjectMessage {
   type: 'LOAD_PROJECT' | 'UPDATE_PROJECT';
@@ -26,26 +28,11 @@ interface ProjectMessage {
 let gameInstance: Game | null = null;
 let slControlsInstance: SugarlangPreviewControls | null = null;
 
-function extractSugarlangLanguages(projectData: unknown): string[] {
-  if (!projectData || typeof projectData !== 'object') return [];
-  const slConfig = (projectData as Record<string, unknown>).sugarlang;
-  if (!slConfig || typeof slConfig !== 'object') return [];
-  const config = slConfig as { artifacts?: Record<string, string>; disabledLanguages?: string[] };
-  const artifacts = config.artifacts;
-  if (!artifacts) return [];
-  const disabled = new Set(config.disabledLanguages ?? []);
-  // Lexicon paths are like "languages/es/lexicon.json"
-  return Object.keys(artifacts)
-    .filter((key) => key.match(/^languages\/[a-z]+\/lexicon\.json$/))
-    .map((key) => key.split('/')[1]!)
-    .filter((lang) => !disabled.has(lang))
-    .sort();
-}
-
 async function runGame(projectData?: unknown, episodeId?: string) {
   const container = document.getElementById('app')!;
   const { plugins: runtimePlugins, conversationMiddleware, conversationProviders } = buildRuntimePluginsFromProject(projectData);
   const projectMeta = (projectData as { meta?: { gameId?: string; contentBasePath?: string } } | undefined)?.meta;
+  const projectTitle = (projectData as { meta?: { name?: string } } | undefined)?.meta?.name;
   const gameId = projectMeta?.gameId || 'editor-preview';
   const contentBasePath = projectMeta?.contentBasePath || '';
 
@@ -88,6 +75,8 @@ async function runGame(projectData?: unknown, episodeId?: string) {
 
   // Read titleScreen override from project data if available
   const projectTitleScreen = (projectData as { titleScreen?: Record<string, unknown> } | undefined)?.titleScreen;
+  const sugarlangTargetLanguages = extractSugarlangTargetLanguages(projectData);
+  const hasSugarlang = runtimePlugins.some((p) => p.descriptor.id === 'sugarlang');
 
   // Create game with all systems wired up
   const game = new Game({
@@ -114,10 +103,13 @@ async function runGame(projectData?: unknown, episodeId?: string) {
     plugins: runtimePlugins,
     conversationMiddleware,
     conversationProviders,
-    titleScreen: {
-      ...DEFAULT_GAME_CONFIG.titleScreen,
-      ...projectTitleScreen,
-    },
+    titleScreen: buildTitleScreenConfig({
+      base: DEFAULT_GAME_CONFIG.titleScreen,
+      overrides: projectTitleScreen as any,
+      gameTitle: projectTitle || 'Rackwick City',
+      hasSugarlang,
+      sugarlangTargetLanguages,
+    }),
   });
 
   gameInstance = game;
@@ -147,23 +139,30 @@ async function runGame(projectData?: unknown, episodeId?: string) {
   window.addEventListener('beforeunload', () => window.clearInterval(debugInfoInterval), { once: true });
 
   // Sugarlang preview controls — only show when the plugin is active
-  const hasSugarlang = runtimePlugins.some((p) => p.descriptor.id === 'sugarlang');
   if (hasSugarlang) {
     const slControls = new SugarlangPreviewControls(container);
     slControlsInstance = slControls;
 
     // Extract installed languages from project artifacts (lexicon-XX.json keys)
-    const slLangs = extractSugarlangLanguages(projectData);
-    if (slLangs.length > 0) {
-      slControls.setLanguages(slLangs);
+    if (sugarlangTargetLanguages.length > 0) {
+      slControls.setLanguages(sugarlangTargetLanguages);
+    }
+
+    const initialSugarlangProfile = game.getPlayerProfile().plugins.sugarlang;
+    if (initialSugarlangProfile) {
+      slControls.setConfig({
+        targetLanguage: initialSugarlangProfile.targetLanguage,
+        supportLanguage: initialSugarlangProfile.supportLanguage,
+        bandOverride: initialSugarlangProfile.learnerBand,
+      });
     }
 
     slControls.setOnChange((config) => {
-      game.setSugarlangContext(config.targetLanguage, config.supportLanguage, config.bandOverride);
+      game.setSugarlangPlayerProfile({
+        targetLanguage: config.targetLanguage,
+        learnerBand: config.bandOverride,
+      });
     });
-    // Apply default config immediately
-    const defaultSLConfig = slControls.getConfig();
-    game.setSugarlangContext(defaultSLConfig.targetLanguage, defaultSLConfig.supportLanguage, defaultSLConfig.bandOverride);
   }
 
   // Free camera controller for positioning title screen camera (F2 to toggle)
@@ -235,7 +234,7 @@ if (isFromEditor) {
 
       // Refresh preview controls with updated languages
       if (slControlsInstance) {
-        const langs = extractSugarlangLanguages(event.data.project);
+        const langs = extractSugarlangTargetLanguages(event.data.project);
         if (langs.length > 0) {
           slControlsInstance.setLanguages(langs);
         }

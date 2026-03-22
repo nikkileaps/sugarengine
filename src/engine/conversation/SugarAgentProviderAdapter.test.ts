@@ -56,4 +56,44 @@ describe('SugarAgentProviderAdapter', () => {
       },
     });
   });
+
+  it('forwards target and support languages even when no other pedagogy constraints are set', async () => {
+    const runAgentTurn = vi.fn().mockResolvedValue({
+      utterance: 'Hola.',
+      emotion: 'warm',
+      intent: 'conversation',
+      actions: [],
+      diagnostics: {},
+    });
+    const pluginManager = { runAgentTurn } as any;
+    const adapter = new SugarAgentProviderAdapter(pluginManager, {
+      getCurrentRegion: () => 'regions.station',
+      getCurrentEpisode: () => 'ep1',
+      getNpcInteractionCapabilities: () => ({
+        ...createDefaultNPCInteractionCapabilities(),
+        chat: { enabled: true },
+      }),
+      buildQuestSnapshot: () => [],
+      serializeFlags: () => ({}),
+    });
+
+    await adapter.produceTurn(
+      {
+        npcId: 'npc.rick',
+        npcName: 'Rick Cheese Roll',
+        engagementKind: 'chat',
+      } as any,
+      {
+        targetLanguage: 'es',
+        supportLanguage: 'en',
+      } as any,
+      { text: 'hola' } as any,
+    );
+
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn.mock.calls[0]?.[0]?.context?.pedagogyContext).toMatchObject({
+      targetLanguage: 'es',
+      supportLanguage: 'en',
+    });
+  });
 });

@@ -1,7 +1,8 @@
 import type { SugarEngine } from '../core/Engine';
+import type { SugarlangPlayerProfileUpdate } from '../core/playerProfile';
 import type { SaveManager } from '../save';
 import { SceneId, SaveLoadMode } from './types';
-import { TitleScreen } from './TitleScreen';
+import { TitleScreen, type TitleScreenViewModel } from './TitleScreen';
 import { SaveLoadScreen } from './SaveLoadScreen';
 import { PauseScreen } from './PauseScreen';
 
@@ -26,6 +27,8 @@ export class SceneManager {
   private saveHandler: ((slotId: string) => void) | null = null;
   private loadHandler: ((slotId: string) => void) | null = null;
   private quitHandler: (() => void) | null = null;
+  private titleScreenConfig: TitleScreenViewModel = {};
+  private sugarlangProfileChangeHandler: ((profile: SugarlangPlayerProfileUpdate) => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -70,7 +73,13 @@ export class SceneManager {
           this.quitHandler();
         }
       });
+
+      this.titleScreen.setOnSugarlangProfileChange((profile) => {
+        this.sugarlangProfileChangeHandler?.(profile);
+      });
     }
+
+    this.titleScreen.setConfig(this.titleScreenConfig);
 
     // Check if saves exist for Continue button
     if (this.saveManager) {
@@ -235,6 +244,15 @@ export class SceneManager {
 
   onQuit(handler: () => void): void {
     this.quitHandler = handler;
+  }
+
+  setTitleScreenConfig(config: TitleScreenViewModel): void {
+    this.titleScreenConfig = config;
+    this.titleScreen?.setConfig(config);
+  }
+
+  onSugarlangProfileChange(handler: (profile: SugarlangPlayerProfileUpdate) => void): void {
+    this.sugarlangProfileChangeHandler = handler;
   }
 
   /**

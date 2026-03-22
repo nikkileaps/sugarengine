@@ -73,4 +73,48 @@ describe('project-document', () => {
     expect(toGameSlug(' Rackwick City ')).toBe('rackwick-city');
     expect(normalizeAuthoredContentBasePath('assets')).toBe('assets/');
   });
+
+  it('preserves extended title screen presentation and sugarlang defaults', () => {
+    const project = normalizeLoadedProjectDocument({
+      meta: {
+        gameId: 'wordlark',
+        name: 'Wordlark',
+      },
+      titleScreen: {
+        title: 'Wordlark',
+        subtitle: 'Talk your way through town',
+        menu: {
+          newGameLabel: 'Begin',
+          showQuit: false,
+        },
+        playerProfile: {
+          sugarlang: {
+            enabled: true,
+            targetLanguages: ['es', 'it'],
+            defaultTargetLanguage: 'it',
+            defaultLearnerBand: 'B3',
+          },
+        },
+      },
+      seasons: [],
+      episodes: [],
+    });
+
+    expect(project.titleScreen).toMatchObject({
+      title: 'Wordlark',
+      subtitle: 'Talk your way through town',
+      menu: {
+        newGameLabel: 'Begin',
+        showQuit: false,
+      },
+      playerProfile: {
+        sugarlang: {
+          enabled: true,
+          targetLanguages: ['es', 'it'],
+          defaultTargetLanguage: 'it',
+          defaultLearnerBand: 'B3',
+        },
+      },
+    });
+  });
 });

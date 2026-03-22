@@ -25,6 +25,7 @@ export class SugarlangPreviewControls {
   };
   private langBtnsContainer: HTMLDivElement;
   private langBtnEls: HTMLButtonElement[] = [];
+  private bandBtnEls: HTMLButtonElement[] = [];
 
   constructor(parent: HTMLElement) {
     this.injectStyles();
@@ -54,15 +55,14 @@ export class SugarlangPreviewControls {
     bandBtns.className = 'sl-preview-btn-row';
 
     const bands = ['B0', 'B1', 'B2', 'B3', 'B4'];
-    const bandBtnEls: HTMLButtonElement[] = [];
     for (const band of bands) {
       const btn = this.createToggleBtn(band, () => {
         this.config.bandOverride = band;
-        bandBtnEls.forEach((b) => b.classList.toggle('sl-active', b.textContent === band));
+        this.bandBtnEls.forEach((b) => b.classList.toggle('sl-active', b.textContent === band));
         this.emitChange();
       });
       if (band === 'B0') btn.classList.add('sl-active');
-      bandBtnEls.push(btn);
+      this.bandBtnEls.push(btn);
       bandBtns.appendChild(btn);
     }
     bandGroup.appendChild(bandBtns);
@@ -96,6 +96,16 @@ export class SugarlangPreviewControls {
     return { ...this.config };
   }
 
+  setConfig(config: SugarlangPreviewConfig): void {
+    this.config = {
+      targetLanguage: config.targetLanguage,
+      supportLanguage: 'en',
+      bandOverride: config.bandOverride,
+    };
+    this.updateLangHighlight();
+    this.updateBandHighlight();
+  }
+
   show(): void {
     this.container.style.display = '';
   }
@@ -121,6 +131,12 @@ export class SugarlangPreviewControls {
     for (const btn of this.langBtnEls) {
       const lang = btn.textContent?.replace('en → ', '') ?? '';
       btn.classList.toggle('sl-active', lang === this.config.targetLanguage);
+    }
+  }
+
+  private updateBandHighlight(): void {
+    for (const button of this.bandBtnEls) {
+      button.classList.toggle('sl-active', button.textContent === this.config.bandOverride);
     }
   }
 

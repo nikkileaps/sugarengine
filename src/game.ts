@@ -6,8 +6,10 @@
  */
 
 import { Game } from './engine';
+import { buildTitleScreenConfig } from './engine/core/titleScreenConfig';
 import { DEFAULT_GAME_CONFIG, setupGameUI } from './gameUI';
 import { buildRuntimePluginsFromProject } from './plugins/runtime';
+import { extractSugarlangTargetLanguages } from './plugins/sugarlang/project-languages';
 import { HttpGameApiRuntimeBridge } from './plugins/sugaragent/runtime';
 import { ensureHostedPlayerSession } from './release-targets/web/hostedAuth';
 import {
@@ -42,6 +44,25 @@ interface GameData {
     cameraLookAt?: { x: number; y: number; z: number };
     hidePlayer?: boolean;
     transitionDuration?: number;
+    title?: string;
+    subtitle?: string;
+    footerHintText?: string;
+    versionText?: string;
+    menu?: {
+      newGameLabel?: string;
+      continueLabel?: string;
+      quitLabel?: string;
+      showQuit?: boolean;
+    };
+    playerProfile?: {
+      sugarlang?: {
+        enabled?: boolean;
+        targetLanguages?: string[];
+        defaultTargetLanguage?: string;
+        learnerBands?: string[];
+        defaultLearnerBand?: string;
+      };
+    };
   };
 }
 
@@ -70,6 +91,7 @@ async function runGame(gameData: GameData, gameSlug: string) {
   const runtimeConfig = resolvePublishedWebRuntimeConfig(import.meta.env);
   const gameId = gameData.meta?.gameId || gameSlug;
   const contentBasePath = gameData.meta?.contentBasePath || `games/${gameSlug}/assets/`;
+  const sugarlangTargetLanguages = extractSugarlangTargetLanguages(gameData);
 
   if (isHostedWebRuntimeConfig(runtimeConfig)) {
     await ensureHostedPlayerSession({
@@ -92,6 +114,7 @@ async function runGame(gameData: GameData, gameSlug: string) {
       }
       : undefined,
   );
+  const hasSugarlang = runtimePlugins.some((plugin) => plugin.descriptor.id === 'sugarlang');
 
   // Determine start region from default episode
   const episodeId = gameData.defaultEpisode || gameData.episodes?.[0]?.id;
@@ -126,10 +149,13 @@ async function runGame(gameData: GameData, gameSlug: string) {
     plugins: runtimePlugins,
     conversationMiddleware,
     conversationProviders,
-    titleScreen: {
-      ...DEFAULT_GAME_CONFIG.titleScreen,
-      ...gameData.titleScreen,
-    },
+    titleScreen: buildTitleScreenConfig({
+      base: DEFAULT_GAME_CONFIG.titleScreen,
+      overrides: gameData.titleScreen,
+      gameTitle: gameData.meta?.name || gameData.title || gameSlug,
+      hasSugarlang,
+      sugarlangTargetLanguages,
+    }),
   });
 
   await game.init();

@@ -23,6 +23,14 @@ import { VFXLoader, BUILTIN_PRESETS } from '../vfx';
 import { FadeOverlay } from '../ui/FadeOverlay';
 import { PluginManager, PluginSystem, mergeValidationBoundary } from '../plugins';
 import { normalizeContentBasePath, resolveContentUrl } from './contentPaths';
+import {
+  normalizeSugarlangPlayerProfile,
+  type PlayerProfile,
+  resolveSugarlangLearnerBands,
+  resolveSugarlangTargetLanguages,
+  type SugarlangPlayerProfileOptions,
+  type SugarlangPlayerProfileUpdate,
+} from './playerProfile';
 import type { ItemView } from '../inventory/types';
 import type { InspectionData } from '../inspection/types';
 import type {
@@ -54,6 +62,25 @@ export interface TitleScreenConfig {
   hidePlayer?: boolean;
   /** Transition duration in ms (default 500) */
   transitionDuration?: number;
+  /** Display title text. */
+  title?: string;
+  /** Optional subtitle shown under the title. */
+  subtitle?: string;
+  /** Optional footer hint text. */
+  footerHintText?: string;
+  /** Optional version text. */
+  versionText?: string;
+  /** Menu label overrides. */
+  menu?: {
+    newGameLabel?: string;
+    continueLabel?: string;
+    quitLabel?: string;
+    showQuit?: boolean;
+  };
+  /** Optional player-profile controls shown on the title screen. */
+  playerProfile?: {
+    sugarlang?: SugarlangPlayerProfileOptions;
+  };
 }
 
 export interface GameConfig {
@@ -138,6 +165,7 @@ export class Game {
   private contentBasePath: string;
   private lastAgentTurnDiagnostics: PluginAgentTurnDiagnostics | null = null;
   private readonly dialoguePresenter: DialoguePresenter;
+  private playerProfile: PlayerProfile = { plugins: {} };
 
   // Conversation host (ADR-SL-002) — single orchestration point for all conversation types.
   private conversationHost: ConversationHost;
@@ -267,6 +295,8 @@ export class Game {
         this.conversationHost.registerMiddleware(mw);
       }
     }
+
+    this.initializePlayerProfile();
 
     // Create episode manager
     this.episodes = new EpisodeManager({
@@ -693,11 +723,43 @@ export class Game {
    * Used by preview controls to switch language direction and band.
    */
   setSugarlangContext(targetLanguage?: string, supportLanguage?: string, bandOverride?: string): void {
-    this.conversationHost.setLanguageContext({
+    this.setSugarlangPlayerProfile({
       targetLanguage,
       supportLanguage,
-      learnerBandOverride: bandOverride,
+      learnerBand: bandOverride,
     });
+  }
+
+  getPlayerProfile(): Readonly<PlayerProfile> {
+    return {
+      plugins: {
+        ...this.playerProfile.plugins,
+        sugarlang: this.playerProfile.plugins.sugarlang
+          ? { ...this.playerProfile.plugins.sugarlang }
+          : undefined,
+      },
+    };
+  }
+
+  setSugarlangPlayerProfile(update: SugarlangPlayerProfileUpdate): void {
+    const nextProfile = normalizeSugarlangPlayerProfile(
+      {
+        ...this.playerProfile.plugins.sugarlang,
+        ...update,
+      },
+      this.config.titleScreen?.playerProfile?.sugarlang,
+    );
+
+    if (!nextProfile) return;
+
+    this.playerProfile = {
+      plugins: {
+        ...this.playerProfile.plugins,
+        sugarlang: nextProfile,
+      },
+    };
+    this.syncConversationLanguageContext();
+    this.refreshTitleScreenConfig();
   }
 
   closeSugarlangConversation(): void {
@@ -1369,6 +1431,10 @@ export class Game {
     this.sceneManager.onQuit(() => {
       window.close();
     });
+
+    this.sceneManager.onSugarlangProfileChange((profile) => {
+      this.setSugarlangPlayerProfile(profile);
+    });
   }
 
   /**
@@ -1539,7 +1605,51 @@ export class Game {
       }
     }
 
+    this.refreshTitleScreenConfig();
+
     await this.sceneManager.showTitle();
+  }
+
+  private initializePlayerProfile(): void {
+    const sugarlangProfile = normalizeSugarlangPlayerProfile(
+      undefined,
+      this.config.titleScreen?.playerProfile?.sugarlang,
+    );
+    this.playerProfile = {
+      plugins: {
+        sugarlang: sugarlangProfile,
+      },
+    };
+    this.syncConversationLanguageContext();
+    this.refreshTitleScreenConfig();
+  }
+
+  private syncConversationLanguageContext(): void {
+    const sugarlangProfile = this.playerProfile.plugins.sugarlang;
+    this.conversationHost.setLanguageContext({
+      targetLanguage: sugarlangProfile?.targetLanguage,
+      supportLanguage: sugarlangProfile?.supportLanguage,
+      learnerBandOverride: sugarlangProfile?.learnerBand,
+    });
+  }
+
+  private refreshTitleScreenConfig(): void {
+    this.sceneManager.setTitleScreenConfig({
+      ...(this.config.titleScreen ?? {}),
+      playerProfile: {
+        sugarlang: this.playerProfile.plugins.sugarlang
+          ? {
+              current: this.playerProfile.plugins.sugarlang,
+              targetLanguages: resolveSugarlangTargetLanguages(
+                this.config.titleScreen?.playerProfile?.sugarlang,
+              ),
+              learnerBands: resolveSugarlangLearnerBands(
+                this.config.titleScreen?.playerProfile?.sugarlang,
+              ),
+            }
+          : undefined,
+      },
+    });
   }
 
   /**

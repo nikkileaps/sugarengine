@@ -9,6 +9,7 @@ interface ProjectMenuProps {
   onOpenGame: () => void;
   onSaveGame: () => void;
   onExportJson: () => void;
+  onOpenSettings: () => void;
   onManagePlugins: () => void;
   projectLoaded: boolean;
 }
@@ -18,6 +19,7 @@ export function ProjectMenu({
   onOpenGame,
   onSaveGame,
   onExportJson,
+  onOpenSettings,
   onManagePlugins,
   projectLoaded,
 }: ProjectMenuProps) {
@@ -73,6 +75,13 @@ export function ProjectMenu({
           disabled={!projectLoaded}
         >
           Publish
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<span>⚙️</span>}
+          onClick={onOpenSettings}
+          disabled={!projectLoaded}
+        >
+          Settings
         </Menu.Item>
         <Menu.Divider />
         <Menu.Item

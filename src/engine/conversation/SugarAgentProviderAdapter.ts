@@ -97,7 +97,9 @@ export class SugarAgentProviderAdapter implements ConversationProvider {
     // Bridge engine-mediated pedagogy constraints into the agent turn request
     const pedagogyContext: PluginPedagogyContext | undefined =
       (
-        constraints.learnerBand
+        constraints.targetLanguage
+        || constraints.supportLanguage
+        || constraints.learnerBand
         || constraints.supportLanguagePolicy
         || constraints.deliveryContract
         || constraints.groundingScope

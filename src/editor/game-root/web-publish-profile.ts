@@ -1,4 +1,5 @@
 import type { GameRootPaths } from './fs-paths';
+export type { SugarAgentGenerationConfig } from '../../../packages/sugaragent-runtime-core/src/runtime/generation-config';
 import type { SugarAgentGenerationConfig } from '../../../packages/sugaragent-runtime-core/src/runtime/generation-config';
 import { resolveSugarAgentGenerationConfig } from '../../../packages/sugaragent-runtime-core/src/runtime/generation-config';
 
