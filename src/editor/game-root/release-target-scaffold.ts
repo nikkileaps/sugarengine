@@ -1036,7 +1036,6 @@ export function initializeSugarAgentRuntimeServices(config: AppConfig): HostedSu
     gameId: config.gameId,
     runtimeMode: config.sugaragent.runtimeMode,
     generation: config.sugaragent.generation,
-    provider: config.sugaragent.provider,
     loreDir: config.sugaragent.loreDir,
     useLore: config.sugaragent.useLore,
     missingGameLoreBundle: config.sugaragent.missingGameLoreBundle,

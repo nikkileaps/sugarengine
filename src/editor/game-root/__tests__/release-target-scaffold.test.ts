@@ -136,6 +136,7 @@ describe('release-target-scaffold', () => {
     expect(sugaragentRuntimeServices?.content).toContain('initializeSugarAgentRuntimeServices');
     expect(sugaragentRuntimeServices?.content).toContain('config.sugaragent.runtimeMode');
     expect(sugaragentRuntimeServices?.content).toContain('generation: config.sugaragent.generation');
+    expect(sugaragentRuntimeServices?.content).not.toContain('provider: config.sugaragent.provider');
     expect(sugaragentRuntimeServices?.content).not.toContain('not configured yet.');
   });
 
